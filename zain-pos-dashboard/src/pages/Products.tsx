@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Edit, PackageSearch, Plus, Search, Trash2 } from 'lucide-react';
+import { Edit, Plus, Search, Trash2 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';

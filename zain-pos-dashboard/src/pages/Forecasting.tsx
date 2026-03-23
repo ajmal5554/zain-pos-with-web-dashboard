@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import type { ValueType, NameType } from 'recharts/types/component/DefaultTooltipContent';
 import { AlertTriangle, BrainCircuit, TrendingUp } from 'lucide-react';
 import { addMonths, format, subMonths } from 'date-fns';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -159,7 +160,19 @@ export default function ForecastingPage() {
                             <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
                             <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                             <YAxis tickFormatter={(value) => formatCurrency(value).replace('.00', '')} />
-                            <Tooltip formatter={(value: number | null, name: string) => [value ? formatCurrency(value) : '-', name === 'predicted' ? 'Forecast' : 'Revenue']} />
+                            <Tooltip
+                                formatter={(value: ValueType, name: NameType) => {
+                                    const normalized = typeof value === 'number'
+                                        ? value
+                                        : typeof value === 'string'
+                                            ? Number(value)
+                                            : null;
+                                    return [
+                                        normalized !== null && !Number.isNaN(normalized) ? formatCurrency(normalized) : '-',
+                                        name === 'predicted' ? 'Forecast' : 'Revenue'
+                                    ];
+                                }}
+                            />
                             <Area type="monotone" dataKey="revenue" stroke="#0f172a" fill="#cbd5e1" fillOpacity={0.5} />
                             <Area type="monotone" dataKey="predicted" stroke="#0ea5e9" fill="#bae6fd" fillOpacity={0.7} strokeDasharray="6 4" />
                         </AreaChart>
