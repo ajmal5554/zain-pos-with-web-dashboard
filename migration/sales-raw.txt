@@ -1,0 +1,64 @@
+File: migration/Report_Sales_Detail.xls
+Total rows: 14561
+
+First 30 rows (raw):
+
+Row 1: ["ZAIN GENTS PALACE"]
+
+Row 2: ["Sales Detail Report"]
+
+Row 3: []
+
+Row 4: ["From 23/03/2022 To 02/02/2026"]
+
+Row 5: ["Print Date: 02-02-2026"]
+
+Row 6: []
+
+Row 7: ["Customer : "]
+
+Row 8: [null,null,null,null,null,null,null,"Invoice No/Date :",null,"1 / 02-04-2025"]
+
+Row 9: [null,null,null,null,null,null,null,"FormType   : \n",null,"Tax Invoice"]
+
+Row 10: ["GSTIN : ",null,null,null,null,null,null,"User Name   : ",null,"1"]
+
+Row 11: ["Sl. No","Code","Item name","HSN Code","Tax %","Qty","Unit Price","Net Amt","Tax Amt","Total Amount"]
+
+Row 12: [1,"4649336","Shirt 700\n",null,5,"1.00",666.6667,666.6667,33.3333,700]
+
+Row 13: [2,"4649555","double mundu 950\n",null,5,"1.00",904.7619,904.7619,45.2381,950]
+
+Row 14: [null,null,"Total",null,null,"2.00",1571.4286,1571.4286,78.5714,1650]
+
+Row 15: [null,null,null,null,null,null,null,"Discount Amount",null,0]
+
+Row 16: [null,null,null,null,null,null,null,"Freight Charges",null,0]
+
+Row 17: [null,null,null,null,null,null,null,"Round Off",null,0]
+
+Row 18: [null,null,null,null,null,null,null,"Grand Total",null,1650]
+
+Row 19: []
+
+Row 20: ["Customer : "]
+
+Row 21: [null,null,null,null,null,null,null,"Invoice No/Date :",null,"2 / 02-04-2025"]
+
+Row 22: [null,null,null,null,null,null,null,"FormType   : \n",null,"Tax Invoice"]
+
+Row 23: ["GSTIN : ",null,null,null,null,null,null,"User Name   : ",null,"1"]
+
+Row 24: ["Sl. No","Code","Item name","HSN Code","Tax %","Qty","Unit Price","Net Amt","Tax Amt","Total Amount"]
+
+Row 25: [1,"4649437","Shirt 745\n",null,5,"1.00",709.5238,709.5238,35.4762,745]
+
+Row 26: [null,null,"Total",null,null,"1.00",709.5238,709.5238,35.4762,745]
+
+Row 27: [null,null,null,null,null,null,null,"Discount Amount",null,0]
+
+Row 28: [null,null,null,null,null,null,null,"Freight Charges",null,0]
+
+Row 29: [null,null,null,null,null,null,null,"Round Off",null,0]
+
+Row 30: [null,null,null,null,null,null,null,"Grand Total",null,745]

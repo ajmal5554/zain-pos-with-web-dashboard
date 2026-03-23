@@ -1,0 +1,48 @@
+{
+    "name": "zain-pos-api",
+    "version": "1.0.0",
+    "description": "Backend API for Zain POS Mobile Dashboard",
+    "main": "dist/index.js",
+    "scripts": {
+        "dev": "tsx watch src/index.ts",
+        "build": "npx prisma generate && tsc",
+        "start": "node dist/index.js",
+        "prisma:generate": "prisma generate",
+        "migrate": "npx prisma db push",
+        "postinstall": "npx prisma generate && npx prisma db push"
+    },
+    "keywords": [
+        "pos",
+        "api",
+        "express"
+    ],
+    "author": "",
+    "license": "ISC",
+    "dependencies": {
+        "@prisma/client": "^5.22.0",
+        "bcryptjs": "^2.4.3",
+        "cors": "^2.8.5",
+        "dotenv": "^16.4.7",
+        "express": "^4.21.2",
+        "helmet": "^8.0.0",
+        "json2csv": "^6.0.0-alpha.2",
+        "jsonwebtoken": "^9.0.2",
+        "socket.io": "^4.8.3",
+        "web-push": "^3.6.7"
+    },
+    "devDependencies": {
+        "@types/bcryptjs": "^2.4.6",
+        "@types/cors": "^2.8.17",
+        "@types/express": "^5.0.0",
+        "@types/json2csv": "^5.0.7",
+        "@types/jsonwebtoken": "^9.0.7",
+        "@types/node": "^22.10.5",
+        "@types/web-push": "^3.6.4",
+        "prisma": "^5.22.0",
+        "tsx": "^4.19.2",
+        "typescript": "^5.7.3"
+    },
+    "prisma": {
+        "seed": "tsx prisma/seed.ts"
+    }
+}

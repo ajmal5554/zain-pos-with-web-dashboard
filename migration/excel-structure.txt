@@ -1,0 +1,32 @@
+File: migration/Report_Item_Detail_AllItem.xls
+Sheet: Report_Item_Detail_AllItem
+Total rows: 399
+
+Column names:
+  1. Item Detail Report
+
+First 3 rows:
+
+Row 1:
+{
+  "Item Detail Report": "Print Date : 02-Feb-2026"
+}
+
+Row 2:
+{
+  "Item Detail Report": "Sl. No.",
+  "__EMPTY": "Item Code",
+  "__EMPTY_1": "Item name",
+  "__EMPTY_2": "Brand Name",
+  "__EMPTY_3": "Group Name",
+  "__EMPTY_4": "Commodity"
+}
+
+Row 3:
+{
+  "Item Detail Report": 1,
+  "__EMPTY_1": "3/4 capri 325",
+  "__EMPTY_2": "General",
+  "__EMPTY_3": "General",
+  "__EMPTY_4": "General"
+}

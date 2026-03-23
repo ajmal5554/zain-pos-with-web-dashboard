@@ -1,0 +1,702 @@
+import express from 'express';
+import { PrismaClient } from '@prisma/client';
+import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
+import { getShopId } from '../lib/runtime';
+
+const router = express.Router();
+const prisma = new PrismaClient();
+
+function requireSyncAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+    const configuredSecret = process.env.CLOUD_SYNC_SECRET;
+    if (!configuredSecret) {
+        console.error('Sync auth is not configured: CLOUD_SYNC_SECRET is missing.');
+        return res.status(503).json({ error: 'Sync authentication is not configured on the server.' });
+    }
+
+    const providedSecret = req.header('x-sync-secret');
+    if (!providedSecret) {
+        return res.status(401).json({ error: 'Missing sync authentication.' });
+    }
+
+    const expected = Buffer.from(configuredSecret, 'utf8');
+    const provided = Buffer.from(providedSecret, 'utf8');
+    if (expected.length !== provided.length || !crypto.timingSafeEqual(expected, provided)) {
+        return res.status(401).json({ error: 'Invalid sync authentication.' });
+    }
+
+    next();
+}
+
+router.use(requireSyncAuth);
+
+const asDate = (value: any) => {
+    if (!value) return undefined;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+};
+
+// Sync Sales from Desktop
+router.post('/sales', async (req, res) => {
+    try {
+        const { sales } = req.body;
+        if (!Array.isArray(sales)) return res.status(400).json({ error: 'Invalid data' });
+
+        console.log(`ðŸ“¡ Cloud receiving ${sales.length} sales...`);
+
+        // ---------------------------------------------------------
+        // PRE-PROCESS: Ensure all referenced Products exist
+        // ---------------------------------------------------------
+        const allVariantIds = new Set<string>();
+        sales.forEach(sale => {
+            sale.items?.forEach((item: any) => {
+                if (item.variantId) allVariantIds.add(item.variantId);
+            });
+        });
+
+        if (allVariantIds.size > 0) {
+            const existingVariants = await prisma.productVariant.findMany({
+                where: { id: { in: Array.from(allVariantIds) } },
+                select: { id: true }
+            });
+
+            const existingVariantIds = new Set(existingVariants.map((v: any) => v.id));
+            const missingVariantIds = Array.from(allVariantIds).filter(id => !existingVariantIds.has(id));
+
+            if (missingVariantIds.length > 0) {
+                console.log(`âš ï¸ Found ${missingVariantIds.length} missing variants. Creating placeholders...`);
+
+                // 1. Ensure a fallback category exists
+                const fallbackCategory = await prisma.category.upsert({
+                    where: { name: 'Unsynced Inventory' },
+                    update: {},
+                    create: { name: 'Unsynced Inventory' }
+                });
+
+                // 2. Create Placeholder Products & Variants
+                for (const variantId of missingVariantIds) {
+                    // Find the item details from the payload to make the placeholder meaningful
+                    let itemInfo: any = null;
+                    for (const s of sales) {
+                        itemInfo = s.items?.find((i: any) => i.variantId === variantId);
+                        if (itemInfo) break;
+                    }
+
+                    if (!itemInfo) continue; // Should not happen
+
+                    // Create/Find a placeholder product
+                    const productName = itemInfo.productName || 'Unknown Product';
+
+                    // We try to find a product by name first to avoid duplicates if possible, 
+                    // but since we don't have the original productId, we might create a duplicate if names match.
+                    // Ideally we should assume it's a new placeholder product relative to this variant.
+
+                    const product = await prisma.product.create({
+                        data: {
+                            name: productName + ' (Sync Placeholder)',
+                            categoryId: fallbackCategory.id,
+                            taxRate: itemInfo.taxRate || 0,
+                            description: 'Created automatically during sales sync'
+                        }
+                    });
+
+                    await prisma.productVariant.create({
+                        data: {
+                            id: variantId, // CRITICAL: Use the exact ID from desktop
+                            productId: product.id,
+                            sku: `SYNC-${variantId.substring(0, 8)}`,
+                            barcode: `SYNC-${variantId.substring(0, 8)}`, // Temporary barcode
+                            mrp: itemInfo.mrp || 0,
+                            sellingPrice: itemInfo.sellingPrice || 0,
+                            costPrice: 0,
+                            stock: 0
+                        }
+                    });
+                }
+                console.log('âœ… Placeholders created.');
+            }
+        }
+        // ---------------------------------------------------------
+
+        for (const sale of sales) {
+            // 1. Sync User first (to satisfy FK)
+            let finalUserId = sale.userId;
+
+            if (sale.user) {
+                try {
+                    // Start by trying to ensure the user exists with the SAME ID as desktop
+                    const existingSyncedUser = await prisma.user.findUnique({
+                        where: { username: sale.user.username }
+                    });
+                    let syncedUser;
+                    if (existingSyncedUser) {
+                        syncedUser = await prisma.user.update({
+                            where: { username: sale.user.username },
+                            data: {
+                                name: sale.user.name,
+                                role: sale.user.role,
+                                isActive: sale.user.isActive
+                            }
+                        });
+                    } else {
+                        syncedUser = await prisma.user.create({
+                            data: {
+                                id: sale.user.id, // Try to force ID
+                                username: sale.user.username,
+                                password: sale.user.password,
+                                name: sale.user.name,
+                                role: sale.user.role,
+                                isActive: sale.user.isActive
+                            }
+                        });
+                    }
+                    finalUserId = syncedUser.id;
+                } catch (e) {
+                    console.warn(`Failed to sync user ${sale.user.username} for sale ${sale.billNo}, trying fallback...`);
+                }
+            } else {
+                console.warn(`Warning: Sale ${sale.billNo} has no user data attached.`);
+            }
+
+            // Verify if finalUserId exists, if not, fallback to any Admin
+            const userExists = await prisma.user.findUnique({ where: { id: finalUserId } });
+            if (!userExists) {
+                console.warn(`User ID ${finalUserId} not found for sale ${sale.billNo}. Assigning to fallback Admin.`);
+                let admin = await prisma.user.findFirst({ where: { role: 'ADMIN' } });
+                if (!admin) {
+                    // Create a default admin if absolutely no users exist
+                    admin = await prisma.user.create({
+                        data: {
+                            username: 'admin',
+                            password: 'admin123',
+                            name: 'System Admin',
+                            role: 'ADMIN',
+                            isActive: true
+                        }
+                    });
+                }
+                finalUserId = admin.id;
+            }
+
+            // 2. Sync Sale
+            await prisma.sale.upsert({
+                where: { id: sale.id },
+                update: {
+                    billNo: String(sale.billNo),
+                    userId: finalUserId,
+                    customerName: sale.customerName ?? null,
+                    customerPhone: sale.customerPhone ?? null,
+                    subtotal: sale.subtotal ?? 0,
+                    discount: sale.discount ?? 0,
+                    discountPercent: sale.discountPercent ?? 0,
+                    taxAmount: sale.taxAmount ?? 0,
+                    cgst: sale.cgst ?? 0,
+                    sgst: sale.sgst ?? 0,
+                    grandTotal: sale.grandTotal ?? 0,
+                    paymentMethod: sale.paymentMethod ?? 'CASH',
+                    paidAmount: sale.paidAmount ?? 0,
+                    changeAmount: sale.changeAmount ?? 0,
+                    status: sale.status ?? 'COMPLETED',
+                    remarks: sale.remarks ?? null,
+                    isHistorical: sale.isHistorical ?? true,
+                    importedFrom: sale.importedFrom ?? null,
+                    actualSaleDate: asDate(sale.actualSaleDate) ?? null,
+                    createdAt: asDate(sale.createdAt) ?? new Date(),
+                    updatedAt: asDate(sale.updatedAt) ?? new Date(),
+                    items: {
+                        deleteMany: {}
+                    },
+                    payments: {
+                        deleteMany: {}
+                    }
+                },
+                create: {
+                    id: sale.id,
+                    billNo: String(sale.billNo),
+                    userId: finalUserId,
+                    customerName: sale.customerName ?? null,
+                    customerPhone: sale.customerPhone ?? null,
+                    subtotal: sale.subtotal ?? 0,
+                    discount: sale.discount ?? 0,
+                    discountPercent: sale.discountPercent ?? 0,
+                    taxAmount: sale.taxAmount ?? 0,
+                    cgst: sale.cgst ?? 0,
+                    sgst: sale.sgst ?? 0,
+                    grandTotal: sale.grandTotal ?? 0,
+                    paidAmount: sale.paidAmount ?? 0,
+                    changeAmount: sale.changeAmount ?? 0,
+                    paymentMethod: sale.paymentMethod ?? 'CASH',
+                    status: sale.status ?? 'COMPLETED',
+                    remarks: sale.remarks ?? null,
+                    isHistorical: sale.isHistorical ?? true,
+                    importedFrom: sale.importedFrom ?? null,
+                    actualSaleDate: asDate(sale.actualSaleDate) ?? null,
+                    createdAt: asDate(sale.createdAt) ?? new Date(),
+                    updatedAt: asDate(sale.updatedAt) ?? new Date(),
+                    items: {
+                        create: []
+                    },
+                    payments: {
+                        create: []
+                    }
+                }
+            });
+
+            if (Array.isArray(sale.items) && sale.items.length > 0) {
+                await prisma.saleItem.createMany({
+                    data: sale.items.map((item: any) => ({
+                        id: item.id,
+                        saleId: sale.id,
+                        variantId: item.variantId,
+                        productName: item.productName,
+                        variantInfo: item.variantInfo ?? null,
+                        quantity: item.quantity ?? 0,
+                        mrp: item.mrp ?? 0,
+                        sellingPrice: item.sellingPrice ?? 0,
+                        discount: item.discount ?? 0,
+                        taxRate: item.taxRate ?? 0,
+                        taxAmount: item.taxAmount ?? 0,
+                        total: item.total ?? 0,
+                        createdAt: asDate(item.createdAt) ?? asDate(sale.createdAt) ?? new Date()
+                    })),
+                    skipDuplicates: true
+                });
+            }
+
+            if (Array.isArray(sale.payments) && sale.payments.length > 0) {
+                await prisma.invoicePayment.createMany({
+                    data: sale.payments.map((payment: any) => ({
+                        id: payment.id,
+                        saleId: sale.id,
+                        paymentMode: payment.paymentMode,
+                        amount: payment.amount ?? 0,
+                        createdAt: asDate(payment.createdAt) ?? asDate(sale.createdAt) ?? new Date()
+                    })),
+                    skipDuplicates: true
+                });
+            }
+        }
+
+        // BROADCAST TO DASHBOARD
+        try {
+            const { getIO } = require('../socket');
+            const { notificationService } = require('../services/notificationService');
+            const io = getIO();
+            const shopId = getShopId();
+
+            // Emit batch update for realtime charts/stats
+            // Match default room used by socket server/client.
+            io.to(`shop_${shopId}`).emit('sale:batch', { count: sales.length, sales, timestamp: new Date() });
+
+            // Send Notifications for RECENT sales (e.g., created in last 10 minutes)
+            const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+
+            for (const sale of sales) {
+                const saleDate = new Date(sale.createdAt);
+
+                // NEW SALE
+                if (saleDate > tenMinutesAgo) {
+                    await notificationService.send({
+                        shopId,
+                        type: 'sale',
+                        title: 'New Sale Received',
+                        message: `Bill #${sale.billNo} - â‚¹${sale.grandTotal}`,
+                        referenceId: sale.id,
+                        metadata: {
+                            amount: sale.grandTotal,
+                            paymentMode: sale.paymentMethod
+                        }
+                    });
+                }
+            }
+
+            console.log(`ðŸ“¢ Realtime processed for ${sales.length} sales.`);
+        } catch (e) {
+            console.error("Socket/Push warning:", e);
+        }
+
+        // Log the sync
+        await prisma.auditLog.create({
+            data: {
+                action: 'SYNC_SALES',
+                details: `Synced ${sales.length} sales from desktop`,
+                userId: null // System action
+            }
+        });
+
+        // Check for Voided Sales in this batch (Invoice Deleted/Voided)
+        try {
+            const { notificationService } = require('../services/notificationService');
+            const shopId = getShopId();
+            for (const sale of sales) {
+                if (sale.status === 'VOIDED' && new Date(sale.updatedAt) > new Date(Date.now() - 10 * 60 * 1000)) {
+                    await notificationService.send({
+                        shopId,
+                        type: 'invoice_deleted',
+                        title: 'Invoice Voided',
+                        message: `Bill #${sale.billNo} was voided.`,
+                        referenceId: sale.id,
+                        metadata: {
+                            billNo: sale.billNo,
+                            reason: sale.remarks || 'No reason provided'
+                        }
+                    });
+                }
+            }
+        } catch (e) {
+            console.error("Notification trigger error:", e);
+        }
+
+        res.json({ success: true, count: sales.length });
+    } catch (error: any) {
+        console.error('Sync error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Sync Users from Desktop
+router.post('/users', async (req, res) => {
+    try {
+        const { users } = req.body;
+        if (!Array.isArray(users)) return res.status(400).json({ error: 'Invalid data' });
+
+        console.log(`Cloud receiving ${users.length} users...`);
+
+        let synced = 0;
+        const skipped: string[] = [];
+        for (const user of users) {
+            const username = (user?.username || '').toString().trim();
+            if (!username) {
+                skipped.push('missing_username');
+                continue;
+            }
+
+            const rawPassword = typeof user?.password === 'string' ? user.password : '';
+            if (!rawPassword) {
+                skipped.push(username);
+                continue;
+            }
+
+            const isBcrypt = rawPassword.startsWith('$2a$') || rawPassword.startsWith('$2b$') || rawPassword.startsWith('$2y$');
+            const passwordToStore = isBcrypt ? rawPassword : await bcrypt.hash(rawPassword, 10);
+
+            const existingUser = await prisma.user.findUnique({ where: { username } });
+            if (existingUser) {
+                await prisma.user.update({
+                    where: { username },
+                    data: {
+                        name: user.name || username,
+                        role: user.role || 'CASHIER',
+                        password: passwordToStore,
+                        isActive: user.isActive !== false
+                    }
+                });
+            } else {
+                await prisma.user.create({
+                    data: {
+                        username,
+                        name: user.name || username,
+                        role: user.role || 'CASHIER',
+                        password: passwordToStore,
+                        isActive: user.isActive !== false
+                    }
+                });
+            }
+            synced++;
+        }
+        console.log(`Users synced: ${synced}/${users.length}`);
+
+        // Log the sync
+        await prisma.auditLog.create({
+            data: {
+                action: 'SYNC_USERS',
+                details: `Synced ${synced}/${users.length} users from desktop${skipped.length ? `, skipped: ${skipped.join(', ')}` : ''}`,
+                userId: null
+            }
+        });
+
+        res.json({ success: true, synced, total: users.length, skipped });
+    } catch (error: any) {
+        console.error('User Sync Error:', error);
+        res.status(500).json({ error: error?.message || 'Sync failed' });
+    }
+});
+
+// Set/reset one dedicated dashboard login from POS
+router.post('/dashboard-user', async (req, res) => {
+    try {
+        const username = (req.body?.username || '').toString().trim();
+        const password = (req.body?.password || '').toString();
+        const name = (req.body?.name || username || 'Dashboard Admin').toString().trim();
+        const role = (req.body?.role || 'ADMIN').toString().toUpperCase();
+
+        if (!username || !password) {
+            return res.status(400).json({ error: 'username and password are required' });
+        }
+
+        const passwordHash = await bcrypt.hash(password, 10);
+        const existingDashboardUser = await prisma.user.findUnique({ where: { username } });
+        const user = existingDashboardUser
+            ? await prisma.user.update({
+                where: { username },
+                data: {
+                    name,
+                    role: role === 'ADMIN' ? 'ADMIN' : 'CASHIER',
+                    password: passwordHash,
+                    isActive: true
+                }
+            })
+            : await prisma.user.create({
+                data: {
+                    username,
+                    name,
+                    role: role === 'ADMIN' ? 'ADMIN' : 'CASHIER',
+                    password: passwordHash,
+                    isActive: true
+                }
+            });
+
+        await prisma.auditLog.create({
+            data: {
+                action: 'DASHBOARD_USER_SET',
+                details: `Dashboard credentials set for ${username}`,
+                userId: user.id
+            }
+        });
+
+        res.json({ success: true, username: user.username });
+    } catch (error: any) {
+        console.error('Dashboard user set error:', error);
+        res.status(500).json({ error: error?.message || 'Failed to set dashboard user' });
+    }
+});
+// Sync Inventory from Desktop
+router.post('/inventory', async (req, res) => {
+    try {
+        const { products } = req.body;
+        if (!Array.isArray(products)) return res.status(400).json({ error: 'Invalid data' });
+
+        console.log(`ðŸ“¦ Syncing ${products.length} products...`);
+        for (const p of products) {
+            // 1. Sync Category
+            const category = await prisma.category.upsert({
+                where: { name: p.category.name },
+                update: {},
+                create: { name: p.category.name }
+            });
+
+            // 2. Sync Product by stable desktop ID when available.
+            const productId = typeof p.id === 'string' && p.id.trim() ? p.id : undefined;
+            let product;
+
+            if (productId) {
+                product = await prisma.product.upsert({
+                    where: { id: productId },
+                    update: {
+                        name: p.name,
+                        description: p.description ?? null,
+                        categoryId: category.id,
+                        taxRate: p.taxRate,
+                        hsn: p.hsn,
+                        isActive: p.isActive ?? true
+                    },
+                    create: {
+                        id: productId,
+                        name: p.name,
+                        description: p.description ?? null,
+                        categoryId: category.id,
+                        taxRate: p.taxRate,
+                        hsn: p.hsn,
+                        isActive: p.isActive ?? true
+                    }
+                });
+            } else {
+                const existingProduct = await prisma.product.findFirst({
+                    where: { name: p.name, categoryId: category.id }
+                });
+
+                product = existingProduct
+                    ? await prisma.product.update({
+                        where: { id: existingProduct.id },
+                        data: {
+                            name: p.name,
+                            description: p.description ?? null,
+                            categoryId: category.id,
+                            taxRate: p.taxRate,
+                            hsn: p.hsn,
+                            isActive: p.isActive ?? true
+                        }
+                    })
+                    : await prisma.product.create({
+                        data: {
+                            name: p.name,
+                            description: p.description ?? null,
+                            categoryId: category.id,
+                            taxRate: p.taxRate,
+                            hsn: p.hsn,
+                            isActive: p.isActive ?? true
+                        }
+                    });
+            }
+
+            // 3. Sync Variants
+            for (const v of p.variants) {
+                await prisma.productVariant.upsert({
+                    where: { id: v.id },
+                    update: {
+                        productId: product.id,
+                        stock: v.stock,
+                        sellingPrice: v.sellingPrice,
+                        mrp: v.mrp,
+                        barcode: v.barcode,
+                        sku: v.sku,
+                        size: v.size,
+                        color: v.color,
+                        costPrice: v.costPrice,
+                        minStock: v.minStock ?? 5,
+                        isActive: v.isActive // Respect Desktop status
+                    },
+                    create: {
+                        id: v.id,
+                        productId: product.id,
+                        sku: v.sku,
+                        barcode: v.barcode,
+                        size: v.size,
+                        color: v.color,
+                        mrp: v.mrp,
+                        sellingPrice: v.sellingPrice,
+                        costPrice: v.costPrice || 0,
+                        stock: v.stock,
+                        minStock: v.minStock ?? 5,
+                        isActive: v.isActive ?? true
+                    }
+                });
+            }
+        }
+
+        // Log the sync
+        await prisma.auditLog.create({
+            data: {
+                action: 'SYNC_INVENTORY',
+                details: `Synced ${products.length} products from desktop`,
+                userId: null
+            }
+        });
+
+        res.json({ success: true, count: products.length });
+    } catch (error: any) {
+        console.error('Inventory sync error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Cleanup Empty Placeholders
+router.post('/cleanup-placeholders', async (req, res) => {
+    try {
+        console.log('ðŸ§¹ Cleanup: checking for empty placeholders...');
+
+        // 1. Find all Placeholder Products
+        const placeholders = await prisma.product.findMany({
+            where: {
+                name: { contains: '(Sync Placeholder)' }
+            },
+            include: {
+                variants: true
+            }
+        });
+
+        let deletedCount = 0;
+
+        for (const p of placeholders) {
+            if (p.variants.length === 0) {
+                await prisma.product.delete({ where: { id: p.id } });
+                deletedCount++;
+            }
+        }
+
+        console.log(`âœ… Cleanup complete. Deleted ${deletedCount} placeholders.`);
+        res.json({ success: true, deleted: deletedCount, totalChecked: placeholders.length });
+
+    } catch (error: any) {
+        console.error('Cleanup error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Sync Settings from Desktop
+router.post('/settings', async (req, res) => {
+    try {
+        const { settings } = req.body;
+        if (!Array.isArray(settings)) return res.status(400).json({ error: 'Invalid data' });
+
+        console.log(`ðŸ“¡ Cloud receiving ${settings.length} settings...`);
+
+        for (const setting of settings) {
+            await prisma.setting.upsert({
+                where: { key: setting.key },
+                update: {
+                    value: setting.value
+                },
+                create: {
+                    key: setting.key,
+                    value: setting.value
+                }
+            });
+        }
+
+        res.json({ success: true, count: settings.length });
+    } catch (error: any) {
+        console.error('Settings sync error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Sync Audit Logs from Desktop
+router.post('/audit', async (req, res) => {
+    try {
+        const { logs } = req.body;
+        if (!Array.isArray(logs)) return res.status(400).json({ error: 'Invalid data' });
+
+        console.log(`ðŸ“¡ Cloud receiving ${logs.length} audit logs...`);
+
+        for (const log of logs) {
+            // Ensure User exists (if linked)
+            if (log.user) {
+                const existingAuditUser = await prisma.user.findUnique({
+                    where: { username: log.user.username }
+                });
+                if (!existingAuditUser) {
+                    await prisma.user.create({
+                        data: {
+                            id: log.user.id,
+                            username: log.user.username,
+                            name: log.user.name,
+                            role: log.user.role || 'CASHIER', // Fallback
+                            password: log.user.password || 'cloud_synced', // Fallback
+                            isActive: true
+                        }
+                    });
+                }
+            }
+
+            await prisma.auditLog.upsert({
+                where: { id: log.id },
+                update: {},
+                create: {
+                    id: log.id,
+                    action: log.action,
+                    details: log.details,
+                    userId: log.userId,
+                    createdAt: new Date(log.createdAt)
+                }
+            });
+        }
+
+        res.json({ success: true, count: logs.length });
+    } catch (error: any) {
+        console.error('Audit Log Sync Error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+export default router;

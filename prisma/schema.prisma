@@ -1,0 +1,311 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "./generated/client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./pos.db"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  password  String
+  name      String
+  role      String // 'ADMIN' or 'CASHIER'
+  isActive  Boolean  @default(true)
+  
+  // Permissions
+  permPrintSticker Boolean @default(true)
+  permAddItem      Boolean @default(true) // Can add items to cart/sale
+  permDeleteProduct Boolean @default(true) // Can remove items from cart
+  permVoidSale     Boolean @default(true) // Can void completed sales
+  permViewReports  Boolean @default(true) // Can view General Reports
+  permEditSettings Boolean @default(false)
+  
+  // New Permissions
+  permManageProducts Boolean @default(false) // Can access Products Page (Add/Edit/Delete products in DB)
+  permViewSales    Boolean @default(false) // Can view Sales History
+  permViewGstReports Boolean @default(false) // Can view GST Reports section
+  permEditSales      Boolean @default(false) // Can edit/exchange sales
+  permManageInventory Boolean @default(false) // Can adjust stock/movements
+  permManageUsers    Boolean @default(false) // Comprehensive user management
+  permViewCostPrice  Boolean @default(false) // Can see cost prices
+  permChangePayment  Boolean @default(false) // Can update payment method after sale
+  permDeleteAudit    Boolean @default(false) // Can clear activity logs
+  permBulkUpdate     Boolean @default(false) // Can perform bulk updates
+  permBackDateSale   Boolean @default(false) // Can record sales for previous dates
+  permViewInsights   Boolean @default(false) // Can view AI Forecasting and Insights
+
+  maxDiscount      Float   @default(0.0) // Max ₹ discount allowed per item/bill
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sales    Sale[]
+  AuditLog AuditLog[]
+}
+
+model Category {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  categoryId  String
+  hsn         String? // HSN code for GST
+  taxRate     Float    @default(5.0) // GST rate (5% = 2.5% CGST + 2.5% SGST)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  category Category         @relation(fields: [categoryId], references: [id])
+  variants ProductVariant[]
+}
+
+model ProductVariant {
+  id           String   @id @default(uuid())
+  productId    String
+  sku          String   @unique
+  barcode      String   @unique
+  size         String?
+  color        String?
+  mrp          Float
+  sellingPrice Float
+  costPrice    Float
+  stock        Int      @default(0)
+  minStock     Int      @default(5)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  product            Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  saleItems          SaleItem[]
+  inventoryMovements InventoryMovement[]
+}
+
+model Customer {
+  id        String   @id @default(uuid())
+  name      String
+  phone     String?  @unique
+  email     String?
+  address   String?
+  gstin     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // sales       Sale[] // Removed as per new Sale model
+}
+
+model Sale {
+  id            String     @id @default(uuid())
+  billNo        String
+  userId        String
+  user          User       @relation(fields: [userId], references: [id])
+  customerName  String?
+  customerPhone String?
+  items         SaleItem[]
+
+  // Amounts
+  subtotal        Float
+  discount        Float @default(0)
+  discountPercent Float @default(0)
+  taxAmount       Float
+  cgst            Float
+  sgst            Float
+  grandTotal      Float
+
+  // Payment
+  paymentMethod String @default("CASH") // Legacy field, keep for compatibility
+  paidAmount    Float
+  changeAmount  Float
+  payments      InvoicePayment[]
+
+  status  String  @default("COMPLETED") // COMPLETED, VOIDED
+  remarks String?
+  
+  // Historical data tracking
+  isHistorical Boolean @default(false)
+  importedFrom String?
+
+  // Relations for Immutable History
+  exchanges Exchange[]
+  refunds   Refund[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Optional field for legitimately delayed sale entries
+  // If set, reports should use this date instead of createdAt for date range filtering
+  actualSaleDate DateTime?
+
+  @@unique([billNo])
+  @@index([createdAt])
+  @@index([actualSaleDate])
+  @@index([status])
+  @@index([userId])
+}
+
+model InvoicePayment {
+  id          String @id @default(uuid())
+  saleId      String
+  sale        Sale   @relation(fields: [saleId], references: [id])
+  paymentMode String // CASH, CARD, UPI
+  amount      Float
+  createdAt   DateTime @default(now())
+}
+
+model Exchange {
+  id                String   @id @default(uuid())
+  originalInvoiceId String
+  invoice           Sale     @relation(fields: [originalInvoiceId], references: [id])
+  exchangeDate      DateTime @default(now())
+  differenceAmount  Float    // Total to collect or refund
+  notes             String?
+  createdBy         String
+  
+  items             ExchangeItem[]
+  payments          ExchangePayment[]
+}
+
+model ExchangeItem {
+  id             String @id @default(uuid())
+  exchangeId     String
+  exchange       Exchange @relation(fields: [exchangeId], references: [id])
+  returnedItemId String? // Variant ID
+  returnedQty    Int     @default(0)
+  newItemId      String? // Variant ID
+  newQty         Int     @default(0)
+  priceDiff      Float
+}
+
+model ExchangePayment {
+  id          String   @id @default(uuid())
+  exchangeId  String
+  exchange    Exchange @relation(fields: [exchangeId], references: [id])
+  paymentMode String
+  amount      Float
+  createdAt   DateTime @default(now())
+}
+
+model Refund {
+  id                String   @id @default(uuid())
+  originalInvoiceId String
+  invoice           Sale     @relation(fields: [originalInvoiceId], references: [id])
+  refundDate        DateTime @default(now())
+  totalRefundAmount Float
+  reason            String
+  createdBy         String
+  
+  items             RefundItem[]
+  payments          RefundPayment[]
+}
+
+model RefundItem {
+  id        String @id @default(uuid())
+  refundId  String
+  refund    Refund @relation(fields: [refundId], references: [id])
+  variantId String // Item ID
+  quantity  Int
+  amount    Float
+}
+
+model RefundPayment {
+  id          String   @id @default(uuid())
+  refundId    String
+  refund      Refund   @relation(fields: [refundId], references: [id])
+  paymentMode String
+  amount      Float
+  createdAt   DateTime @default(now())
+}
+
+model SaleItem {
+  id          String  @id @default(uuid())
+  saleId      String
+  sale        Sale    @relation(fields: [saleId], references: [id])
+  variantId   String
+  productName String
+  variantInfo String? // e.g. "XL Red"
+
+  quantity     Int
+  mrp          Float
+  sellingPrice Float
+  discount     Float @default(0)
+  taxRate      Float
+  taxAmount    Float
+  total        Float
+
+  createdAt DateTime @default(now())
+
+  variant ProductVariant @relation(fields: [variantId], references: [id])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  action    String
+  details   String
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([userId])
+}
+
+model InventoryMovement {
+  id        String   @id @default(uuid())
+  variantId String
+  type      String // 'IN', 'OUT', 'ADJUSTMENT', 'EXCHANGE_RETURN', 'EXCHANGE_OUT', 'REFUND'
+  quantity  Int
+  reason    String?
+  reference String? // Sale ID, Exchange ID, or Refund ID
+  createdBy String
+  createdAt DateTime @default(now())
+
+  variant ProductVariant @relation(fields: [variantId], references: [id])
+
+  @@index([variantId])
+  @@index([createdAt])
+}
+
+model Setting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model PrinterConfig {
+  id          String   @id @default(uuid())
+  type        String   @unique // 'RECEIPT' or 'LABEL'
+  printerName String
+  port        String?
+  width       Int // Paper width in mm
+  settings    String? // JSON string for additional settings
+  isActive    Boolean  @default(true)
+  updatedAt   DateTime @updatedAt
+}
+
+// Queue for offline synchronization
+model SyncQueue {
+  id         String   @id @default(uuid())
+  action     String   @default("CREATE") // CREATE, UPDATE
+  model      String   // Sale, Product, etc.
+  data       String   // JSON payload
+  status     String   @default("PENDING") // PENDING, FAILED
+  retryCount Int      @default(0)
+  error      String?  // Last error message
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}

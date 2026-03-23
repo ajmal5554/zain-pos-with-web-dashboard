@@ -1,0 +1,46 @@
+File: migration/Report_Item_Detail_Pricelist_All_GroupwiseBrandwise_with_Option.xls
+Sheet: Report_Item_Detail_Pricelist_Al
+Total rows: 399
+
+Column names:
+  1. PriceList
+
+First 5 rows:
+
+Row 1:
+{
+  "PriceList": "Print Date :02-Feb-2026"
+}
+
+Row 2:
+{
+  "PriceList": "Item Code",
+  "__EMPTY": "Item Name",
+  "__EMPTY_1": "W. Sale\nRate",
+  "__EMPTY_2": " Retail\nRate",
+  "__EMPTY_3": " MRP"
+}
+
+Row 3:
+{
+  "__EMPTY": "3/4 capri 325",
+  "__EMPTY_1": 0,
+  "__EMPTY_2": 325,
+  "__EMPTY_3": 0
+}
+
+Row 4:
+{
+  "__EMPTY": "3/4 capri 350",
+  "__EMPTY_1": 0,
+  "__EMPTY_2": 350,
+  "__EMPTY_3": 0
+}
+
+Row 5:
+{
+  "__EMPTY": "3/4 capri 425",
+  "__EMPTY_1": 0,
+  "__EMPTY_2": 425,
+  "__EMPTY_3": 0
+}

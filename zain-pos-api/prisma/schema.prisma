@@ -1,0 +1,322 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  password  String
+  name      String
+  role      String   // 'ADMIN' or 'CASHIER'
+  isActive  Boolean  @default(true)
+
+  // Permissions (synced from desktop)
+  permPrintSticker    Boolean @default(true)
+  permAddItem         Boolean @default(true)
+  permDeleteProduct   Boolean @default(true)
+  permVoidSale        Boolean @default(true)
+  permViewReports     Boolean @default(true)
+  permEditSettings    Boolean @default(false)
+  permManageProducts  Boolean @default(false)
+  permViewSales       Boolean @default(false)
+  permViewGstReports  Boolean @default(false)
+  permEditSales       Boolean @default(false)
+  permManageInventory Boolean @default(false)
+  permManageUsers     Boolean @default(false)
+  permViewCostPrice   Boolean @default(false)
+  permChangePayment   Boolean @default(false)
+  permDeleteAudit     Boolean @default(false)
+  permBulkUpdate      Boolean @default(false)
+  permBackDateSale    Boolean @default(false)
+  permViewInsights    Boolean @default(false)
+  maxDiscount         Float   @default(0.0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  Sale              Sale[]
+  AuditLog          AuditLog[]
+  pushSubscriptions PushSubscription[]
+}
+
+model Category {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  categoryId  String
+  hsn         String?
+  taxRate     Float    @default(5.0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  category Category         @relation(fields: [categoryId], references: [id])
+  variants ProductVariant[]
+}
+
+model ProductVariant {
+  id           String   @id @default(uuid())
+  productId    String
+  sku          String   @unique
+  barcode      String   @unique
+  size         String?
+  color        String?
+  mrp          Float
+  sellingPrice Float
+  costPrice    Float
+  stock        Int      @default(0)
+  minStock     Int      @default(5)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  product            Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  saleItems          SaleItem[]
+  inventoryMovements InventoryMovement[]
+}
+
+model Customer {
+  id        String   @id @default(uuid())
+  name      String
+  phone     String?  @unique
+  email     String?
+  address   String?
+  gstin     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Sale {
+  id            String     @id @default(uuid())
+  billNo        String     @unique
+  userId        String
+  user          User       @relation(fields: [userId], references: [id])
+  customerName  String?
+  customerPhone String?
+  items         SaleItem[]
+
+  subtotal        Float
+  discount        Float @default(0)
+  discountPercent Float @default(0)
+  taxAmount       Float
+  cgst            Float
+  sgst            Float
+  grandTotal      Float
+
+  paymentMethod String @default("CASH")
+  paidAmount    Float
+  changeAmount  Float
+  payments      InvoicePayment[]
+
+  status  String  @default("COMPLETED")
+  remarks String?
+
+  isHistorical Boolean @default(false)
+  importedFrom String?
+
+  exchanges Exchange[]
+  refunds   Refund[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  actualSaleDate DateTime?
+
+  @@index([createdAt])
+  @@index([actualSaleDate])
+  @@index([status])
+  @@index([userId])
+}
+
+model InvoicePayment {
+  id          String   @id @default(uuid())
+  saleId      String
+  sale        Sale     @relation(fields: [saleId], references: [id])
+  paymentMode String   // CASH, CARD, UPI
+  amount      Float
+  createdAt   DateTime @default(now())
+}
+
+model Exchange {
+  id                String   @id @default(uuid())
+  originalInvoiceId String
+  invoice           Sale     @relation(fields: [originalInvoiceId], references: [id])
+  exchangeDate      DateTime @default(now())
+  differenceAmount  Float
+  notes             String?
+  createdBy         String
+
+  items    ExchangeItem[]
+  payments ExchangePayment[]
+}
+
+model ExchangeItem {
+  id             String   @id @default(uuid())
+  exchangeId     String
+  exchange       Exchange @relation(fields: [exchangeId], references: [id])
+  returnedItemId String?
+  returnedQty    Int      @default(0)
+  newItemId      String?
+  newQty         Int      @default(0)
+  priceDiff      Float
+}
+
+model ExchangePayment {
+  id          String   @id @default(uuid())
+  exchangeId  String
+  exchange    Exchange @relation(fields: [exchangeId], references: [id])
+  paymentMode String
+  amount      Float
+  createdAt   DateTime @default(now())
+}
+
+model Refund {
+  id                String   @id @default(uuid())
+  originalInvoiceId String
+  invoice           Sale     @relation(fields: [originalInvoiceId], references: [id])
+  refundDate        DateTime @default(now())
+  totalRefundAmount Float
+  reason            String
+  createdBy         String
+
+  items    RefundItem[]
+  payments RefundPayment[]
+}
+
+model RefundItem {
+  id        String @id @default(uuid())
+  refundId  String
+  refund    Refund @relation(fields: [refundId], references: [id])
+  variantId String
+  quantity  Int
+  amount    Float
+}
+
+model RefundPayment {
+  id          String   @id @default(uuid())
+  refundId    String
+  refund      Refund   @relation(fields: [refundId], references: [id])
+  paymentMode String
+  amount      Float
+  createdAt   DateTime @default(now())
+}
+
+model SaleItem {
+  id          String @id @default(uuid())
+  saleId      String
+  sale        Sale   @relation(fields: [saleId], references: [id])
+  variantId   String
+  productName String
+  variantInfo String?
+
+  quantity     Int
+  mrp          Float
+  sellingPrice Float
+  discount     Float @default(0)
+  taxRate      Float
+  taxAmount    Float
+  total        Float
+
+  createdAt DateTime @default(now())
+
+  variant ProductVariant @relation(fields: [variantId], references: [id])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  action    String
+  details   String
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model InventoryMovement {
+  id        String   @id @default(uuid())
+  variantId String
+  type      String   // 'IN', 'OUT', 'ADJUSTMENT', 'EXCHANGE_RETURN', 'EXCHANGE_OUT', 'REFUND'
+  quantity  Int
+  reason    String?
+  reference String?
+  createdBy String
+  createdAt DateTime @default(now())
+
+  variant ProductVariant @relation(fields: [variantId], references: [id])
+}
+
+model Setting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model PrinterConfig {
+  id          String   @id @default(uuid())
+  type        String   @unique
+  printerName String
+  port        String?
+  width       Int
+  settings    String?
+  isActive    Boolean  @default(true)
+  updatedAt   DateTime @updatedAt
+}
+
+model SyncQueue {
+  id         String   @id @default(uuid())
+  action     String   @default("CREATE")
+  model      String
+  data       String
+  status     String   @default("PENDING")
+  retryCount Int      @default(0)
+  error      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Notification {
+  id          String   @id @default(uuid())
+  shopId      String   @map("shop_id")
+  type        String
+  title       String
+  message     String
+  referenceId String?  @map("reference_id")
+  read        Boolean  @default(false)
+  createdAt   DateTime @default(now()) @map("created_at")
+  metadata    Json?
+
+  @@index([shopId])
+  @@index([createdAt])
+  @@index([read])
+  @@map("notifications")
+}
+
+model PushSubscription {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id])
+  endpoint  String   @unique
+  keys      Json
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("push_subscriptions")
+}

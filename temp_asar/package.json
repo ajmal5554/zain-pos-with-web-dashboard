@@ -1,0 +1,33 @@
+{
+  "name": "zain-pos-v3",
+  "version": "1.0.0",
+  "description": "Zain Gents Palace - Point of Sale System",
+  "main": "dist-electron/main.js",
+  "author": "Zain Gents Palace",
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@prisma/client": "^5.9.1",
+    "bcryptjs": "^2.4.3",
+    "csv-parser": "^3.2.0",
+    "date-fns": "^3.3.1",
+    "jsbarcode": "^3.12.3",
+    "jspdf": "^2.5.2",
+    "jspdf-autotable": "^5.0.7",
+    "lucide-react": "^0.323.0",
+    "mssql": "^12.2.0",
+    "node-thermal-printer": "^4.4.4",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.22.0",
+    "recharts": "^2.15.4",
+    "xlsx": "^0.18.5",
+    "zustand": "^4.5.0"
+  },
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
+  }
+}

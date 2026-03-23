@@ -1,0 +1,5 @@
+
+Analysis Results:
+  Total "Invoice No/Date" found: 1130
+  First 5 rows with invoice headers: 7, 20, 32, 45, 58
+  Last 5 rows with invoice headers: 14499, 14512, 14524, 14536, 14548
