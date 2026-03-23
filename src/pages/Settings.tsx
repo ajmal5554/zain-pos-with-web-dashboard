@@ -57,6 +57,7 @@ export const Settings: React.FC = () => {
 
     const [syncConfig, setSyncConfig] = useState({
         apiUrl: '',
+        syncSecret: '',
         intervalMinutes: 0
     });
 
@@ -87,12 +88,14 @@ export const Settings: React.FC = () => {
             }
 
             const apiResult = await window.electronAPI.settings.get({ key: 'CLOUD_API_URL' });
+            const secretResult = await window.electronAPI.settings.get({ key: 'CLOUD_SYNC_SECRET' });
             const configResult = await window.electronAPI.settings.get({ key: 'CLOUD_SYNC_CONFIG' });
 
             const interval = configResult ? JSON.parse(configResult as string).intervalMinutes : 0;
             const apiUrl = apiResult ? apiResult : '';
+            const syncSecret = secretResult ? secretResult : '';
 
-            setSyncConfig({ apiUrl, intervalMinutes: interval });
+            setSyncConfig({ apiUrl, syncSecret, intervalMinutes: interval });
 
             const backupResult = await window.electronAPI.settings.get({ key: 'BACKUP_CONFIG' });
             if (backupResult) {
@@ -150,6 +153,11 @@ export const Settings: React.FC = () => {
             await window.electronAPI.settings.set({
                 key: 'CLOUD_API_URL',
                 value: syncConfig.apiUrl,
+                userId
+            });
+            await window.electronAPI.settings.set({
+                key: 'CLOUD_SYNC_SECRET',
+                value: syncConfig.syncSecret,
                 userId
             });
             await window.electronAPI.db.configureSync({ intervalMinutes: syncConfig.intervalMinutes });
@@ -354,6 +362,16 @@ export const Settings: React.FC = () => {
                                             placeholder="https://your-api.railway.app"
                                             onChange={(e) => setSyncConfig({ ...syncConfig, apiUrl: e.target.value })}
                                         />
+                                        <Input
+                                            label="Cloud Sync Secret"
+                                            type="password"
+                                            value={syncConfig.syncSecret}
+                                            placeholder="Enter the same CLOUD_SYNC_SECRET used by your hosted API"
+                                            onChange={(e) => setSyncConfig({ ...syncConfig, syncSecret: e.target.value })}
+                                        />
+                                        <p className="text-xs text-gray-500 dark:text-gray-400 -mt-1">
+                                            This must exactly match the API server `CLOUD_SYNC_SECRET`. The API URL alone is not enough for sync.
+                                        </p>
                                         <div>
                                             <label className="label">Background Sync Interval</label>
                                             <select
