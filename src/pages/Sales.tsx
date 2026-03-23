@@ -16,6 +16,17 @@ import { AlertCircle, ArrowLeftRight, History, Minus, Plus, Undo2 } from 'lucide
 
 type TimePeriod = 'day' | 'week' | 'month' | 'year' | 'all';
 
+const toValidDate = (value: unknown): Date | null => {
+    if (!value) return null;
+    const parsed = value instanceof Date ? value : new Date(value as any);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const formatDateSafe = (value: unknown, pattern: string, fallback = 'Invalid date'): string => {
+    const parsed = toValidDate(value);
+    return parsed ? format(parsed, pattern) : fallback;
+};
+
 export const Sales: React.FC = () => {
     const [sales, setSales] = useState<any[]>([]);
     const [searchQuery, setSearchQuery] = useState('');
@@ -484,9 +495,10 @@ export const Sales: React.FC = () => {
 
     const handlePrintReceipt = async (sale: any) => {
         try {
+            const receiptDate = toValidDate(sale.actualSaleDate) || toValidDate(sale.createdAt) || new Date();
             const receiptData = {
                 billNo: sale.billNo,
-                date: new Date(sale.createdAt),
+                date: receiptDate,
                 shopName: shopSettings?.shopName || 'ZAIN GENTS PALACE',
                 shopAddress: shopSettings?.address || 'CHIRAMMAL TOWER, BEHIND CANARA BANK\nRAJA ROAD, NILESHWAR',
                 shopPhone: shopSettings?.phone || '9037106449, 7907026827',
@@ -788,14 +800,14 @@ export const Sales: React.FC = () => {
                         ) : filteredSales.length > 0 ? (
                             filteredSales.map((sale, index) => {
                                 const prevSale = index > 0 ? filteredSales[index - 1] : null;
-                                const currDate = new Date(sale.createdAt);
-                                const prevDate = prevSale ? new Date(prevSale.createdAt) : null;
+                                const currDate = toValidDate(sale.actualSaleDate) || toValidDate(sale.createdAt);
+                                const prevDate = prevSale ? (toValidDate(prevSale.actualSaleDate) || toValidDate(prevSale.createdAt)) : null;
 
                                 let showDivider = false;
                                 let dividerLabel = "";
                                 let dividerColor = "";
 
-                                if (prevDate) {
+                                if (currDate && prevDate) {
                                     // Year Change
                                     if (currDate.getFullYear() !== prevDate.getFullYear()) {
                                         showDivider = true;
@@ -867,7 +879,7 @@ export const Sales: React.FC = () => {
                                                 </div>
                                             </td>
                                             <td className={`whitespace-nowrap text-xs ${sale.status === 'VOIDED' ? 'line-through text-gray-400' : 'text-gray-600'}`}>
-                                                {format(new Date(sale.createdAt), 'dd MMM yyyy, HH:mm')}
+                                                {formatDateSafe(sale.actualSaleDate || sale.createdAt, 'dd MMM yyyy, HH:mm')}
                                             </td>
                                             <td className={`font-medium ${sale.status === 'VOIDED' ? 'line-through text-gray-400' : ''}`}>
                                                 {sale.customerName || <span className="text-gray-300 italic text-xs">Walk-in</span>}
@@ -1066,7 +1078,7 @@ export const Sales: React.FC = () => {
                                                                     {(sale.exchanges || []).map((ex: any, i: number) => (
                                                                         <div key={i} className="flex items-center gap-3 text-xs">
                                                                             <div className="w-2 h-2 rounded-full bg-orange-400 shadow-[0_0_8px_rgba(251,146,60,0.5)]"></div>
-                                                                            <span className="text-gray-500 font-medium">{format(new Date(ex.exchangeDate), 'dd MMM, HH:mm')}:</span>
+                                                                            <span className="text-gray-500 font-medium">{formatDateSafe(ex.exchangeDate, 'dd MMM, HH:mm', 'Updated')}:</span>
                                                                             <span className="font-bold text-orange-600">Exchange Processed</span>
                                                                             <span className="text-gray-400">({ex.notes})</span>
                                                                             <span className="ml-auto font-black">{ex.differenceAmount > 0 ? '+' : ''}{formatIndianCurrency(ex.differenceAmount)}</span>
@@ -1075,7 +1087,7 @@ export const Sales: React.FC = () => {
                                                                     {(sale.refunds || []).map((ref: any, i: number) => (
                                                                         <div key={i} className="flex items-center gap-3 text-xs">
                                                                             <div className="w-2 h-2 rounded-full bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.5)]"></div>
-                                                                            <span className="text-gray-500 font-medium">{format(new Date(ref.refundDate), 'dd MMM, HH:mm')}:</span>
+                                                                            <span className="text-gray-500 font-medium">{formatDateSafe(ref.refundDate, 'dd MMM, HH:mm', 'Updated')}:</span>
                                                                             <span className="font-bold text-red-600">Refunded</span>
                                                                             <span className="text-gray-400">({ref.reason})</span>
                                                                             <span className="ml-auto font-black">-{formatIndianCurrency(ref.totalRefundAmount)}</span>
