@@ -130,9 +130,9 @@ router.get('/products/manage', async (req, res) => {
                 isActive: true,
                 ...(search ? {
                     OR: [
-                        { name: { contains: search, mode: 'insensitive' } },
-                        { variants: { some: { barcode: { contains: search, mode: 'insensitive' }, isActive: true } } },
-                        { variants: { some: { sku: { contains: search, mode: 'insensitive' }, isActive: true } } }
+                        { name: { contains: search } },
+                        { variants: { some: { barcode: { contains: search }, isActive: true } } },
+                        { variants: { some: { sku: { contains: search }, isActive: true } } }
                     ]
                 } : {})
             },

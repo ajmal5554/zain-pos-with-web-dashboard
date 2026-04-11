@@ -258,8 +258,7 @@ router.post('/sales', async (req, res) => {
                         taxAmount: item.taxAmount ?? 0,
                         total: item.total ?? 0,
                         createdAt: asDate(item.createdAt) ?? asDate(sale.createdAt) ?? new Date()
-                    })),
-                    skipDuplicates: true
+                    }))
                 });
             }
 
@@ -271,8 +270,7 @@ router.post('/sales', async (req, res) => {
                         paymentMode: payment.paymentMode,
                         amount: payment.amount ?? 0,
                         createdAt: asDate(payment.createdAt) ?? asDate(sale.createdAt) ?? new Date()
-                    })),
-                    skipDuplicates: true
+                    }))
                 });
             }
         }
