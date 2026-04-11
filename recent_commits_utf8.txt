@@ -1,0 +1,381 @@
+﻿commit 8b73bd8312da136c9aa63121e02d70ace786a080
+Author: Codex <codex@example.com>
+Date:   Mon Mar 23 11:45:18 2026 +0530
+
+    Guard sales history against invalid timestamps
+
+diff --git a/src/pages/Sales.tsx b/src/pages/Sales.tsx
+index 54bd4c8..fc47ac7 100644
+--- a/src/pages/Sales.tsx
++++ b/src/pages/Sales.tsx
+@@ -16,6 +16,17 @@ import { AlertCircle, ArrowLeftRight, History, Minus, Plus, Undo2 } from 'lucide
+ 
+ type TimePeriod = 'day' | 'week' | 'month' | 'year' | 'all';
+ 
++const toValidDate = (value: unknown): Date | null => {
++    if (!value) return null;
++    const parsed = value instanceof Date ? value : new Date(value as any);
++    return Number.isNaN(parsed.getTime()) ? null : parsed;
++};
++
++const formatDateSafe = (value: unknown, pattern: string, fallback = 'Invalid date'): string => {
++    const parsed = toValidDate(value);
++    return parsed ? format(parsed, pattern) : fallback;
++};
++
+ export const Sales: React.FC = () => {
+     const [sales, setSales] = useState<any[]>([]);
+     const [searchQuery, setSearchQuery] = useState('');
+@@ -484,9 +495,10 @@ export const Sales: React.FC = () => {
+ 
+     const handlePrintReceipt = async (sale: any) => {
+         try {
++            const receiptDate = toValidDate(sale.actualSaleDate) || toValidDate(sale.createdAt) || new Date();
+             const receiptData = {
+                 billNo: sale.billNo,
+-                date: new Date(sale.createdAt),
++                date: receiptDate,
+                 shopName: shopSettings?.shopName || 'ZAIN GENTS PALACE',
+                 shopAddress: shopSettings?.address || 'CHIRAMMAL TOWER, BEHIND CANARA BANK\nRAJA ROAD, NILESHWAR',
+                 shopPhone: shopSettings?.phone || '9037106449, 7907026827',
+@@ -788,14 +800,14 @@ export const Sales: React.FC = () => {
+                         ) : filteredSales.length > 0 ? (
+                             filteredSales.map((sale, index) => {
+                                 const prevSale = index > 0 ? filteredSales[index - 1] : null;
+-                                const currDate = new Date(sale.createdAt);
+-                                const prevDate = prevSale ? new Date(prevSale.createdAt) : null;
++                                const currDate = toValidDate(sale.actualSaleDate) || toValidDate(sale.createdAt);
++                                const prevDate = prevSale ? (toValidDate(prevSale.actualSaleDate) || toValidDate(prevSale.createdAt)) : null;
+ 
+                                 let showDivider = false;
+                                 let dividerLabel = "";
+                                 let dividerColor = "";
+ 
+-                                if (prevDate) {
++                                if (currDate && prevDate) {
+                                     // Year Change
+                                     if (currDate.getFullYear() !== prevDate.getFullYear()) {
+                                         showDivider = true;
+@@ -867,7 +879,7 @@ export const Sales: React.FC = () => {
+                                                 </div>
+                                             </td>
+                                             <td className={`whitespace-nowrap text-xs ${sale.status === 'VOIDED' ? 'line-through text-gray-400' : 'text-gray-600'}`}>
+-                                                {format(new Date(sale.createdAt), 'dd MMM yyyy, HH:mm')}
++                                                {formatDateSafe(sale.actualSaleDate || sale.createdAt, 'dd MMM yyyy, HH:mm')}
+                                             </td>
+                                             <td className={`font-medium ${sale.status === 'VOIDED' ? 'line-through text-gray-400' : ''}`}>
+                                                 {sale.customerName || <span className="text-gray-300 italic text-xs">Walk-in</span>}
+@@ -1066,7 +1078,7 @@ export const Sales: React.FC = () => {
+                                                                     {(sale.exchanges || []).map((ex: any, i: number) => (
+                                                                         <div key={i} className="flex items-center gap-3 text-xs">
+                                                                             <div className="w-2 h-2 rounded-full bg-orange-400 shadow-[0_0_8px_rgba(251,146,60,0.5)]"></div>
+-                                                                            <span className="text-gray-500 font-medium">{format(new Date(ex.exchangeDate), 'dd MMM, HH:mm')}:</span>
++                                                                            <span className="text-gray-500 font-medium">{formatDateSafe(ex.exchangeDate, 'dd MMM, HH:mm', 'Updated')}:</span>
+                                                                             <span className="font-bold text-orange-600">Exchange Processed</span>
+                                                                             <span className="text-gray-400">({ex.notes})</span>
+                                                                             <span className="ml-auto font-black">{ex.differenceAmount > 0 ? '+' : ''}{formatIndianCurrency(ex.differenceAmount)}</span>
+@@ -1075,7 +1087,7 @@ export const Sales: React.FC = () => {
+                                                                     {(sale.refunds || []).map((ref: any, i: number) => (
+                                                                         <div key={i} className="flex items-center gap-3 text-xs">
+                                                                             <div className="w-2 h-2 rounded-full bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.5)]"></div>
+-                                                                            <span className="text-gray-500 font-medium">{format(new Date(ref.refundDate), 'dd MMM, HH:mm')}:</span>
++                                                                            <span className="text-gray-500 font-medium">{formatDateSafe(ref.refundDate, 'dd MMM, HH:mm', 'Updated')}:</span>
+                                                                             <span className="font-bold text-red-600">Refunded</span>
+                                                                             <span className="text-gray-400">({ref.reason})</span>
+                                                                             <span className="ml-auto font-black">-{formatIndianCurrency(ref.totalRefundAmount)}</span>
+
+commit 5b9c6727d1718a7479adf32bb7adea8fa6bfae94
+Author: Codex <codex@example.com>
+Date:   Mon Mar 23 11:14:56 2026 +0530
+
+    Expose cloud sync secret in desktop settings
+
+diff --git a/src/pages/Settings.tsx b/src/pages/Settings.tsx
+index 0ff9cf6..52ecdc7 100644
+--- a/src/pages/Settings.tsx
++++ b/src/pages/Settings.tsx
+@@ -57,6 +57,7 @@ export const Settings: React.FC = () => {
+ 
+     const [syncConfig, setSyncConfig] = useState({
+         apiUrl: '',
++        syncSecret: '',
+         intervalMinutes: 0
+     });
+ 
+@@ -87,12 +88,14 @@ export const Settings: React.FC = () => {
+             }
+ 
+             const apiResult = await window.electronAPI.settings.get({ key: 'CLOUD_API_URL' });
++            const secretResult = await window.electronAPI.settings.get({ key: 'CLOUD_SYNC_SECRET' });
+             const configResult = await window.electronAPI.settings.get({ key: 'CLOUD_SYNC_CONFIG' });
+ 
+             const interval = configResult ? JSON.parse(configResult as string).intervalMinutes : 0;
+             const apiUrl = apiResult ? apiResult : '';
++            const syncSecret = secretResult ? secretResult : '';
+ 
+-            setSyncConfig({ apiUrl, intervalMinutes: interval });
++            setSyncConfig({ apiUrl, syncSecret, intervalMinutes: interval });
+ 
+             const backupResult = await window.electronAPI.settings.get({ key: 'BACKUP_CONFIG' });
+             if (backupResult) {
+@@ -152,6 +155,11 @@ export const Settings: React.FC = () => {
+                 value: syncConfig.apiUrl,
+                 userId
+             });
++            await window.electronAPI.settings.set({
++                key: 'CLOUD_SYNC_SECRET',
++                value: syncConfig.syncSecret,
++                userId
++            });
+             await window.electronAPI.db.configureSync({ intervalMinutes: syncConfig.intervalMinutes });
+             alert('Cloud Sync configured successfully!');
+         } catch (error) {
+@@ -354,6 +362,16 @@ export const Settings: React.FC = () => {
+                                             placeholder="https://your-api.railway.app"
+                                             onChange={(e) => setSyncConfig({ ...syncConfig, apiUrl: e.target.value })}
+                                         />
++                                        <Input
++                                            label="Cloud Sync Secret"
++                                            type="password"
++                                            value={syncConfig.syncSecret}
++                                            placeholder="Enter the same CLOUD_SYNC_SECRET used by your hosted API"
++                                            onChange={(e) => setSyncConfig({ ...syncConfig, syncSecret: e.target.value })}
++                                        />
++                                        <p className="text-xs text-gray-500 dark:text-gray-400 -mt-1">
++                                            This must exactly match the API server `CLOUD_SYNC_SECRET`. The API URL alone is not enough for sync.
++                                        </p>
+                                         <div>
+                                             <label className="label">Background Sync Interval</label>
+                                             <select
+
+commit 96ddfa0281d0c08923cd226c08280d6ce4973e8b
+Author: Codex <codex@example.com>
+Date:   Mon Mar 23 11:09:27 2026 +0530
+
+    Redesign dashboard login screen
+
+diff --git a/zain-pos-dashboard/src/pages/Login.tsx b/zain-pos-dashboard/src/pages/Login.tsx
+index 3f8a7db..a1844ee 100644
+--- a/zain-pos-dashboard/src/pages/Login.tsx
++++ b/zain-pos-dashboard/src/pages/Login.tsx
+@@ -1,9 +1,15 @@
+ import { useState, type FormEvent } from 'react';
+ import { useNavigate } from 'react-router-dom';
++import { ArrowRight, ShieldCheck, Store, Wifi } from 'lucide-react';
+ import { useAuth } from '../contexts/AuthContext';
+-import { LogIn } from 'lucide-react';
+ import { API_URL } from '../lib/config';
+ 
++const quickStats = [
++    { label: 'Remote admin', value: 'Live' },
++    { label: 'Connected API', value: 'Render' },
++    { label: 'Access scope', value: 'Users, settings, reports' }
++];
++
+ export default function Login() {
+     const [username, setUsername] = useState('');
+     const [password, setPassword] = useState('');
+@@ -33,81 +39,136 @@ export default function Login() {
+     };
+ 
+     return (
+-        <div className="min-h-screen bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center p-4">
+-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8">
+-                <div className="text-center mb-8">
+-                    <div className="bg-primary-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+-                        <LogIn className="w-8 h-8 text-primary-600" />
+-                    </div>
+-                    <h1 className="text-3xl font-bold text-gray-900">ZAIN GENTS PALACE</h1>
+-                    <p className="text-gray-600 mt-2">Mobile Dashboard</p>
+-                </div>
+-
+-                <form onSubmit={handleSubmit} className="space-y-6">
+-                    {error && (
+-                        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+-                            {error}
++        <div className="relative min-h-screen overflow-hidden bg-[#f3f7fb] text-slate-950">
++            <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.16),_transparent_30%),radial-gradient(circle_at_bottom_right,_rgba(15,23,42,0.08),_transparent_28%)]" />
++            <div className="relative mx-auto grid min-h-screen max-w-[1440px] grid-cols-1 lg:grid-cols-[1.05fr_0.95fr]">
++                <section className="hidden px-10 py-12 lg:flex lg:flex-col lg:justify-between xl:px-16">
++                    <div className="max-w-xl">
++                        <div className="inline-flex items-center gap-4 rounded-full border border-slate-200/80 bg-white/90 px-4 py-3 shadow-sm backdrop-blur">
++                            <img src="/icon.ico" alt="Zain POS" className="h-11 w-11 rounded-2xl bg-slate-950/5 object-contain p-1.5" />
++                            <div>
++                                <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-400">Zain POS</p>
++                                <p className="text-lg font-semibold tracking-tight text-slate-900">Web Control Panel</p>
++                            </div>
+                         </div>
+-                    )}
+ 
+-                    <div>
+-                        <label className="block text-sm font-medium text-gray-700 mb-2">
+-                            Username
+-                        </label>
+-                        <input
+-                            type="text"
+-                            value={username}
+-                            onChange={(e) => setUsername(e.target.value)}
+-                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+-                            placeholder="Enter username"
+-                            required
+-                        />
++                        <div className="mt-12">
++                            <p className="text-sm font-semibold uppercase tracking-[0.28em] text-sky-700">Remote Operations</p>
++                            <h1 className="mt-5 max-w-2xl text-5xl font-semibold leading-[1.02] tracking-tight text-slate-950">
++                                Control store settings, users, products, and reports from anywhere.
++                            </h1>
++                            <p className="mt-6 max-w-xl text-lg leading-8 text-slate-600">
++                                The web dashboard mirrors the POS admin surface for management work, without exposing the checkout terminal.
++                            </p>
++                        </div>
+                     </div>
+ 
+-                    <div>
+-                        <label className="block text-sm font-medium text-gray-700 mb-2">
+-                            Password
+-                        </label>
+-                        <input
+-                            type="password"
+-                            value={password}
+-                            onChange={(e) => setPassword(e.target.value)}
+-                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+-                            placeholder="Enter password"
+-                            required
+-                        />
++                    <div className="grid gap-4 xl:grid-cols-3">
++                        {quickStats.map((item) => (
++                            <div key={item.label} className="rounded-[1.75rem] border border-slate-200/80 bg-white/92 p-5 shadow-[0_24px_50px_-34px_rgba(15,23,42,0.38)]">
++                                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">{item.label}</p>
++                                <p className="mt-4 text-lg font-semibold tracking-tight text-slate-950">{item.value}</p>
++                            </div>
++                        ))}
+                     </div>
++                </section>
+ 
+-                    <button
+-                        type="submit"
+-                        disabled={loading}
+-                        className="w-full bg-primary-600 text-white py-3 rounded-lg font-medium hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+-                    >
+-                        {loading ? 'Signing in...' : 'Sign In'}
+-                    </button>
++                <section className="flex items-center justify-center px-4 py-8 sm:px-6 lg:px-10 xl:px-14">
++                    <div className="w-full max-w-[560px] rounded-[2rem] border border-slate-200/80 bg-white/96 p-6 shadow-[0_35px_80px_-40px_rgba(15,23,42,0.42)] backdrop-blur sm:p-8">
++                        <div className="flex items-start justify-between gap-4">
++                            <div>
++                                <div className="flex items-center gap-3 lg:hidden">
++                                    <img src="/icon.ico" alt="Zain POS" className="h-12 w-12 rounded-2xl bg-slate-100 object-contain p-1.5" />
++                                    <div>
++                                        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Zain POS</p>
++                                        <p className="text-base font-semibold text-slate-900">Web Dashboard</p>
++                                    </div>
++                                </div>
++                                <p className="mt-5 text-sm font-semibold uppercase tracking-[0.24em] text-sky-700">Secure Sign In</p>
++                                <h2 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">Admin access</h2>
++                                <p className="mt-3 text-sm leading-6 text-slate-500">
++                                    Sign in with your hosted API credentials to manage settings, permissions, products, GST reports, and forecasting.
++                                </p>
++                            </div>
++                            <div className="hidden rounded-2xl border border-slate-200 bg-slate-50 p-3 text-slate-700 sm:block">
++                                <ShieldCheck className="h-6 w-6" />
++                            </div>
++                        </div>
+ 
+-                    {import.meta.env.DEV && (
+-                        <button
+-                            type="button"
+-                            onClick={handleDemoMode}
+-                            className="w-full border border-primary-200 text-primary-700 py-3 rounded-lg font-medium hover:bg-primary-50 transition-colors"
+-                        >
+-                            Continue In Demo Mode
+-                        </button>
+-                    )}
+-                </form>
++                        <div className="mt-8 grid gap-3 sm:grid-cols-3">
++                            <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
++                                <Store className="h-4 w-4 text-sky-700" />
++                                <p className="mt-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Role</p>
++                                <p className="mt-1 text-sm font-medium text-slate-900">Admin dashboard</p>
++                            </div>
++                            <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
++                                <Wifi className="h-4 w-4 text-sky-700" />
++                                <p className="mt-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">API</p>
++                                <p className="mt-1 truncate text-sm font-medium text-slate-900">{API_URL.replace(/^https?:\/\//, '')}</p>
++                            </div>
++                            <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
++                                <ArrowRight className="h-4 w-4 text-sky-700" />
++                                <p className="mt-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Default login</p>
++                                <p className="mt-1 text-sm font-medium text-slate-900">admin / admin123</p>
++                            </div>
++                        </div>
+ 
+-                <div className="mt-6 text-center text-sm text-gray-600">
+-                    <p>Default: admin / admin123</p>
+-                    {import.meta.env.DEV && (
+-                        <p className="text-xs text-gray-400 mt-2">
+-                            Demo mode is available in local development without API login.
+-                        </p>
+-                    )}
+-                    <p className="text-xs text-gray-400 mt-2">
+-                        API: {API_URL}
+-                    </p>
+-                </div>
++                        <form onSubmit={handleSubmit} className="mt-8 space-y-5">
++                            {error && (
++                                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
++                                    {error}
++                                </div>
++                            )}
++
++                            <div className="space-y-2">
++                                <label className="block text-sm font-medium text-slate-700">
++                                    Username
++                                </label>
++                                <input
++                                    type="text"
++                                    value={username}
++                                    onChange={(e) => setUsername(e.target.value)}
++                                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3.5 text-base text-slate-950 outline-none transition focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
++                                    placeholder="Enter username"
++                                    required
++                                />
++                            </div>
++
++                            <div className="space-y-2">
++                                <label className="block text-sm font-medium text-slate-700">
++                                    Password
++                                </label>
++                                <input
++                                    type="password"
++                                    value={password}
++                                    onChange={(e) => setPassword(e.target.value)}
++                                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3.5 text-base text-slate-950 outline-none transition focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
++                                    placeholder="Enter password"
++                                    required
++                                />
++                            </div>
++
++                            <button
++                                type="submit"
++                                disabled={loading}
++                                className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3.5 text-base font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
++                            >
++                                {loading ? 'Signing in...' : 'Sign In'}
++                                {!loading && <ArrowRight className="h-4 w-4" />}
++                            </button>
++
++                            {import.meta.env.DEV && (
++                                <button
++                                    type="button"
++                                    onClick={handleDemoMode}
++                                    className="w-full rounded-2xl border border-slate-200 bg-white px-5 py-3.5 text-base font-medium text-slate-700 transition hover:bg-slate-50"
++                                >
++                                    Continue In Demo Mode
++                                </button>
++                            )}
++                        </form>
++                    </div>
++                </section>
+             </div>
+         </div>
+     );

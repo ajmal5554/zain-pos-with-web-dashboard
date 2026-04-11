@@ -1,0 +1,806 @@
+﻿diff --git a/src/App.tsx b/src/App.tsx
+index a5e6b13..dc03577 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -13,6 +13,7 @@ import { Users } from './pages/Users';
+ import { Permissions } from './pages/Permissions';
+ import { Forecasting } from './pages/Forecasting';
+ import { MainLayout } from './components/Layout/MainLayout';
++import { WindowTitleBar } from './components/Layout/WindowTitleBar';
+ import { ErrorBoundary } from './components/ui/ErrorBoundary';
+ import { useAuthStore } from './store/authStore';
+ 
+@@ -88,94 +89,99 @@ function App() {
+     }, []);
+ 
+     return (
+-        <HashRouter>
+-            <Routes>
+-                <Route path="/login" element={<Login />} />
+-                <Route
+-                    path="/"
+-                    element={
+-                        <ProtectedRoute>
+-                            <MainLayout />
+-                        </ProtectedRoute>
+-                    }
+-                >
+-                    <Route
+-                        index
+-                        element={
+-                            <PermissionRoute perm="permViewReports">
+-                                <PageBoundary><Dashboard /></PageBoundary>
+-                            </PermissionRoute>
+-                        }
+-                    />
+-                    <Route path="pos" element={<PageBoundary><POS /></PageBoundary>} />
+-                    <Route
+-                        path="products"
+-                        element={
+-                            <PermissionRoute perm="permManageProducts">
+-                                <PageBoundary><Products /></PageBoundary>
+-                            </PermissionRoute>
+-                        }
+-                    />
+-                    <Route path="customers" element={<PageBoundary><Customers /></PageBoundary>} />
+-                    <Route
+-                        path="sales"
+-                        element={
+-                            <PermissionRoute perm="permViewSales">
+-                                <PageBoundary><Sales /></PageBoundary>
+-                            </PermissionRoute>
+-                        }
+-                    />
+-                    <Route
+-                        path="reports"
+-                        element={
+-                            <PermissionRoute perm="permViewGstReports">
+-                                <PageBoundary><Reports /></PageBoundary>
+-                            </PermissionRoute>
+-                        }
+-                    />
+-                    <Route
+-                        path="settings"
+-                        element={
+-                            <PermissionRoute perm="permEditSettings">
+-                                <PageBoundary><Settings /></PageBoundary>
+-                            </PermissionRoute>
+-                        }
+-                    />
+-                    <Route
+-                        path="users"
+-                        element={
+-                            <PermissionRoute perm="permManageUsers">
+-                                <PageBoundary><Users /></PageBoundary>
+-                            </PermissionRoute>
+-                        }
+-                    />
+-                    <Route
+-                        path="permissions"
+-                        element={
+-                            <PermissionRoute perm="permManageUsers">
+-                                <PageBoundary><Permissions /></PageBoundary>
+-                            </PermissionRoute>
+-                        }
+-                    />
+-                    <Route
+-                        path="activity"
+-                        element={
+-                            <PermissionRoute perm="permViewReports">
+-                                <PageBoundary><ActivityPage /></PageBoundary>
+-                            </PermissionRoute>
+-                        }
+-                    />
+-                    <Route
+-                        path="forecasting"
+-                        element={
+-                            <InsightsRoute>
+-                                <PageBoundary><Forecasting /></PageBoundary>
+-                            </InsightsRoute>
+-                        }
+-                    />
+-                </Route>
+-            </Routes>
+-        </HashRouter>
++        <div className="h-screen flex flex-col bg-white">
++            <WindowTitleBar />
++            <div className="flex-1 min-h-0">
++                <HashRouter>
++                    <Routes>
++                        <Route path="/login" element={<Login />} />
++                        <Route
++                            path="/"
++                            element={
++                                <ProtectedRoute>
++                                    <MainLayout />
++                                </ProtectedRoute>
++                            }
++                        >
++                            <Route
++                                index
++                                element={
++                                    <PermissionRoute perm="permViewReports">
++                                        <PageBoundary><Dashboard /></PageBoundary>
++                                    </PermissionRoute>
++                                }
++                            />
++                            <Route path="pos" element={<PageBoundary><POS /></PageBoundary>} />
++                            <Route
++                                path="products"
++                                element={
++                                    <PermissionRoute perm="permManageProducts">
++                                        <PageBoundary><Products /></PageBoundary>
++                                    </PermissionRoute>
++                                }
++                            />
++                            <Route path="customers" element={<PageBoundary><Customers /></PageBoundary>} />
++                            <Route
++                                path="sales"
++                                element={
++                                    <PermissionRoute perm="permViewSales">
++                                        <PageBoundary><Sales /></PageBoundary>
++                                    </PermissionRoute>
++                                }
++                            />
++                            <Route
++                                path="reports"
++                                element={
++                                    <PermissionRoute perm="permViewGstReports">
++                                        <PageBoundary><Reports /></PageBoundary>
++                                    </PermissionRoute>
++                                }
++                            />
++                            <Route
++                                path="settings"
++                                element={
++                                    <PermissionRoute perm="permEditSettings">
++                                        <PageBoundary><Settings /></PageBoundary>
++                                    </PermissionRoute>
++                                }
++                            />
++                            <Route
++                                path="users"
++                                element={
++                                    <PermissionRoute perm="permManageUsers">
++                                        <PageBoundary><Users /></PageBoundary>
++                                    </PermissionRoute>
++                                }
++                            />
++                            <Route
++                                path="permissions"
++                                element={
++                                    <PermissionRoute perm="permManageUsers">
++                                        <PageBoundary><Permissions /></PageBoundary>
++                                    </PermissionRoute>
++                                }
++                            />
++                            <Route
++                                path="activity"
++                                element={
++                                    <PermissionRoute perm="permViewReports">
++                                        <PageBoundary><ActivityPage /></PageBoundary>
++                                    </PermissionRoute>
++                                }
++                            />
++                            <Route
++                                path="forecasting"
++                                element={
++                                    <InsightsRoute>
++                                        <PageBoundary><Forecasting /></PageBoundary>
++                                    </InsightsRoute>
++                                }
++                            />
++                        </Route>
++                    </Routes>
++                </HashRouter>
++            </div>
++        </div>
+     );
+ }
+ 
+diff --git a/src/components/Layout/MainLayout.tsx b/src/components/Layout/MainLayout.tsx
+index 4534941..15c8e8f 100644
+--- a/src/components/Layout/MainLayout.tsx
++++ b/src/components/Layout/MainLayout.tsx
+@@ -22,10 +22,18 @@ import { useAuthStore } from '../../store/authStore';
+ import { NetworkStatus } from '../NetworkStatus';
+ 
+ type PermissionKey = 'permViewReports' | 'permViewInsights' | 'permManageProducts' | 'permViewSales' | 'permViewGstReports' | 'permManageUsers' | 'permEditSettings';
++type ShopBrand = {
++    shopName: string;
++    logo: string;
++};
+ 
+ export const MainLayout: React.FC = () => {
+     const [darkMode, setDarkMode] = React.useState(false);
+     const [sidebarOpen, setSidebarOpen] = React.useState(true);
++    const [shopBrand, setShopBrand] = React.useState<ShopBrand>({
++        shopName: 'Zain POS',
++        logo: '',
++    });
+     const location = useLocation();
+     const navigate = useNavigate();
+     const { user, login, logout } = useAuthStore();
+@@ -164,6 +172,38 @@ export const MainLayout: React.FC = () => {
+         }
+     }, [darkMode]);
+ 
++    React.useEffect(() => {
++        const loadShopBrand = async () => {
++            try {
++                const result = await window.electronAPI.settings.get({ key: 'SHOP_SETTINGS' });
++                if (result?.success && result.data) {
++                    const parsed = JSON.parse(result.data as string);
++                    setShopBrand({
++                        shopName: parsed?.shopName || 'Zain POS',
++                        logo: parsed?.logo || '',
++                    });
++                }
++            } catch {
++                // no-op
++            }
++        };
++
++        const handleBrandUpdate = (event: Event) => {
++            const detail = (event as CustomEvent<ShopBrand>).detail;
++            setShopBrand({
++                shopName: detail?.shopName || 'Zain POS',
++                logo: detail?.logo || '',
++            });
++        };
++
++        loadShopBrand();
++        window.addEventListener('shop-brand-updated', handleBrandUpdate);
++
++        return () => {
++            window.removeEventListener('shop-brand-updated', handleBrandUpdate);
++        };
++    }, []);
++
+     const handleLogout = () => {
+         logout();
+         navigate('/login');
+@@ -181,8 +221,8 @@ export const MainLayout: React.FC = () => {
+         { path: '/forecasting', icon: BrainCircuit, label: 'AI Forecaster', adminOnly: true, requiredPerm: 'permViewInsights' },
+         { path: '/products', icon: Package, label: 'Products', adminOnly: true, requiredPerm: 'permManageProducts' },
+         { path: '/customers', icon: Users, label: 'Customers' },
+-        { path: '/sales', icon: FileText, label: 'Sales History', adminOnly: true, requiredPerm: 'permViewSales' },
+-        { path: '/reports', icon: Receipt, label: 'GST Reports', adminOnly: true, requiredPerm: 'permViewGstReports' },
++        { path: '/sales', icon: Receipt, label: 'Sales History', adminOnly: true, requiredPerm: 'permViewSales' },
++        { path: '/reports', icon: FileText, label: 'GST Reports', adminOnly: true, requiredPerm: 'permViewGstReports' },
+         { path: '/users', icon: UserCog, label: 'User Management', adminOnly: true, requiredPerm: 'permManageUsers' },
+         { path: '/permissions', icon: Shield, label: 'User Permissions', adminOnly: true, requiredPerm: 'permManageUsers' },
+         { path: '/activity', icon: Activity, label: 'Activity Log', adminOnly: true, requiredPerm: 'permViewReports' },
+@@ -196,29 +236,36 @@ export const MainLayout: React.FC = () => {
+     );
+ 
+     return (
+-        <div className="flex h-screen bg-gray-50 dark:bg-dark-bg">
++        <div className="flex h-full bg-gray-50 dark:bg-dark-bg">
+             {/* Sidebar */}
+             <aside
+                 className={`${sidebarOpen ? 'w-52' : 'w-16'
+-                    } bg-white dark:bg-dark-card border-r border-gray-200 dark:border-dark-border transition-all duration-300 flex flex-col`}
++                    } bg-white dark:bg-dark-card border-r border-gray-200 dark:border-dark-border transition-[width] duration-300 ease-in-out overflow-hidden flex flex-col`}
+             >
+                 {/* Logo */}
+-                <div className="h-14 flex items-center justify-between px-3 border-b border-gray-200 dark:border-dark-border">
+-                    {sidebarOpen && (
+-                        <h1 className="text-lg font-bold gradient-primary bg-clip-text text-transparent">
+-                            Zain POS
+-                        </h1>
+-                    )}
++                <div className={`h-16 flex items-center border-b border-gray-200 dark:border-dark-border ${sidebarOpen ? 'justify-between px-3' : 'justify-center px-0'}`}>
++                    <div className={`overflow-hidden transition-all duration-200 ease-in-out ${sidebarOpen ? 'max-w-[172px] opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'}`}>
++                        <div className="flex items-center gap-2.5 whitespace-nowrap">
++                            <img
++                                src="/icon.png"
++                                alt="Zain POS"
++                                className="w-7 h-7 object-contain flex-shrink-0"
++                            />
++                            <h1 className="text-lg font-bold gradient-primary bg-clip-text text-transparent">
++                                Zain POS
++                            </h1>
++                        </div>
++                    </div>
+                     <button
+                         onClick={() => setSidebarOpen(!sidebarOpen)}
+-                        className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
++                        className={`${sidebarOpen ? 'p-2' : 'h-10 w-10 flex items-center justify-center mx-auto'} hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg`}
+                     >
+                         {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+                     </button>
+                 </div>
+ 
+                 {/* Navigation */}
+-                <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
++                <nav className={`flex-1 space-y-1 overflow-y-auto ${sidebarOpen ? 'p-3' : 'px-0 py-3'}`}>
+                     {filteredMenuItems.map((item) => {
+                         const Icon = item.icon;
+                         const isActive = location.pathname === item.path;
+@@ -227,20 +274,22 @@ export const MainLayout: React.FC = () => {
+                             <Link
+                                 key={item.path}
+                                 to={item.path}
+-                                className={`${isActive ? 'sidebar-link-active' : 'sidebar-link'} ${!sidebarOpen ? 'justify-center px-0' : ''}`}
++                                className={`${isActive ? 'sidebar-link-active' : 'sidebar-link'} ${sidebarOpen ? '' : 'mx-auto h-10 w-10 justify-center gap-0 px-0'}`}
+                                 title={!sidebarOpen ? item.label : ''}
+                             >
+                                 <Icon className="w-5 h-5 flex-shrink-0" />
+-                                {sidebarOpen && <span>{item.label}</span>}
++                                <span className={`overflow-hidden whitespace-nowrap transition-all duration-200 ease-in-out ${sidebarOpen ? 'max-w-[140px] opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'}`}>
++                                    {item.label}
++                                </span>
+                             </Link>
+                         );
+                     })}
+                 </nav>
+ 
+                 {/* User info */}
+-                <div className="p-4 border-t border-gray-200 dark:border-dark-border">
+-                    {sidebarOpen && (
+-                        <div className="mb-3">
++                <div className={`border-t border-gray-200 dark:border-dark-border ${sidebarOpen ? 'p-4' : 'px-0 py-4 flex flex-col items-center'}`}>
++                    <div className={`overflow-hidden transition-all duration-200 ease-in-out ${sidebarOpen ? 'max-h-16 opacity-100 mb-3' : 'max-h-0 opacity-0 mb-0'}`}>
++                        <div className="pl-3">
+                             <p className="text-sm font-semibold text-gray-900 dark:text-white">
+                                 {user?.name}
+                             </p>
+@@ -248,14 +297,16 @@ export const MainLayout: React.FC = () => {
+                                 {user?.role}
+                             </p>
+                         </div>
+-                    )}
++                    </div>
+                     <button
+                         onClick={handleLogout}
+-                        className={`sidebar-link w-full text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 ${!sidebarOpen ? 'justify-center px-0' : ''}`}
++                        className={`sidebar-link text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 ${sidebarOpen ? 'w-full' : 'mx-auto h-10 w-10 justify-center gap-0 px-0'}`}
+                         title={!sidebarOpen ? 'Logout' : ''}
+                     >
+                         <LogOut className="w-5 h-5 flex-shrink-0" />
+-                        {sidebarOpen && <span>Logout</span>}
++                        <span className={`overflow-hidden whitespace-nowrap transition-all duration-200 ease-in-out ${sidebarOpen ? 'max-w-[140px] opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'}`}>
++                            Logout
++                        </span>
+                     </button>
+                 </div>
+             </aside>
+diff --git a/src/components/settings/LabelDesigner.tsx b/src/components/settings/LabelDesigner.tsx
+index 76c0c10..b2aa0f8 100644
+--- a/src/components/settings/LabelDesigner.tsx
++++ b/src/components/settings/LabelDesigner.tsx
+@@ -112,8 +112,8 @@ export const LabelDesigner: React.FC = () => {
+     const loadStickerConfig = async () => {
+         try {
+             const res = await window.electronAPI.settings.get({ key: 'STICKER_PRINT_CONFIG' });
+-            if (res) {
+-                setStickConfig({ ...DEFAULT_STICKER_CONFIG, ...JSON.parse(res as string) });
++            if (res?.success && res.data) {
++                setStickConfig({ ...DEFAULT_STICKER_CONFIG, ...JSON.parse(res.data as string) });
+             }
+         } catch (e) { console.error(e); }
+     };
+@@ -121,8 +121,8 @@ export const LabelDesigner: React.FC = () => {
+     const loadShopDetails = async () => {
+         try {
+             const result = await window.electronAPI.settings.get({ key: 'SHOP_SETTINGS' });
+-            if (result) {
+-                setShopDetails(JSON.parse(result as string));
++            if (result?.success && result.data) {
++                setShopDetails(JSON.parse(result.data as string));
+             }
+         } catch (error) {
+             console.error("Failed to load shop settings", error);
+@@ -132,8 +132,8 @@ export const LabelDesigner: React.FC = () => {
+     const loadLayout = async () => {
+         try {
+             const result = await window.electronAPI.settings.get({ key: 'LABEL_LAYOUT' });
+-            if (result) {
+-                setBlocks(JSON.parse(result as string));
++            if (result?.success && result.data) {
++                setBlocks(JSON.parse(result.data as string));
+             }
+         } catch (error) {
+             console.error("Failed to load layout", error);
+@@ -144,7 +144,7 @@ export const LabelDesigner: React.FC = () => {
+         setSaving(true);
+         try {
+             const userId = user?.id || 'default-user';
+-            await Promise.all([
++            const results = await Promise.all([
+                 window.electronAPI.settings.set({
+                     key: 'LABEL_LAYOUT',
+                     value: JSON.stringify(blocks),
+@@ -156,6 +156,10 @@ export const LabelDesigner: React.FC = () => {
+                     userId
+                 })
+             ]);
++            const failed = results.find((result: { success?: boolean; error?: string }) => !result?.success);
++            if (failed) {
++                throw new Error(failed.error || 'Failed to save settings');
++            }
+             alert('Label layout and printer calibration saved!');
+         } catch (error) {
+             console.error('Failed to save settings:', error);
+diff --git a/src/components/settings/ReceiptDesigner.tsx b/src/components/settings/ReceiptDesigner.tsx
+index 12f21fd..a7d1734 100644
+--- a/src/components/settings/ReceiptDesigner.tsx
++++ b/src/components/settings/ReceiptDesigner.tsx
+@@ -160,8 +160,8 @@ export const ReceiptDesigner: React.FC = () => {
+     const loadShopDetails = async () => {
+         try {
+             const result = await window.electronAPI.settings.get({ key: 'SHOP_SETTINGS' });
+-            if (result) {
+-                const data = JSON.parse(result as string);
++            if (result?.success && result.data) {
++                const data = JSON.parse(result.data as string);
+                 setShopDetails(data);
+             }
+         } catch (error) {
+@@ -172,8 +172,8 @@ export const ReceiptDesigner: React.FC = () => {
+     const loadLayout = async () => {
+         try {
+             const result = await window.electronAPI.settings.get({ key: 'RECEIPT_LAYOUT' });
+-            if (result) {
+-                setBlocks(JSON.parse(result as string));
++            if (result?.success && result.data) {
++                setBlocks(JSON.parse(result.data as string));
+             }
+         } catch (error) {
+             console.error("Failed to load layout", error);
+@@ -183,8 +183,8 @@ export const ReceiptDesigner: React.FC = () => {
+     const loadPrinterConfig = async () => {
+         try {
+             const result = await window.electronAPI.settings.get({ key: 'PRINTER_CONFIG' });
+-            if (result) {
+-                setPrinterConfig({ ...DEFAULT_RECEIPT_PRINTER_CONFIG, ...JSON.parse(result as string) });
++            if (result?.success && result.data) {
++                setPrinterConfig({ ...DEFAULT_RECEIPT_PRINTER_CONFIG, ...JSON.parse(result.data as string) });
+             }
+         } catch (error) {
+             console.error("Failed to load printer config", error);
+@@ -195,11 +195,14 @@ export const ReceiptDesigner: React.FC = () => {
+         setSaving(true);
+         try {
+             const userId = user?.id || 'default-user';
+-            await window.electronAPI.settings.set({
++            const result = await window.electronAPI.settings.set({
+                 key: 'RECEIPT_LAYOUT',
+                 value: JSON.stringify(blocks),
+                 userId
+             });
++            if (!result?.success) {
++                throw new Error(result?.error || 'Failed to save layout');
++            }
+             alert('Layout saved successfully!');
+         } catch (error) {
+             console.error('Failed to save layout:', error);
+diff --git a/src/pages/Forecasting.tsx b/src/pages/Forecasting.tsx
+index 6bc9573..9414431 100644
+--- a/src/pages/Forecasting.tsx
++++ b/src/pages/Forecasting.tsx
+@@ -323,7 +323,7 @@ export const Forecasting: React.FC = () => {
+                 db.sales.findMany({
+                     where: {
+                         status: 'COMPLETED',
+-                        createdAt: { gte: twoYearsAgo.toISOString() }
++                        createdAt: { gte: twoYearsAgo }
+                     },
+                     include: { items: true },
+                     orderBy: { createdAt: 'asc' }
+diff --git a/src/pages/Login.tsx b/src/pages/Login.tsx
+index 7a03004..9eabf17 100644
+--- a/src/pages/Login.tsx
++++ b/src/pages/Login.tsx
+@@ -54,7 +54,7 @@ export const Login: React.FC = () => {
+     };
+ 
+     return (
+-        <div className="min-h-screen relative overflow-hidden flex items-center justify-center p-4 bg-gradient-to-br from-gray-50 via-blue-50 to-indigo-100 dark:from-gray-900 dark:via-slate-900 dark:to-gray-900">
++        <div className="min-h-full h-full relative overflow-hidden flex items-center justify-center p-4 bg-gradient-to-br from-gray-50 via-blue-50 to-indigo-100 dark:from-gray-900 dark:via-slate-900 dark:to-gray-900">
+             {/* Subtle Pattern Overlay */}
+             <div className="absolute inset-0 opacity-[0.03]" style={{
+                 backgroundImage: `radial-gradient(circle at 2px 2px, rgba(99, 102, 241, 0.15) 1px, transparent 0)`,
+diff --git a/src/pages/Reports.tsx b/src/pages/Reports.tsx
+index 196c3cb..77742dc 100644
+--- a/src/pages/Reports.tsx
++++ b/src/pages/Reports.tsx
+@@ -351,7 +351,7 @@ export const Reports: React.FC = () => {
+ 
+             const sales: SaleRow[] = await db.sales.findMany({
+                 where: {
+-                    createdAt: { gte: start.toISOString(), lte: end.toISOString() },
++                    createdAt: { gte: start, lte: end },
+                     status: 'COMPLETED',
+                 },
+                 include: {
+diff --git a/src/pages/Sales.tsx b/src/pages/Sales.tsx
+index fc47ac7..631410b 100644
+--- a/src/pages/Sales.tsx
++++ b/src/pages/Sales.tsx
+@@ -131,13 +131,13 @@ export const Sales: React.FC = () => {
+             if (timePeriod === 'day') {
+                 const start = startOfDay(baseDate);
+                 const end = endOfDay(baseDate);
+-                where.createdAt = { gte: start.toISOString(), lte: end.toISOString() };
++                where.createdAt = { gte: start, lte: end };
+             } else if (timePeriod === 'week') {
+-                where.createdAt = { gte: startOfWeek(baseDate, { weekStartsOn: 1 }).toISOString(), lte: endOfWeek(baseDate, { weekStartsOn: 1 }).toISOString() };
++                where.createdAt = { gte: startOfWeek(baseDate, { weekStartsOn: 1 }), lte: endOfWeek(baseDate, { weekStartsOn: 1 }) };
+             } else if (timePeriod === 'month') {
+-                where.createdAt = { gte: startOfMonth(baseDate).toISOString(), lte: endOfMonth(baseDate).toISOString() };
++                where.createdAt = { gte: startOfMonth(baseDate), lte: endOfMonth(baseDate) };
+             } else if (timePeriod === 'year') {
+-                where.createdAt = { gte: startOfYear(baseDate).toISOString(), lte: endOfYear(baseDate).toISOString() };
++                where.createdAt = { gte: startOfYear(baseDate), lte: endOfYear(baseDate) };
+             }
+ 
+             // Add payment filter
+diff --git a/src/pages/Settings.tsx b/src/pages/Settings.tsx
+index 52ecdc7..142853d 100644
+--- a/src/pages/Settings.tsx
++++ b/src/pages/Settings.tsx
+@@ -78,33 +78,33 @@ export const Settings: React.FC = () => {
+     const loadSettings = async () => {
+         try {
+             const shopResult = await window.electronAPI.settings.get({ key: 'SHOP_SETTINGS' });
+-            if (shopResult) {
+-                setShopSettings({ ...shopSettings, ...JSON.parse(shopResult as string) });
++            if (shopResult?.success && shopResult.data) {
++                setShopSettings(prev => ({ ...prev, ...JSON.parse(shopResult.data as string) }));
+             }
+ 
+             const printerResult = await window.electronAPI.settings.get({ key: 'PRINTER_CONFIG' });
+-            if (printerResult) {
+-                setPrinterSettings({ ...printerSettings, ...JSON.parse(printerResult as string) });
++            if (printerResult?.success && printerResult.data) {
++                setPrinterSettings(prev => ({ ...prev, ...JSON.parse(printerResult.data as string) }));
+             }
+ 
+             const apiResult = await window.electronAPI.settings.get({ key: 'CLOUD_API_URL' });
+             const secretResult = await window.electronAPI.settings.get({ key: 'CLOUD_SYNC_SECRET' });
+             const configResult = await window.electronAPI.settings.get({ key: 'CLOUD_SYNC_CONFIG' });
+ 
+-            const interval = configResult ? JSON.parse(configResult as string).intervalMinutes : 0;
+-            const apiUrl = apiResult ? apiResult : '';
+-            const syncSecret = secretResult ? secretResult : '';
++            const interval = configResult?.success && configResult.data ? JSON.parse(configResult.data as string).intervalMinutes : 0;
++            const apiUrl = apiResult?.success ? apiResult.data || '' : '';
++            const syncSecret = secretResult?.success ? secretResult.data || '' : '';
+ 
+             setSyncConfig({ apiUrl, syncSecret, intervalMinutes: interval });
+ 
+             const backupResult = await window.electronAPI.settings.get({ key: 'BACKUP_CONFIG' });
+-            if (backupResult) {
+-                setBackupConfig(JSON.parse(backupResult as string));
++            if (backupResult?.success && backupResult.data) {
++                setBackupConfig(JSON.parse(backupResult.data as string));
+             }
+ 
+             const pmResult = await window.electronAPI.settings.get({ key: 'PAYMENT_METHODS' });
+-            if (pmResult) {
+-                setPaymentMethods(prev => ({ ...prev, ...JSON.parse(pmResult as string) }));
++            if (pmResult?.success && pmResult.data) {
++                setPaymentMethods(prev => ({ ...prev, ...JSON.parse(pmResult.data as string) }));
+             }
+         } catch (error) {
+             console.error('Failed to load settings:', error);
+@@ -114,7 +114,7 @@ export const Settings: React.FC = () => {
+     const handleSaveShopSettings = async () => {
+         try {
+             const userId = user?.id || 'default-user';
+-            await Promise.all([
++            const results = await Promise.all([
+                 window.electronAPI.settings.set({
+                     key: 'SHOP_SETTINGS',
+                     value: JSON.stringify(shopSettings),
+@@ -126,6 +126,16 @@ export const Settings: React.FC = () => {
+                     userId
+                 })
+             ]);
++            const failed = results.find((result: { success?: boolean; error?: string }) => !result?.success);
++            if (failed) {
++                throw new Error(failed.error || 'Failed to save shop settings');
++            }
++            window.dispatchEvent(new CustomEvent('shop-brand-updated', {
++                detail: {
++                    shopName: shopSettings.shopName || 'Zain POS',
++                    logo: shopSettings.logo || '',
++                }
++            }));
+             alert('Shop settings saved!');
+         } catch (error) {
+             alert('Failed to save shop settings');
+@@ -135,11 +145,14 @@ export const Settings: React.FC = () => {
+     const handleSavePrinterSettings = async () => {
+         try {
+             const userId = user?.id || 'default-user';
+-            await window.electronAPI.settings.set({
++            const result = await window.electronAPI.settings.set({
+                 key: 'PRINTER_CONFIG',
+                 value: JSON.stringify(printerSettings),
+                 userId
+             });
++            if (!result?.success) {
++                throw new Error(result?.error || 'Failed to save printer settings');
++            }
+             alert('Printer settings saved!');
+         } catch (error) {
+             alert('Failed to save printer settings');
+@@ -150,16 +163,22 @@ export const Settings: React.FC = () => {
+         try {
+             setSyncing(true);
+             const userId = user?.id || 'default-user';
+-            await window.electronAPI.settings.set({
++            const apiSaveResult = await window.electronAPI.settings.set({
+                 key: 'CLOUD_API_URL',
+                 value: syncConfig.apiUrl,
+                 userId
+             });
+-            await window.electronAPI.settings.set({
++            if (!apiSaveResult?.success) {
++                throw new Error(apiSaveResult?.error || 'Failed to save cloud API URL');
++            }
++            const secretSaveResult = await window.electronAPI.settings.set({
+                 key: 'CLOUD_SYNC_SECRET',
+                 value: syncConfig.syncSecret,
+                 userId
+             });
++            if (!secretSaveResult?.success) {
++                throw new Error(secretSaveResult?.error || 'Failed to save cloud sync secret');
++            }
+             await window.electronAPI.db.configureSync({ intervalMinutes: syncConfig.intervalMinutes });
+             alert('Cloud Sync configured successfully!');
+         } catch (error) {
+@@ -197,7 +216,7 @@ export const Settings: React.FC = () => {
+         try {
+             const res = await window.electronAPI.db.configureBackup(backupConfig);
+             if (res.success) alert('Backup configuration updated!');
+-            else alert('Failed to update backup config');
++            else alert(res.error || 'Failed to update backup config');
+         } catch (e) {
+             alert('Error saving backup config');
+         }
+@@ -438,14 +457,21 @@ export const Settings: React.FC = () => {
+                                             </Button>
+                                             <Button variant="outline" onClick={async () => {
+                                                 const res = await window.electronAPI.db.backup();
+-                                                if (res.success) alert('Manual Backup Created!');
++                                                if (res.success) {
++                                                    alert('Manual Backup Created!');
++                                                } else if (res.error) {
++                                                    alert(res.error);
++                                                }
+                                             }} className="w-full">
+                                                 Run Now
+                                             </Button>
+                                         </div>
+                                         <Button variant="outline" className="w-full text-red-500 border-red-200 hover:bg-red-50 transition-colors" onClick={async () => {
+                                             if (confirm('CRITICAL: This will overwrite ALL your current shop data with a backup file. Continue?')) {
+-                                                await window.electronAPI.db.restore();
++                                                const res = await window.electronAPI.db.restore();
++                                                if (res?.success === false && res?.error) {
++                                                    alert(res.error);
++                                                }
+                                             }
+                                         }}>
+                                             <RefreshCw className="w-4 h-4" />
+diff --git a/src/services/print.service.ts b/src/services/print.service.ts
+index f36176d..cace240 100644
+--- a/src/services/print.service.ts
++++ b/src/services/print.service.ts
+@@ -280,20 +280,27 @@ export const printService = {
+       const layoutResult = await window.electronAPI.settings.get({ key: 'RECEIPT_LAYOUT' });
+       const printerConfigResult = await window.electronAPI.settings.get({ key: 'PRINTER_CONFIG' });
+ 
+-      const printerConfig: ReceiptPrinterConfig = printerConfigResult
+-        ? { ...DEFAULT_RECEIPT_PRINTER_CONFIG, ...JSON.parse(printerConfigResult as string) }
++      if (layoutResult?.success === false) {
++        throw new Error(layoutResult.error || 'Failed to load receipt layout');
++      }
++      if (printerConfigResult?.success === false) {
++        throw new Error(printerConfigResult.error || 'Failed to load printer configuration');
++      }
++
++      const printerConfig: ReceiptPrinterConfig = printerConfigResult?.data
++        ? { ...DEFAULT_RECEIPT_PRINTER_CONFIG, ...JSON.parse(printerConfigResult.data as string) }
+         : { ...DEFAULT_RECEIPT_PRINTER_CONFIG };
+ 
+-      const blocks: ReceiptBlock[] = layoutResult
+-        ? JSON.parse(layoutResult as string)
++      const blocks: ReceiptBlock[] = layoutResult?.data
++        ? JSON.parse(layoutResult.data as string)
+         : DEFAULT_RECEIPT_LAYOUT;
+ 
+       const finalHtml = generateReceiptHtml(data, blocks, printerConfig);
+ 
+-      const receiptPrinterName = printerConfigResult
++      const receiptPrinterName = printerConfigResult?.data
+         ? (() => {
+             try {
+-              const parsed = JSON.parse(printerConfigResult as string);
++              const parsed = JSON.parse(printerConfigResult.data as string);
+               return typeof parsed?.receiptPrinter === 'string'
+                 ? parsed.receiptPrinter.trim()
+                 : undefined;
+@@ -325,10 +332,17 @@ export const printService = {
+       const result = await window.electronAPI.settings.get({ key: 'LABEL_LAYOUT' });
+       const printerConfigResult = await window.electronAPI.settings.get({ key: 'PRINTER_CONFIG' });
+ 
++      if (result?.success === false) {
++        throw new Error(result.error || 'Failed to load label layout');
++      }
++      if (printerConfigResult?.success === false) {
++        throw new Error(printerConfigResult.error || 'Failed to load printer configuration');
++      }
++
+       // Parse layout or use default
+       let blocks: LabelBlock[] = [];
+-      if (result) {
+-        blocks = JSON.parse(result as string);
++      if (result?.data) {
++        blocks = JSON.parse(result.data as string);
+       } else {
+         blocks = [
+           { id: '1', type: 'shop_name', styles: { align: 'left', fontSize: 10, bold: true, marginBottom: 0 }, visible: true },
+@@ -397,8 +411,8 @@ export const printService = {
+                 </body>
+                 </html>`;
+       let labelPrinterName: string | undefined;
+-      if (printerConfigResult) {
+-        const parsed = JSON.parse(printerConfigResult as string);
++      if (printerConfigResult?.data) {
++        const parsed = JSON.parse(printerConfigResult.data as string);
+         if (parsed?.labelPrinter && typeof parsed.labelPrinter === 'string') {
+           labelPrinterName = parsed.labelPrinter.trim();
+         }
+diff --git a/src/services/reports.service.ts b/src/services/reports.service.ts
+index 82c700f..1be65b0 100644
+--- a/src/services/reports.service.ts
++++ b/src/services/reports.service.ts
+@@ -11,8 +11,8 @@ export const reportsService = {
+             where: {
+                 status: 'COMPLETED',
+                 createdAt: {
+-                    gte: start.toISOString(),
+-                    lte: end.toISOString(),
++                    gte: start,
++                    lte: end,
+                 },
+             },
+             include: {
+@@ -61,8 +61,8 @@ export const reportsService = {
+             where: {
+                 status: 'COMPLETED',
+                 createdAt: {
+-                    gte: start.toISOString(),
+-                    lte: end.toISOString(),
++                    gte: start,
++                    lte: end,
+                 },
+             },
+             include: {
+@@ -104,8 +104,8 @@ export const reportsService = {
+ 
+         if (startDate && endDate) {
+             whereClause.createdAt = {
+-                gte: startDate.toISOString(),
+-                lte: endDate.toISOString(),
++                gte: startDate,
++                lte: endDate,
+             };
+         }
+ 
+diff --git a/src/store/authStore.ts b/src/store/authStore.ts
+index 1a5a175..988e412 100644
+--- a/src/store/authStore.ts
++++ b/src/store/authStore.ts
+@@ -5,6 +5,7 @@ interface User {
+     username: string;
+     name: string;
+     role: string;
++    isActive: boolean;
+     permPrintSticker: boolean;
+     permAddItem: boolean;
+     permDeleteProduct: boolean;
