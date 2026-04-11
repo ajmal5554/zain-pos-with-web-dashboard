@@ -20,6 +20,73 @@ interface AuditLog {
     createdAt: string;
 }
 
+/**
+ * Security-relevant actions that should appear in activity log
+ * Activity log is for audit/security, NOT a duplicate of sales history
+ */
+const SECURITY_RELEVANT_ACTIONS = [
+    // Authentication & Authorization
+    'USER_LOGIN',
+    'USER_LOGOUT',
+    'LOGIN_FAILED',
+    'PASSWORD_CHANGE',
+    'PERMISSION_CHANGE',
+    
+    // Critical Business Operations
+    'SALE_REFUND',
+    'REFUND',
+    'SALE_RETURN',
+    'SALE_VOID',
+    'SALE_DELETE',
+    'SALE_UPDATE', // Only if actual changes detected (backend handles this now)
+    'DISCOUNT_APPLIED',
+    'PRICE_OVERRIDE',
+    'STOCK_ADJUST',
+    'INVENTORY_ADJUSTMENT',
+    'PRODUCT_DELETE',
+    'CUSTOMER_DELETE',
+    'EXCHANGE',
+    'PAYMENT_UPDATE',
+    
+    // System Operations
+    'DATA_SYNC',
+    'REPORT_GENERATED',
+    'SETTINGS_CHANGE',
+    'BACKUP_CREATED',
+    'BACKUP_RESTORED',
+    'USER_CREATED',
+    'USER_UPDATED',
+    'USER_DELETED',
+    
+    // Financial Reconciliation
+    'CASH_DRAWER_OPEN',
+    'CASH_DRAWER_CLOSE',
+    'SHIFT_START',
+    'SHIFT_END',
+    'CASH_RECONCILIATION',
+];
+
+/**
+ * Filter out non-security-relevant events
+ */
+function isSecurityRelevant(action: string): boolean {
+    const normalizedAction = action.toUpperCase();
+    
+    // Explicitly exclude sales creation - it's in Sales History
+    if (normalizedAction.includes('SALE_CREATE') || 
+        normalizedAction.includes('SALE_COMPLETED') ||
+        normalizedAction === 'SALE CREATE' ||
+        normalizedAction === 'SALE COMPLETED' ||
+        normalizedAction === 'STOCK_ADD') { // Stock additions are routine
+        return false;
+    }
+    
+    return SECURITY_RELEVANT_ACTIONS.some(secureAction => 
+        normalizedAction.includes(secureAction) || 
+        normalizedAction.replace(/ /g, '_') === secureAction
+    );
+}
+
 export const ActivityPage: React.FC = () => {
     const [logs, setLogs] = useState<AuditLog[]>([]);
     const [loading, setLoading] = useState(true);
@@ -34,7 +101,9 @@ export const ActivityPage: React.FC = () => {
         setLoading(true);
         try {
             const data = await auditService.getLogs(100);
-            setLogs(data);
+            // Filter to show only security-relevant logs
+            const filteredData = data.filter((log: AuditLog) => isSecurityRelevant(log.action));
+            setLogs(filteredData);
         } catch (error) {
             console.error('Failed to load logs:', error);
         } finally {

@@ -165,7 +165,9 @@ exports.Prisma.ProductScalarFieldEnum = {
   taxRate: 'taxRate',
   isActive: 'isActive',
   createdAt: 'createdAt',
-  updatedAt: 'updatedAt'
+  updatedAt: 'updatedAt',
+  isSynced: 'isSynced',
+  lastSyncedAt: 'lastSyncedAt'
 };
 
 exports.Prisma.ProductVariantScalarFieldEnum = {
@@ -182,7 +184,9 @@ exports.Prisma.ProductVariantScalarFieldEnum = {
   minStock: 'minStock',
   isActive: 'isActive',
   createdAt: 'createdAt',
-  updatedAt: 'updatedAt'
+  updatedAt: 'updatedAt',
+  isSynced: 'isSynced',
+  lastSyncedAt: 'lastSyncedAt'
 };
 
 exports.Prisma.CustomerScalarFieldEnum = {
@@ -193,7 +197,9 @@ exports.Prisma.CustomerScalarFieldEnum = {
   address: 'address',
   gstin: 'gstin',
   createdAt: 'createdAt',
-  updatedAt: 'updatedAt'
+  updatedAt: 'updatedAt',
+  isSynced: 'isSynced',
+  lastSyncedAt: 'lastSyncedAt'
 };
 
 exports.Prisma.SaleScalarFieldEnum = {
@@ -218,7 +224,9 @@ exports.Prisma.SaleScalarFieldEnum = {
   importedFrom: 'importedFrom',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt',
-  actualSaleDate: 'actualSaleDate'
+  actualSaleDate: 'actualSaleDate',
+  isSynced: 'isSynced',
+  lastSyncedAt: 'lastSyncedAt'
 };
 
 exports.Prisma.InvoicePaymentScalarFieldEnum = {
@@ -235,7 +243,9 @@ exports.Prisma.ExchangeScalarFieldEnum = {
   exchangeDate: 'exchangeDate',
   differenceAmount: 'differenceAmount',
   notes: 'notes',
-  createdBy: 'createdBy'
+  createdBy: 'createdBy',
+  isSynced: 'isSynced',
+  lastSyncedAt: 'lastSyncedAt'
 };
 
 exports.Prisma.ExchangeItemScalarFieldEnum = {
@@ -262,7 +272,9 @@ exports.Prisma.RefundScalarFieldEnum = {
   refundDate: 'refundDate',
   totalRefundAmount: 'totalRefundAmount',
   reason: 'reason',
-  createdBy: 'createdBy'
+  createdBy: 'createdBy',
+  isSynced: 'isSynced',
+  lastSyncedAt: 'lastSyncedAt'
 };
 
 exports.Prisma.RefundItemScalarFieldEnum = {
@@ -313,7 +325,9 @@ exports.Prisma.InventoryMovementScalarFieldEnum = {
   reason: 'reason',
   reference: 'reference',
   createdBy: 'createdBy',
-  createdAt: 'createdAt'
+  createdAt: 'createdAt',
+  isSynced: 'isSynced',
+  lastSyncedAt: 'lastSyncedAt'
 };
 
 exports.Prisma.SettingScalarFieldEnum = {

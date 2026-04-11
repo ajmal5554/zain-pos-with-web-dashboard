@@ -41,13 +41,17 @@ export function calculatePercentageChange(current: number, previous: number): {
     contextualMessage?: string;
     showContextual?: boolean;
 } {
+    // Tiny baselines produce meaningless swings like "-99%+".
+    // Treat them as insufficient comparison data instead.
+    const isTinyBaseline = Math.abs(previous) < 1;
+
     // Handle zero previous value with contextual messaging
-    if (previous === 0) {
+    if (previous === 0 || isTinyBaseline) {
         if (current === 0) {
             return {
                 percentage: 0,
                 isIncrease: false,
-                display: 'No change',
+                display: 'No sales today',
                 contextualMessage: 'No activity',
                 showContextual: true
             };
@@ -55,8 +59,8 @@ export function calculatePercentageChange(current: number, previous: number): {
             return {
                 percentage: 0, // Don't show misleading percentage
                 isIncrease: true,
-                display: 'New today',
-                contextualMessage: `${formatIndianCurrency(current)} (first activity)`,
+                display: 'Low baseline',
+                contextualMessage: 'Comparison unavailable',
                 showContextual: true
             };
         }
@@ -66,10 +70,18 @@ export function calculatePercentageChange(current: number, previous: number): {
     const change = ((current - previous) / previous) * 100;
     const isIncrease = change >= 0;
 
-    // Cap extremely large percentages for readability
-    const display = change > 999 ? '+999%+' :
-                   change < -99 ? '-99%+' :
-                   `${isIncrease ? '+' : ''}${change.toFixed(1)}%`;
+    // Extreme swings are not useful in the UI.
+    if (change > 999 || change < -99) {
+        return {
+            percentage: Math.abs(change),
+            isIncrease,
+            display: current === 0 ? 'No sales today' : 'Low baseline',
+            contextualMessage: 'Comparison unavailable',
+            showContextual: true
+        };
+    }
+
+    const display = `${isIncrease ? '+' : ''}${change.toFixed(1)}%`;
 
     return {
         percentage: Math.abs(change),

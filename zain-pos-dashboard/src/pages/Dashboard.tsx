@@ -1,229 +1,278 @@
+import * as React from 'react';
 import {
-    AlertTriangle,
-    BadgeIndianRupee,
-    Boxes,
-    ShoppingBag,
-    TrendingUp
+  TrendingUp,
+  ShoppingBag,
+  Users,
+  Package,
+  Banknote,
+  Smartphone,
+  CreditCard,
 } from 'lucide-react';
 import {
-    CartesianGrid,
-    Line,
-    LineChart,
-    Tooltip,
-    XAxis,
-    YAxis
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
 } from 'recharts';
-import { StatCard } from '@/components/shared/StatCard';
-import { ChartWidget } from '@/components/shared/ChartWidget';
 import { useDashboardStats } from '@/features/dashboard/hooks/useDashboardStats';
-import { useSmartAlerts } from '@/hooks/useSmartAlerts';
-import { AlertBanner } from '@/components/shared/AlertBanner';
+import { StatCard } from '@/components/shared/StatCard';
 import { cn } from '@/lib/utils';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { formatCurrency } from '@/lib/format';
 
-export default function Dashboard() {
-    const { stats, loading, error, refetch } = useDashboardStats();
-    const { alerts } = useSmartAlerts();
+const METHOD_META: Record<string, { label: string; icon: React.ElementType; color: string; bg: string; badge: string }> = {
+    CASH: { label: 'Cash',  icon: Banknote,    color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-50 dark:bg-emerald-900/20', badge: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' },
+    UPI:  { label: 'UPI',   icon: Smartphone,  color: 'text-violet-600 dark:text-violet-400',   bg: 'bg-violet-50 dark:bg-violet-900/20',   badge: 'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300' },
+    CARD: { label: 'Card',  icon: CreditCard,  color: 'text-blue-600 dark:text-blue-400',       bg: 'bg-blue-50 dark:bg-blue-900/20',       badge: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' },
+};
 
-    const summary = stats?.summary || { totalSales: 0, totalOrders: 0, averageOrderValue: 0 };
-    const salesTrend = stats?.salesTrend || [];
-    const topProducts = stats?.topProducts || [];
-    const paymentAudit = stats?.paymentAudit || { CASH: [], UPI: [], CARD: [] };
-    const lowStockCount = stats?.lowStock?.length || 0;
+export default function DashboardPage() {
+    const { stats, loading } = useDashboardStats();
+
+    // Flatten all payment audit transactions into one sorted list
+    const allTransactions = React.useMemo(() => {
+        if (!stats?.paymentAudit) return [];
+        const combined = [
+            ...(stats.paymentAudit.CASH ?? []).map((s: any) => ({ ...s, method: 'CASH' })),
+            ...(stats.paymentAudit.UPI  ?? []).map((s: any) => ({ ...s, method: 'UPI' })),
+            ...(stats.paymentAudit.CARD ?? []).map((s: any) => ({ ...s, method: 'CARD' })),
+        ];
+        return combined.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    }, [stats?.paymentAudit]);
+
+    // Chart data — use real trend or fall back to placeholder
+    const chartData = stats?.salesTrend?.length
+        ? stats.salesTrend
+        : [
+            { label: 'Mon', sales: 0, orders: 0 },
+            { label: 'Tue', sales: 0, orders: 0 },
+            { label: 'Wed', sales: 0, orders: 0 },
+            { label: 'Thu', sales: 0, orders: 0 },
+            { label: 'Fri', sales: 0, orders: 0 },
+            { label: 'Sat', sales: 0, orders: 0 },
+            { label: 'Sun', sales: 0, orders: 0 },
+        ];
 
     return (
-        <div className="space-y-6">
-            <section className="dashboard-surface rounded-[2rem] p-6 lg:p-7">
-                <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-                    <div className="max-w-2xl">
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-400 dark:text-slate-500">
-                            Today
-                        </p>
-                        <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950 dark:text-white lg:text-[2.6rem]">
-                            Store performance at a glance.
-                        </h1>
-                        <p className="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                            Sales, orders, low-stock pressure, and product winners without jumping between pages.
-                        </p>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3 text-sm lg:min-w-[320px]">
-                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
-                            <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400 dark:text-slate-500">Revenue</p>
-                            <p className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">{formatCurrency(summary.totalSales)}</p>
-                        </div>
-                        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200">
-                            <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400 dark:text-slate-500">Orders</p>
-                            <p className="mt-2 text-xl font-semibold">{summary.totalOrders}</p>
-                        </div>
-                    </div>
-                </div>
-            </section>
+        <div className="flex-1 space-y-4 pt-4 pb-6">
+            {/* Page Header */}
+            <div>
+                <h2 className="text-2xl font-bold tracking-tight">Dashboard ✨ UPDATED</h2>
+                <p className="text-muted-foreground text-sm">Your daily shop overview - New version loaded!</p>
+            </div>
 
-            <AlertBanner alerts={alerts} />
-
-            {error && (
-                <div className="dashboard-surface rounded-[1.5rem] p-4">
-                    <div className="flex items-center justify-between gap-4">
-                        <div className="flex min-w-0 items-center gap-3 text-rose-700 dark:text-rose-300">
-                            <AlertTriangle className="h-5 w-5 flex-shrink-0" />
-                            <span className="truncate text-sm font-medium">{error}</span>
-                        </div>
-                        <button
-                            onClick={refetch}
-                            className="rounded-full bg-rose-50 px-3 py-1.5 text-sm font-semibold text-rose-700 transition-colors hover:bg-rose-100 dark:bg-rose-950/30 dark:text-rose-300"
-                        >
-                            Retry
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {/* Stat Cards — 2 col on mobile, 4 col on desktop */}
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 <StatCard
-                    title="Total Sales"
-                    value={formatCurrency(summary.totalSales)}
-                    icon={<BadgeIndianRupee className="h-[18px] w-[18px] stroke-[1.9]" />}
+                    title="Today's Sales"
+                    value={`₹${stats?.summary.totalSales.toLocaleString() || '0'}`}
+                    subtitle="Total revenue"
+                    icon={<TrendingUp className="h-4 w-4" />}
+                    loading={loading}
+                    variant={(stats?.summary.totalSales || 0) > 0 ? 'success' : 'default'}
+                />
+                <StatCard
+                    title="Total Bills (Today)"
+                    value={stats?.summary.totalOrders.toString() || '0'}
+                    subtitle={stats?.summary.totalOrders ? `₹${(stats.summary.totalSales / stats.summary.totalOrders).toFixed(0)} avg` : undefined}
+                    icon={<ShoppingBag className="h-4 w-4" />}
                     loading={loading}
                 />
                 <StatCard
-                    title="Orders"
-                    value={summary.totalOrders}
-                    icon={<ShoppingBag className="h-[18px] w-[18px] stroke-[1.9]" />}
+                    title="Tax Collected (Today)"
+                    value={`₹${((stats?.summary.totalSales || 0) * 0.18).toFixed(2)}`}
+                    subtitle="GST @ 18%"
+                    icon={<Banknote className="h-4 w-4" />}
                     loading={loading}
                 />
                 <StatCard
-                    title="Avg Order Value"
-                    value={formatCurrency(summary.averageOrderValue)}
-                    icon={<TrendingUp className="h-[18px] w-[18px] stroke-[1.9]" />}
+                    title="Low Stock Items"
+                    value={stats?.lowStock.length.toString() || '0'}
+                    subtitle={(stats?.lowStock.length || 0) > 0 ? 'Needs attention' : 'All good'}
+                    icon={<Package className="h-4 w-4" />}
                     loading={loading}
-                />
-                <StatCard
-                    title="Low Stock"
-                    value={lowStockCount}
-                    icon={<Boxes className="h-[18px] w-[18px] stroke-[1.9]" />}
-                    loading={loading}
+                    variant={(stats?.lowStock.length || 0) > 0 ? 'warning' : 'default'}
                 />
             </div>
 
-            <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.5fr_1fr]">
-                <ChartWidget title="Sales Trend" loading={loading}>
-                    <LineChart data={salesTrend}>
-                        <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                        <XAxis dataKey="label" stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
-                        <YAxis
-                            stroke="#94a3b8"
-                            fontSize={12}
-                            tickLine={false}
-                            axisLine={false}
-                            tickFormatter={(value) => formatCurrency(value).replace('.00', '')}
-                        />
-                        <Tooltip
-                            formatter={(value: number) => [formatCurrency(value), 'Sales']}
-                            labelStyle={{ color: '#334155' }}
-                            contentStyle={{
-                                borderRadius: '18px',
-                                border: '1px solid rgba(148,163,184,0.2)',
-                                boxShadow: '0 24px 60px -36px rgba(15,23,42,0.45)'
-                            }}
-                        />
-                        <Line
-                            type="monotone"
-                            dataKey="sales"
-                            stroke="#0ea5e9"
-                            strokeWidth={3}
-                            dot={{ fill: '#0ea5e9', strokeWidth: 0, r: 4 }}
-                            activeDot={{ r: 6 }}
-                        />
-                    </LineChart>
-                </ChartWidget>
-
-                <Card className="h-[380px] overflow-hidden">
-                    <CardHeader className="pb-3">
-                        <CardTitle className="text-xl">Top Selling Products</CardTitle>
-                    </CardHeader>
-                    <CardContent className="flex h-[calc(100%-5.5rem)] flex-col gap-3 overflow-y-auto">
-                        {loading ? (
-                            [1, 2, 3].map((i) => <div key={i} className="h-20 animate-pulse rounded-2xl bg-slate-100 dark:bg-slate-900" />)
-                        ) : topProducts.length > 0 ? (
-                            topProducts.map((item, index) => (
-                                <div key={index} className="flex items-center justify-between rounded-2xl border border-slate-200/70 bg-slate-50/80 p-4 dark:border-slate-800 dark:bg-slate-900/60">
-                                    <div className="flex items-center gap-3">
-                                        <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-white dark:bg-sky-400 dark:text-slate-950">
-                                            <Boxes className="h-[18px] w-[18px] stroke-[1.9]" />
-                                        </div>
-                                        <div>
-                                            <p className="font-medium text-slate-900 dark:text-slate-100">{item.product.name}</p>
-                                            <p className="text-xs uppercase tracking-[0.18em] text-slate-400 dark:text-slate-500">
-                                                {item.totalQuantity} units sold
-                                            </p>
-                                        </div>
-                                    </div>
-                                    <p className="font-semibold text-slate-950 dark:text-slate-100">
-                                        {formatCurrency(item.totalRevenue)}
-                                    </p>
-                                </div>
-                            ))
-                        ) : (
-                            <div className="flex h-full flex-col items-center justify-center text-center text-slate-400 dark:text-slate-500">
-                                <Boxes className="mb-3 h-12 w-12 opacity-30" />
-                                <p className="text-sm font-medium">No sales data yet</p>
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
-            </div>
-
+            {/* Sales Chart */}
             <Card>
-                <CardHeader className="pb-4">
-                    <CardTitle className="text-xl">Audit by Payment Mode</CardTitle>
+                <CardHeader className="pb-2">
+                    <CardTitle className="text-base">Sales This Week</CardTitle>
+                    <CardDescription>Total revenue over the last 7 days</CardDescription>
+                </CardHeader>
+                <CardContent className="h-[220px] pl-0">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={chartData} margin={{ top: 4, right: 12, bottom: 0, left: 0 }}>
+                            <defs>
+                                <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%"  stopColor="hsl(var(--primary))" stopOpacity={0.15}/>
+                                    <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0}/>
+                                </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
+                            <XAxis
+                                dataKey="label"
+                                stroke="#888888"
+                                fontSize={11}
+                                tickLine={false}
+                                axisLine={false}
+                                dy={8}
+                            />
+                            <YAxis
+                                stroke="#888888"
+                                fontSize={11}
+                                tickLine={false}
+                                axisLine={false}
+                                tickFormatter={(v) => `₹${v >= 1000 ? `${(v/1000).toFixed(0)}k` : v}`}
+                                width={40}
+                            />
+                            <Tooltip
+                                contentStyle={{ borderRadius: '8px', border: '1px solid hsl(var(--border))', backgroundColor: 'hsl(var(--background))' }}
+                                formatter={(value: any) => [`₹${Number(value).toLocaleString('en-IN')}`, 'Sales']}
+                            />
+                            <Area
+                                type="monotone"
+                                dataKey="sales"
+                                stroke="hsl(var(--primary))"
+                                strokeWidth={2}
+                                fillOpacity={1}
+                                fill="url(#colorSales)"
+                            />
+                        </AreaChart>
+                    </ResponsiveContainer>
+                </CardContent>
+            </Card>
+
+            {/* Payment method cards — 3 columns on md (Cash / UPI / Card) */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {(['CASH', 'UPI', 'CARD'] as const).map((method) => {
+                    const meta = METHOD_META[method];
+                    const Icon = meta.icon;
+                    const txList: any[] = stats?.paymentAudit?.[method] ?? [];
+                    const total = txList.reduce((s: number, t: any) => s + Number(t.grandTotal ?? 0), 0);
+                    return (
+                        <Card key={method}>
+                            <CardHeader className="pb-2">
+                                <div className="flex items-center gap-2">
+                                    <span className={cn("flex h-8 w-8 items-center justify-center rounded-lg", meta.bg)}>
+                                        <Icon className={cn("h-4 w-4", meta.color)} />
+                                    </span>
+                                    <div>
+                                        <CardTitle className="text-sm font-semibold">{meta.label}</CardTitle>
+                                        <p className={cn("text-xs font-bold", meta.color)}>
+                                            ₹{total.toLocaleString('en-IN')}
+                                        </p>
+                                    </div>
+                                </div>
+                            </CardHeader>
+                            <CardContent className="p-0">
+                                {loading ? (
+                                    <div className="divide-y px-4">
+                                        {[1,2,3].map(i => (
+                                            <div key={i} className="flex items-center justify-between py-2.5">
+                                                <div className="h-3 w-16 bg-muted rounded animate-pulse" />
+                                                <div className="h-3 w-12 bg-muted rounded animate-pulse" />
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : txList.length === 0 ? (
+                                    <p className="text-xs text-muted-foreground text-center py-6">No {meta.label} sales today</p>
+                                ) : (
+                                    <div className="divide-y max-h-[280px] overflow-y-auto">
+                                        {txList.map((tx: any) => {
+                                            const time = new Date(tx.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+                                            return (
+                                                <div key={tx.id} className="flex items-center justify-between px-4 py-2 hover:bg-muted/30 transition-colors">
+                                                    <div>
+                                                        <p className="text-xs font-medium">#{tx.billNo ?? tx.id}</p>
+                                                        <p className="text-[10px] text-muted-foreground">{time}</p>
+                                                    </div>
+                                                    <span className="text-xs font-semibold">₹{Number(tx.grandTotal ?? 0).toLocaleString('en-IN')}</span>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
+                    );
+                })}
+            </div>
+
+            {/* Top Products */}
+            <Card>
+                <CardHeader className="pb-3">
+                    <CardTitle className="text-base">Top Products</CardTitle>
+                    <CardDescription>Best selling items this period</CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-                        {(['CASH', 'UPI', 'CARD'] as const).map((mode) => {
-                            const transactions = paymentAudit[mode] || [];
-                            const total = transactions.reduce((sum: number, item: { grandTotal: number }) => sum + item.grandTotal, 0);
-
-                            return (
-                                <div key={mode} className="overflow-hidden rounded-[1.5rem] border border-slate-200/80 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900/50">
-                                    <div className={cn(
-                                        'flex items-center justify-between border-b border-slate-200/70 px-4 py-4 dark:border-slate-800',
-                                        mode === 'CASH' && 'bg-emerald-50/80 text-emerald-700 dark:bg-emerald-950/20 dark:text-emerald-300',
-                                        mode === 'UPI' && 'bg-sky-50/80 text-sky-700 dark:bg-sky-950/20 dark:text-sky-300',
-                                        mode === 'CARD' && 'bg-violet-50/80 text-violet-700 dark:bg-violet-950/20 dark:text-violet-300'
-                                    )}>
-                                        <span className="text-sm font-semibold tracking-[0.18em]">{mode}</span>
-                                        <span className="text-lg font-semibold">{formatCurrency(total)}</span>
+                    {loading ? (
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+                            {[1,2,3,4,5].map(i => (
+                                <div key={i} className="flex flex-col items-center gap-2 p-3 rounded-lg bg-muted/40 animate-pulse">
+                                    <div className="h-8 w-8 rounded-md bg-muted" />
+                                    <div className="h-3 w-16 bg-muted rounded" />
+                                </div>
+                            ))}
+                        </div>
+                    ) : stats?.topProducts?.length ? (
+                        <div className="divide-y">
+                            {stats.topProducts.slice(0, 5).map((p: any, i: number) => (
+                                <div key={i} className="flex items-center gap-3 py-2.5">
+                                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-bold text-muted-foreground">
+                                        {i + 1}
                                     </div>
-                                    <div className="max-h-64 overflow-y-auto bg-white/80 dark:bg-slate-950/50">
-                                        {transactions.length > 0 ? (
-                                            <table className="w-full text-sm">
-                                                <thead className="sticky top-0 bg-white/[0.9] text-slate-400 dark:bg-slate-950/[0.9] dark:text-slate-500">
-                                                    <tr>
-                                                        <th className="px-4 py-3 text-left font-semibold uppercase tracking-[0.16em]">Bill</th>
-                                                        <th className="px-4 py-3 text-right font-semibold uppercase tracking-[0.16em]">Amount</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800">
-                                                    {transactions.map((item: { id: string; billNo: string; grandTotal: number }) => (
-                                                        <tr key={item.id}>
-                                                            <td className="px-4 py-3 font-mono text-slate-600 dark:text-slate-300">#{item.billNo}</td>
-                                                            <td className="px-4 py-3 text-right font-medium text-slate-950 dark:text-slate-100">
-                                                                {formatCurrency(item.grandTotal)}
-                                                            </td>
-                                                        </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
-                                        ) : (
-                                            <div className="px-4 py-10 text-center text-sm text-slate-400 dark:text-slate-500">
-                                                No transactions
-                                            </div>
-                                        )}
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-sm font-medium truncate">{p.name ?? p.product_name ?? 'Item'}</p>
+                                        <p className="text-xs text-muted-foreground">{p.total_quantity ?? p.qty ?? '—'} sold</p>
+                                    </div>
+                                    <div className="text-sm font-semibold shrink-0">
+                                        ₹{Number(p.total_revenue ?? p.revenue ?? 0).toLocaleString('en-IN')}
                                     </div>
                                 </div>
-                            );
-                        })}
+                            ))}
+                        </div>
+                    ) : (
+                        <p className="text-sm text-muted-foreground py-4 text-center">No sales data yet</p>
+                    )}
+                </CardContent>
+            </Card>
+
+            {/* Recent Bills */}
+            <Card>
+                <CardHeader className="pb-3">
+                    <CardTitle className="text-base">Recent Bills</CardTitle>
+                    <CardDescription>Latest bills in the last hour</CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <div className="divide-y">
+                        {[1, 2, 3].map((i) => (
+                            <div key={i} className="flex items-center gap-3 py-2.5">
+                                <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center shrink-0">
+                                    <ShoppingBag className="h-4 w-4 text-muted-foreground" />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium">Bill #100{i}</p>
+                                    <p className="text-xs text-muted-foreground">Sold {i * 10} mins ago</p>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                    <span className="text-sm font-semibold text-emerald-600">+₹{(450 + i * 125).toLocaleString()}</span>
+                                    <Badge variant="outline" className="text-[10px] py-0 px-1.5 text-emerald-700 border-emerald-200 bg-emerald-50 dark:bg-emerald-900/20">
+                                        PAID
+                                    </Badge>
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 </CardContent>
             </Card>

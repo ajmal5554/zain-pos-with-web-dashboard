@@ -12,7 +12,7 @@ interface User {
 interface AuthContextType {
     user: User | null;
     token: string | null;
-    login: (username: string, password: string) => Promise<void>;
+    login: (username: string, password: string) => Promise<boolean>;
     enterDemoMode: () => void;
     logout: () => void;
     isLoading: boolean;
@@ -62,13 +62,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const login = async (username: string, password: string) => {
         const response = await api.post('/auth/login', { username, password });
         const { token, user } = response.data;
-
+ 
         localStorage.setItem('token', token);
         localStorage.setItem('user', JSON.stringify(user));
         setUser(user);
         setToken(token);
         setIsDemoMode(false);
         localStorage.removeItem(DEMO_MODE_KEY);
+        return true;
     };
 
     const enterDemoMode = () => {

@@ -54,7 +54,7 @@ export const Login: React.FC = () => {
     };
 
     return (
-        <div className="min-h-screen relative overflow-hidden flex items-center justify-center p-4 bg-gradient-to-br from-gray-50 via-blue-50 to-indigo-100 dark:from-gray-900 dark:via-slate-900 dark:to-gray-900">
+        <div className="min-h-full h-full relative overflow-hidden flex items-center justify-center p-4 bg-gradient-to-br from-gray-50 via-blue-50 to-indigo-100 dark:from-gray-900 dark:via-slate-900 dark:to-gray-900">
             {/* Subtle Pattern Overlay */}
             <div className="absolute inset-0 opacity-[0.03]" style={{
                 backgroundImage: `radial-gradient(circle at 2px 2px, rgba(99, 102, 241, 0.15) 1px, transparent 0)`,
@@ -154,6 +154,7 @@ export const Login: React.FC = () => {
                             </p>
                         </div>
                     </div>
+
                 </div>
 
                 <div className="text-center mt-6 text-gray-600 dark:text-gray-400 text-sm">

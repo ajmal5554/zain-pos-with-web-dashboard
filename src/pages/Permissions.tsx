@@ -52,12 +52,8 @@ export const Permissions: React.FC = () => {
                 return;
             }
 
-            console.log('Loading users with currentUser ID:', currentUser.id);
-
             // Use the secure handler with current user ID for permission validation
             const res = await window.electronAPI.users.list({ requestingUserId: currentUser?.id });
-
-            console.log('Users API response:', res);
 
             if (res.success) {
                 setUsers(res.data);

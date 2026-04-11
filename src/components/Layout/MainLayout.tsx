@@ -20,12 +20,21 @@ import {
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 import { NetworkStatus } from '../NetworkStatus';
+import appIcon from '/icon.png';
 
 type PermissionKey = 'permViewReports' | 'permViewInsights' | 'permManageProducts' | 'permViewSales' | 'permViewGstReports' | 'permManageUsers' | 'permEditSettings';
+type ShopBrand = {
+    shopName: string;
+    logo: string;
+};
 
 export const MainLayout: React.FC = () => {
     const [darkMode, setDarkMode] = React.useState(false);
     const [sidebarOpen, setSidebarOpen] = React.useState(true);
+    const [shopBrand, setShopBrand] = React.useState<ShopBrand>({
+        shopName: 'Zain POS',
+        logo: '',
+    });
     const location = useLocation();
     const navigate = useNavigate();
     const { user, login, logout } = useAuthStore();
@@ -132,7 +141,6 @@ export const MainLayout: React.FC = () => {
                     });
 
                     if (currentPerms !== newPerms) {
-                        console.log('Permissions updated - refreshing user context');
                         login(freshUser);
                     }
                 } else if (res.error) {
@@ -164,6 +172,38 @@ export const MainLayout: React.FC = () => {
         }
     }, [darkMode]);
 
+    React.useEffect(() => {
+        const loadShopBrand = async () => {
+            try {
+                const result = await window.electronAPI.settings.get({ key: 'SHOP_SETTINGS' });
+                if (result?.success && result.data) {
+                    const parsed = JSON.parse(result.data as string);
+                    setShopBrand({
+                        shopName: parsed?.shopName || 'Zain POS',
+                        logo: parsed?.logo || '',
+                    });
+                }
+            } catch {
+                // no-op
+            }
+        };
+
+        const handleBrandUpdate = (event: Event) => {
+            const detail = (event as CustomEvent<ShopBrand>).detail;
+            setShopBrand({
+                shopName: detail?.shopName || 'Zain POS',
+                logo: detail?.logo || '',
+            });
+        };
+
+        loadShopBrand();
+        window.addEventListener('shop-brand-updated', handleBrandUpdate);
+
+        return () => {
+            window.removeEventListener('shop-brand-updated', handleBrandUpdate);
+        };
+    }, []);
+
     const handleLogout = () => {
         logout();
         navigate('/login');
@@ -181,8 +221,8 @@ export const MainLayout: React.FC = () => {
         { path: '/forecasting', icon: BrainCircuit, label: 'AI Forecaster', adminOnly: true, requiredPerm: 'permViewInsights' },
         { path: '/products', icon: Package, label: 'Products', adminOnly: true, requiredPerm: 'permManageProducts' },
         { path: '/customers', icon: Users, label: 'Customers' },
-        { path: '/sales', icon: FileText, label: 'Sales History', adminOnly: true, requiredPerm: 'permViewSales' },
-        { path: '/reports', icon: Receipt, label: 'GST Reports', adminOnly: true, requiredPerm: 'permViewGstReports' },
+        { path: '/sales', icon: Receipt, label: 'Sales History', adminOnly: true, requiredPerm: 'permViewSales' },
+        { path: '/reports', icon: FileText, label: 'GST Reports', adminOnly: true, requiredPerm: 'permViewGstReports' },
         { path: '/users', icon: UserCog, label: 'User Management', adminOnly: true, requiredPerm: 'permManageUsers' },
         { path: '/permissions', icon: Shield, label: 'User Permissions', adminOnly: true, requiredPerm: 'permManageUsers' },
         { path: '/activity', icon: Activity, label: 'Activity Log', adminOnly: true, requiredPerm: 'permViewReports' },
@@ -196,29 +236,36 @@ export const MainLayout: React.FC = () => {
     );
 
     return (
-        <div className="flex h-screen bg-gray-50 dark:bg-dark-bg">
+        <div className="flex h-full bg-gray-50 dark:bg-dark-bg">
             {/* Sidebar */}
             <aside
                 className={`${sidebarOpen ? 'w-52' : 'w-16'
-                    } bg-white dark:bg-dark-card border-r border-gray-200 dark:border-dark-border transition-all duration-300 flex flex-col`}
+                    } bg-white dark:bg-dark-card border-r border-gray-200 dark:border-dark-border transition-[width] duration-300 ease-in-out overflow-hidden flex flex-col`}
             >
                 {/* Logo */}
-                <div className="h-14 flex items-center justify-between px-3 border-b border-gray-200 dark:border-dark-border">
-                    {sidebarOpen && (
-                        <h1 className="text-lg font-bold gradient-primary bg-clip-text text-transparent">
-                            Zain POS
-                        </h1>
-                    )}
+                <div className={`h-16 flex items-center border-b border-gray-200 dark:border-dark-border ${sidebarOpen ? 'justify-between px-3' : 'justify-center px-0'}`}>
+                    <div className={`overflow-hidden transition-all duration-200 ease-in-out ${sidebarOpen ? 'max-w-[172px] opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'}`}>
+                        <div className="flex items-center gap-2.5 whitespace-nowrap">
+                            <img
+                                src={appIcon}
+                                alt="Zain POS"
+                                className="w-7 h-7 object-contain flex-shrink-0"
+                            />
+                            <h1 className="text-lg font-bold gradient-primary bg-clip-text text-transparent">
+                                Zain POS
+                            </h1>
+                        </div>
+                    </div>
                     <button
                         onClick={() => setSidebarOpen(!sidebarOpen)}
-                        className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
+                        className={`${sidebarOpen ? 'p-2' : 'h-10 w-10 flex items-center justify-center mx-auto'} hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg`}
                     >
                         {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
                     </button>
                 </div>
 
                 {/* Navigation */}
-                <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
+                <nav className={`flex-1 space-y-1 overflow-y-auto ${sidebarOpen ? 'p-3' : 'px-0 py-3'}`}>
                     {filteredMenuItems.map((item) => {
                         const Icon = item.icon;
                         const isActive = location.pathname === item.path;
@@ -227,20 +274,22 @@ export const MainLayout: React.FC = () => {
                             <Link
                                 key={item.path}
                                 to={item.path}
-                                className={`${isActive ? 'sidebar-link-active' : 'sidebar-link'} ${!sidebarOpen ? 'justify-center px-0' : ''}`}
+                                className={`${isActive ? 'sidebar-link-active' : 'sidebar-link'} ${sidebarOpen ? '' : 'mx-auto h-10 w-10 justify-center gap-0 px-0'}`}
                                 title={!sidebarOpen ? item.label : ''}
                             >
                                 <Icon className="w-5 h-5 flex-shrink-0" />
-                                {sidebarOpen && <span>{item.label}</span>}
+                                <span className={`overflow-hidden whitespace-nowrap transition-all duration-200 ease-in-out ${sidebarOpen ? 'max-w-[140px] opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'}`}>
+                                    {item.label}
+                                </span>
                             </Link>
                         );
                     })}
                 </nav>
 
                 {/* User info */}
-                <div className="p-4 border-t border-gray-200 dark:border-dark-border">
-                    {sidebarOpen && (
-                        <div className="mb-3">
+                <div className={`border-t border-gray-200 dark:border-dark-border ${sidebarOpen ? 'p-4' : 'px-0 py-4 flex flex-col items-center'}`}>
+                    <div className={`overflow-hidden transition-all duration-200 ease-in-out ${sidebarOpen ? 'max-h-16 opacity-100 mb-3' : 'max-h-0 opacity-0 mb-0'}`}>
+                        <div className="pl-3">
                             <p className="text-sm font-semibold text-gray-900 dark:text-white">
                                 {user?.name}
                             </p>
@@ -248,14 +297,16 @@ export const MainLayout: React.FC = () => {
                                 {user?.role}
                             </p>
                         </div>
-                    )}
+                    </div>
                     <button
                         onClick={handleLogout}
-                        className={`sidebar-link w-full text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 ${!sidebarOpen ? 'justify-center px-0' : ''}`}
+                        className={`sidebar-link text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 ${sidebarOpen ? 'w-full' : 'mx-auto h-10 w-10 justify-center gap-0 px-0'}`}
                         title={!sidebarOpen ? 'Logout' : ''}
                     >
                         <LogOut className="w-5 h-5 flex-shrink-0" />
-                        {sidebarOpen && <span>Logout</span>}
+                        <span className={`overflow-hidden whitespace-nowrap transition-all duration-200 ease-in-out ${sidebarOpen ? 'max-w-[140px] opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'}`}>
+                            Logout
+                        </span>
                     </button>
                 </div>
             </aside>

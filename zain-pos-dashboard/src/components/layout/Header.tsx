@@ -3,6 +3,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { DateRangePicker } from '@/components/shared/DateRangePicker';
 import { NotificationBell } from '@/components/notifications/NotificationBell';
+import { cn } from '@/lib/utils';
 
 interface HeaderProps {
     title: string;
@@ -11,48 +12,41 @@ interface HeaderProps {
 }
 
 export function Header({ title, darkMode, setDarkMode }: HeaderProps) {
-    const { user, isDemoMode } = useAuth();
+    const { user, isDemoMode, logout } = useAuth();
 
     return (
-        <header className="hidden lg:flex sticky top-0 z-20 items-center justify-between gap-4 border-b border-slate-200/70 bg-white/[0.82] px-8 py-5 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-950/[0.82]">
-            <div className="min-w-0">
-                <div className="mb-2 flex items-center gap-2">
+        <header className="sticky top-0 z-30 flex h-14 items-center gap-4 border-b bg-background px-4 lg:h-[60px] lg:px-6">
+            <div className="flex bg-transparent items-center gap-4 w-full justify-between">
+                <div className="flex items-center gap-4">
+                    <h1 className="text-xl font-semibold leading-none tracking-tight">
+                        {title}
+                    </h1>
                     {isDemoMode && (
-                        <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
-                            Demo Mode
-                        </span>
+                        <button 
+                            onClick={() => logout()}
+                            title="Click to exit Demo Mode and sign in for Live Data"
+                            className="flex items-center gap-1.5 rounded-full border border-orange-200 bg-orange-50 px-2 py-0.5 text-xs font-medium text-orange-700 hover:bg-orange-100 dark:border-orange-900/50 dark:bg-orange-950/30 dark:text-orange-300 transition-colors"
+                        >
+                            <div className="h-1.5 w-1.5 rounded-full bg-orange-500 animate-pulse" />
+                            Demo
+                        </button>
                     )}
                 </div>
-                <h2 className="truncate text-2xl font-semibold tracking-tight text-slate-950 dark:text-white">
-                    {title}
-                </h2>
-                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                    Clean view for store operations, stock, and billing.
-                </p>
-            </div>
-            <div className="flex items-center gap-4">
-                <DateRangePicker />
 
-                <NotificationBell />
+                <div className="flex items-center gap-4">
+                    <NotificationBell />
 
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => setDarkMode(!darkMode)}
-                    className="rounded-2xl text-slate-500 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-white"
-                >
-                    {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-                </Button>
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setDarkMode(!darkMode)}
+                        className="rounded-full h-8 w-8 text-muted-foreground hover:text-foreground"
+                    >
+                        {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                    </Button>
 
-                <div className="flex items-center gap-3 border-l border-slate-200 pl-4 dark:border-slate-800">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-sm font-bold text-slate-900 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100">
+                    <div className="hidden sm:flex items-center justify-center h-8 w-8 rounded-full border bg-muted text-sm font-medium">
                         {user?.username?.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-slate-950 dark:text-white">
-                            {user?.name || user?.username}
-                        </p>
-                        <p className="text-xs uppercase tracking-[0.22em] text-slate-400 dark:text-slate-500">{user?.role}</p>
                     </div>
                 </div>
             </div>

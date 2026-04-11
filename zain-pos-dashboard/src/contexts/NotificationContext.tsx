@@ -63,7 +63,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         });
 
         newSocket.on('connect', () => {
-            console.log('🔔 Connected to Notification Socket');
+            // Connected to notification socket
         });
 
         newSocket.on('notification', (notification: Notification) => {

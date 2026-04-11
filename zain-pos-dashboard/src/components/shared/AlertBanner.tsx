@@ -16,28 +16,30 @@ export function AlertBanner({ alerts }: AlertBannerProps) {
     if (activeAlerts.length === 0) return null;
 
     return (
-        <div className="flex flex-col gap-2 mb-6">
+        <div className="flex flex-col gap-3 mb-8">
             {activeAlerts.map(alert => (
                 <div
                     key={alert.id}
                     className={cn(
-                        "flex items-center justify-between rounded-[1.5rem] border px-5 py-4 shadow-sm",
-                        alert.type === 'critical' ? "border-rose-200 bg-rose-50/80 text-rose-900 dark:border-rose-900/50 dark:bg-rose-950/20 dark:text-rose-300" :
-                            alert.type === 'warning' ? "border-amber-200 bg-amber-50/80 text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300" :
-                                "border-sky-200 bg-sky-50/80 text-sky-900 dark:border-sky-900/50 dark:bg-sky-950/20 dark:text-sky-300"
+                        "rounded-xl px-5 py-4 flex items-center justify-between border shadow-sm transition-all animate-fade-in",
+                        alert.type === 'critical' ? "alert-soft" :
+                        alert.type === 'warning' ? "alert-warning" :
+                        "bg-[#F0F9FF] border-[#B9E6FE] text-[#026AA2]"
                     )}
                 >
-                    <div className="flex min-w-0 items-center gap-3">
-                        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl bg-white/80 dark:bg-slate-950/40">
+                    <div className="flex items-center gap-4">
+                        <div className={cn(
+                            "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg shadow-sm bg-white/60 dark:bg-slate-900/40",
+                        )}>
                             {alert.type === 'critical' ? <ShieldAlert className="w-5 h-5" /> :
                             alert.type === 'warning' ? <AlertTriangle className="w-5 h-5" /> :
                                 <Info className="w-5 h-5" />}
                         </div>
-                        <div>
-                            <span className="mr-2 font-medium">{alert.message}</span>
+                        <div className="flex flex-col md:flex-row md:items-center gap-x-3 gap-y-0.5">
+                            <span className="font-bold text-sm tracking-tight">{alert.message}</span>
                             {alert.link && (
-                                <Link to={alert.link} className="inline-flex items-center text-sm font-semibold opacity-80 hover:opacity-100">
-                                    {alert.action || 'View'} <ArrowRight className="w-3 h-3 ml-1" />
+                                <Link to={alert.link} className="inline-flex items-center text-xs font-bold underline underline-offset-4 opacity-80 hover:opacity-100 transition-opacity">
+                                    {alert.action || 'Take Action'} <ArrowRight className="w-3 h-3 ml-1" />
                                 </Link>
                             )}
                         </div>
@@ -45,10 +47,9 @@ export function AlertBanner({ alerts }: AlertBannerProps) {
 
                     <button
                         onClick={() => setDismissed(prev => [...prev, alert.id])}
-                        className="rounded-full p-1.5 hover:bg-black/5 dark:hover:bg-white/10"
+                        className="rounded-lg p-1 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
                     >
-                        <span className="sr-only">Dismiss</span>
-                        <X className="w-4 h-4 opacity-50" />
+                        <X className="w-4 h-4 opacity-60" />
                     </button>
                 </div>
             ))}

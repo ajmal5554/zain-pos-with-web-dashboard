@@ -113,6 +113,7 @@ export function generateReceiptHtml(
       font-weight: ${block.styles.bold ? 'bold' : 'normal'};
       margin-top: ${block.styles.marginTop || 0}px;
       margin-bottom: ${block.styles.marginBottom || 0}px;
+      font-family: ${block.styles.fontFamily || 'inherit'};
       width: 100%;
     `;
 
@@ -124,8 +125,13 @@ export function generateReceiptHtml(
 
     switch (block.type) {
       case 'logo':
-        if (data.logo) {
-          htmlContent += `${blockOpen}<div style="${styleStr}"><img src="${data.logo}" style="max-width: 60%; height: auto;" /></div>${blockClose}`;
+        {
+          const logoWidth = block.styles.fontSize || 60;
+          if (data.logo) {
+            htmlContent += `${blockOpen}<div style="${styleStr}"><img src="${data.logo}" style="max-width: ${logoWidth}%; height: auto;" /></div>${blockClose}`;
+          } else if (interactive) {
+            htmlContent += `${blockOpen}<div style="${styleStr}"><div style="width: ${logoWidth}%; margin: 0 auto; height: 64px; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #6b7280; border: 1px dashed #9ca3af; background: #e5e7eb;">[LOGO ${logoWidth}%]</div></div>${blockClose}`;
+          }
         }
         break;
       case 'text':
@@ -150,7 +156,7 @@ export function generateReceiptHtml(
               <div>Date: ${format(new Date(data.date), 'dd/MM/yyyy')}</div>
             </div>
             <div style="text-align: right;">
-              <div>Customer: ${data.customerName || 'Walk-in'}</div>
+              <div>Customer: ${data.customerName || 'Walk-in Customer'}</div>
             </div>
           </div>
         ${blockClose}`;
@@ -175,7 +181,7 @@ export function generateReceiptHtml(
           </tr>
         `).join('');
         htmlContent += `${blockOpen}
-          <table style="width: 100%; border-collapse: collapse; font-family: inherit; font-size: 11px;">
+          <table style="width: 100%; border-collapse: collapse; font-family: ${block.styles.fontFamily || 'inherit'}; font-size: 11px;">
             <thead>
               <tr style="border-bottom: 1px dashed #000;">
                 <th align="center" style="width: 5%; padding: 4px 2px; font-weight: ${tableHeaderBold ? 'bold' : 'normal'};">#</th>
@@ -194,16 +200,17 @@ export function generateReceiptHtml(
       }
       case 'totals': {
         const totalTax = (data.cgst || 0) + (data.sgst || 0);
-        const basicAmt = (data.subtotal || 0) - totalTax;
+        const afterDiscount = (data.subtotal || 0) - (data.discount || 0);
+        const basicAmt = afterDiscount - totalTax;
         htmlContent += `${blockOpen}
           <div style="${styleStr}; font-size: 11px;">
             <table style="width: 100%; font-size: inherit;">
               <tr><td align="right">Total Items:</td><td align="right" width="80">${data.items.length}</td></tr>
-              <tr><td align="right">Basic Amt:</td><td align="right" width="80">${basicAmt.toFixed(2)}</td></tr>
-              <tr><td align="right">Less Discount:</td><td align="right" width="80">${data.discount.toFixed(2)}</td></tr>
-              <tr><td align="right">CGST:</td><td align="right" width="80">${(data.cgst || 0).toFixed(2)}</td></tr>
-              <tr><td align="right">SGST:</td><td align="right" width="80">${(data.sgst || 0).toFixed(2)}</td></tr>
-              <tr style="font-weight: bold; font-size: 14px; border-top: 1px dashed #000; border-bottom: 1px dashed #000;">
+              <tr><td align="right">Taxable Amount (Excl. GST):</td><td align="right" width="80">${basicAmt.toFixed(2)}</td></tr>
+              <tr><td align="right">Discount:</td><td align="right" width="80">${data.discount.toFixed(2)}</td></tr>
+              <tr><td align="right">CGST @2.5%:</td><td align="right" width="80">${(data.cgst || 0).toFixed(2)}</td></tr>
+              <tr><td align="right">SGST @2.5%:</td><td align="right" width="80">${(data.sgst || 0).toFixed(2)}</td></tr>
+              <tr style="font-weight: bold; font-size: 14px; border-top: 1px dashed #000;">
                 <td align="right" style="padding: 5px 0;">NET AMOUNT:</td>
                 <td align="right" style="padding: 5px 0;">₹${data.grandTotal.toFixed(2)}</td>
               </tr>
@@ -280,20 +287,27 @@ export const printService = {
       const layoutResult = await window.electronAPI.settings.get({ key: 'RECEIPT_LAYOUT' });
       const printerConfigResult = await window.electronAPI.settings.get({ key: 'PRINTER_CONFIG' });
 
-      const printerConfig: ReceiptPrinterConfig = printerConfigResult
-        ? { ...DEFAULT_RECEIPT_PRINTER_CONFIG, ...JSON.parse(printerConfigResult as string) }
+      if (layoutResult?.success === false) {
+        throw new Error(layoutResult.error || 'Failed to load receipt layout');
+      }
+      if (printerConfigResult?.success === false) {
+        throw new Error(printerConfigResult.error || 'Failed to load printer configuration');
+      }
+
+      const printerConfig: ReceiptPrinterConfig = printerConfigResult?.data
+        ? { ...DEFAULT_RECEIPT_PRINTER_CONFIG, ...JSON.parse(printerConfigResult.data as string) }
         : { ...DEFAULT_RECEIPT_PRINTER_CONFIG };
 
-      const blocks: ReceiptBlock[] = layoutResult
-        ? JSON.parse(layoutResult as string)
+      const blocks: ReceiptBlock[] = layoutResult?.data
+        ? JSON.parse(layoutResult.data as string)
         : DEFAULT_RECEIPT_LAYOUT;
 
       const finalHtml = generateReceiptHtml(data, blocks, printerConfig);
 
-      const receiptPrinterName = printerConfigResult
+      const receiptPrinterName = printerConfigResult?.data
         ? (() => {
             try {
-              const parsed = JSON.parse(printerConfigResult as string);
+              const parsed = JSON.parse(printerConfigResult.data as string);
               return typeof parsed?.receiptPrinter === 'string'
                 ? parsed.receiptPrinter.trim()
                 : undefined;
@@ -325,10 +339,17 @@ export const printService = {
       const result = await window.electronAPI.settings.get({ key: 'LABEL_LAYOUT' });
       const printerConfigResult = await window.electronAPI.settings.get({ key: 'PRINTER_CONFIG' });
 
+      if (result?.success === false) {
+        throw new Error(result.error || 'Failed to load label layout');
+      }
+      if (printerConfigResult?.success === false) {
+        throw new Error(printerConfigResult.error || 'Failed to load printer configuration');
+      }
+
       // Parse layout or use default
       let blocks: LabelBlock[] = [];
-      if (result) {
-        blocks = JSON.parse(result as string);
+      if (result?.data) {
+        blocks = JSON.parse(result.data as string);
       } else {
         blocks = [
           { id: '1', type: 'shop_name', styles: { align: 'left', fontSize: 10, bold: true, marginBottom: 0 }, visible: true },
@@ -397,8 +418,8 @@ export const printService = {
                 </body>
                 </html>`;
       let labelPrinterName: string | undefined;
-      if (printerConfigResult) {
-        const parsed = JSON.parse(printerConfigResult as string);
+      if (printerConfigResult?.data) {
+        const parsed = JSON.parse(printerConfigResult.data as string);
         if (parsed?.labelPrinter && typeof parsed.labelPrinter === 'string') {
           labelPrinterName = parsed.labelPrinter.trim();
         }

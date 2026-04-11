@@ -5,6 +5,7 @@ interface User {
     username: string;
     name: string;
     role: string;
+    isActive: boolean;
     permPrintSticker: boolean;
     permAddItem: boolean;
     permDeleteProduct: boolean;

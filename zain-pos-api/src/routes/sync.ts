@@ -288,25 +288,31 @@ router.post('/sales', async (req, res) => {
             // Match default room used by socket server/client.
             io.to(`shop_${shopId}`).emit('sale:batch', { count: sales.length, sales, timestamp: new Date() });
 
-            // Send Notifications for RECENT sales (e.g., created in last 10 minutes)
-            const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+            // Send Notifications for RECENT sales (not historical data)
+            const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
 
             for (const sale of sales) {
                 const saleDate = new Date(sale.createdAt);
+                const isRecentSale = saleDate > oneHourAgo;
+                const isNotHistorical = !sale.isHistorical;
 
-                // NEW SALE
-                if (saleDate > tenMinutesAgo) {
+                // Send notification for recent, non-historical sales (real-time sales)
+                if (isRecentSale && isNotHistorical && sale.status === 'COMPLETED') {
                     await notificationService.send({
                         shopId,
                         type: 'sale',
-                        title: 'New Sale Received',
-                        message: `Bill #${sale.billNo} - â‚¹${sale.grandTotal}`,
+                        title: '🛍️ New Sale',
+                        message: `Bill #${sale.billNo} - ₹${sale.grandTotal.toFixed(2)}`,
                         referenceId: sale.id,
                         metadata: {
+                            billNo: sale.billNo,
                             amount: sale.grandTotal,
-                            paymentMode: sale.paymentMethod
+                            paymentMode: sale.paymentMethod,
+                            items: sale.items?.length || 0,
+                            cashier: sale.user?.name || 'Staff'
                         }
                     });
+                    console.log(`📱 Notification sent for sale ${sale.billNo}`);
                 }
             }
 

@@ -11,8 +11,8 @@ export const reportsService = {
             where: {
                 status: 'COMPLETED',
                 createdAt: {
-                    gte: start.toISOString(),
-                    lte: end.toISOString(),
+                    gte: start,
+                    lte: end,
                 },
             },
             include: {
@@ -25,11 +25,11 @@ export const reportsService = {
             },
         });
 
-        const totalSales = sales.reduce((sum: number, sale: any) => sum + sale.grandTotal, 0);
-        const totalTax = sales.reduce((sum: number, sale: any) => sum + sale.taxAmount, 0);
-        const totalDiscount = sales.reduce((sum: number, sale: any) => sum + sale.discount, 0);
+        const totalSales = sales.reduce((sum: number, sale: any): number => sum + sale.grandTotal, 0);
+        const totalTax = sales.reduce((sum: number, sale: any): number => sum + sale.taxAmount, 0);
+        const totalDiscount = sales.reduce((sum: number, sale: any): number => sum + sale.discount, 0);
 
-        const paymentBreakdown = sales.reduce((acc: any, sale: any) => {
+        const paymentBreakdown = sales.reduce((acc: Record<string, number>, sale: any): Record<string, number> => {
             acc[sale.paymentMethod] = (acc[sale.paymentMethod] || 0) + sale.grandTotal;
             return acc;
         }, {} as Record<string, number>);
@@ -61,8 +61,8 @@ export const reportsService = {
             where: {
                 status: 'COMPLETED',
                 createdAt: {
-                    gte: start.toISOString(),
-                    lte: end.toISOString(),
+                    gte: start,
+                    lte: end,
                 },
             },
             include: {
@@ -70,12 +70,12 @@ export const reportsService = {
             },
         });
 
-        const totalSales = sales.reduce((sum: number, sale: any) => sum + sale.grandTotal, 0);
-        const totalTax = sales.reduce((sum: number, sale: any) => sum + sale.taxAmount, 0);
-        const totalDiscount = sales.reduce((sum: number, sale: any) => sum + sale.discount, 0);
+        const totalSales = sales.reduce((sum: number, sale: any): number => sum + sale.grandTotal, 0);
+        const totalTax = sales.reduce((sum: number, sale: any): number => sum + sale.taxAmount, 0);
+        const totalDiscount = sales.reduce((sum: number, sale: any): number => sum + sale.discount, 0);
 
         // Daily breakdown
-        const dailyBreakdown = sales.reduce((acc: any, sale: any) => {
+        const dailyBreakdown = sales.reduce((acc: Record<number, any>, sale: any): Record<number, any> => {
             const day = new Date(sale.createdAt).getDate();
             if (!acc[day]) {
                 acc[day] = { sales: 0, count: 0 };
@@ -104,8 +104,8 @@ export const reportsService = {
 
         if (startDate && endDate) {
             whereClause.createdAt = {
-                gte: startDate.toISOString(),
-                lte: endDate.toISOString(),
+                gte: startDate,
+                lte: endDate,
             };
         }
 

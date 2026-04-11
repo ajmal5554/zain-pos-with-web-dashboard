@@ -106,8 +106,8 @@ export const demoInvoices: Invoice[] = [
         customer: { name: 'Arun Menon', phone: '9876543210' },
         itemCount: 2,
         items: [
-            { quantity: 1, product: { name: 'Premium Linen Shirt' } },
-            { quantity: 1, product: { name: 'Leather Belt' } }
+            { quantity: 1, sellingPrice: 1500, product: { name: 'Premium Linen Shirt' } },
+            { quantity: 1, sellingPrice: 900, product: { name: 'Leather Belt' } }
         ]
     },
     {
@@ -118,8 +118,8 @@ export const demoInvoices: Invoice[] = [
         customer: { name: 'Rahul Iyer', phone: '9988776655' },
         itemCount: 2,
         items: [
-            { quantity: 1, product: { name: 'Casual Polo' } },
-            { quantity: 1, product: { name: 'Slim Fit Trousers' } }
+            { quantity: 1, sellingPrice: 800, product: { name: 'Casual Polo' } },
+            { quantity: 1, sellingPrice: 1180, product: { name: 'Slim Fit Trousers' } }
         ]
     }
 ];
@@ -163,18 +163,74 @@ export const demoSales = [
 export const demoActivityLogs = [
     {
         id: 'log-1',
-        action: 'SALE_COMPLETED',
-        details: 'Invoice A-1021 completed via cash desk 1.',
+        action: 'USER_LOGIN',
+        details: 'User "admin" logged in from POS terminal.',
         userId: 'demo-user',
         createdAt: new Date().toISOString(),
-        user: { name: 'Demo Admin', role: 'ADMIN' }
+        user: { name: 'Admin User', role: 'ADMIN' }
     },
     {
         id: 'log-2',
-        action: 'INVENTORY_ALERT',
-        details: 'Casual Polo reached low stock threshold.',
+        action: 'SALE_REFUND',
+        details: 'Sale #1412 refunded. Amount: ₹650.00. Reason: Product defect.',
         userId: 'demo-user',
+        createdAt: new Date(Date.now() - 1800_000).toISOString(),
+        user: { name: 'Cashier 1', role: 'CASHIER' }
+    },
+    {
+        id: 'log-3',
+        action: 'INVENTORY_ADJUSTMENT',
+        details: 'Manual stock adjustment for "Casual Polo" - Added 50 units due to warehouse recount.',
+        userId: 'demo-user',
+        createdAt: new Date(Date.now() - 3600_000).toISOString(),
+        user: { name: 'Store Manager', role: 'MANAGER' }
+    },
+    {
+        id: 'log-4',
+        action: 'DATA_SYNC',
+        details: 'Cloud sync completed successfully. 127 records synchronized to server.',
+        userId: 'system',
         createdAt: new Date(Date.now() - 5400_000).toISOString(),
+        user: { name: 'System', role: 'AUTOMATION' }
+    },
+    {
+        id: 'log-5',
+        action: 'REPORT_GENERATED',
+        details: 'Sales summary report generated for period: 01-Apr-2026 to 04-Apr-2026.',
+        userId: 'demo-user',
+        createdAt: new Date(Date.now() - 7200_000).toISOString(),
+        user: { name: 'Admin User', role: 'ADMIN' }
+    },
+    {
+        id: 'log-6',
+        action: 'PRICE_OVERRIDE',
+        details: 'Price override applied to Sale #1410. Original: ₹500, Override: ₹450. Approved by manager.',
+        userId: 'demo-user',
+        createdAt: new Date(Date.now() - 9000_000).toISOString(),
+        user: { name: 'Cashier 2', role: 'CASHIER' }
+    },
+    {
+        id: 'log-7',
+        action: 'SHIFT_END',
+        details: 'Day shift ended. Cash collected: ₹45,230. Variance: +₹50.',
+        userId: 'demo-user',
+        createdAt: new Date(Date.now() - 86400_000).toISOString(),
+        user: { name: 'Cashier 1', role: 'CASHIER' }
+    },
+    {
+        id: 'log-8',
+        action: 'USER_CREATED',
+        details: 'New user "john_doe" created with role: CASHIER.',
+        userId: 'demo-user',
+        createdAt: new Date(Date.now() - 172800_000).toISOString(),
+        user: { name: 'Admin User', role: 'ADMIN' }
+    },
+    {
+        id: 'log-9',
+        action: 'INVENTORY_ALERT',
+        details: 'Low stock alert: "Casual Polo" reached reorder threshold (10 units remaining).',
+        userId: 'system',
+        createdAt: new Date(Date.now() - 259200_000).toISOString(),
         user: { name: 'System', role: 'AUTOMATION' }
     }
 ];
@@ -196,6 +252,73 @@ export const demoReports = {
         totalRevenue: item.totalRevenue
     }))
 };
+
+export const demoSettings = [
+    {
+        id: 's1',
+        key: 'SHOP_SETTINGS',
+        value: JSON.stringify({
+            name: 'Zain POS Flagship',
+            branch: 'Calicut Main',
+            currency: 'INR',
+            taxLabel: 'GST',
+            taxRate: 18,
+            supportPhone: '+91 98765 43210'
+        }, null, 4),
+        updatedAt: new Date().toISOString()
+    },
+    {
+        id: 's2',
+        key: 'PAYMENT_METHODS',
+        value: JSON.stringify({
+            enabled: ['CASH', 'UPI', 'CARD', 'NET_BANKING'],
+            defaultSelection: 'CASH',
+            upiProvider: 'Paytm/Razorpay',
+            allowDraft: true
+        }, null, 4),
+        updatedAt: new Date().toISOString()
+    },
+    {
+        id: 's3',
+        key: 'PRINTER_CONFIG',
+        value: JSON.stringify({
+            type: 'THERMAL',
+            paperWidth: '80mm',
+            showLogo: true,
+            headerText: 'Thank you for shopping at Zain!',
+            footerText: 'GST Input Credit Available'
+        }, null, 4),
+        updatedAt: new Date().toISOString()
+    },
+    {
+        id: 's4',
+        key: 'CLOUD_API_URL',
+        value: '"https://api.zainpos.com/v3"',
+        updatedAt: new Date().toISOString()
+    },
+    {
+        id: 's5',
+        key: 'CLOUD_SYNC_CONFIG',
+        value: JSON.stringify({
+            frequency: 'REALTIME',
+            retrycount: 3,
+            compression: true,
+            encryption: 'AES-256'
+        }, null, 4),
+        updatedAt: new Date().toISOString()
+    },
+    {
+        id: 's6',
+        key: 'BACKUP_CONFIG',
+        value: JSON.stringify({
+            location: 'S3_BUCKET',
+            retention: '90_DAYS',
+            automatic: true,
+            schedule: '00:00 UTC'
+        }, null, 4),
+        updatedAt: new Date().toISOString()
+    }
+];
 
 export function getDemoInvoicesPage(page = 1, limit = 20): PaginatedResponse<Invoice> {
     const start = (page - 1) * limit;

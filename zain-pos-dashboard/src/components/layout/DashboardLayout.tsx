@@ -1,3 +1,4 @@
+import * as React from 'react';
 import { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
@@ -13,7 +14,7 @@ interface DashboardLayoutProps {
 }
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
-    const [sidebarOpen, setSidebarOpen] = useState(true);
+    const [sidebarOpen] = useState(true);
     const [darkMode, setDarkMode] = useState(false);
     const location = useLocation();
 
@@ -31,20 +32,17 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
     };
 
     return (
-        <div className="flex min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.10),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(14,165,233,0.10),_transparent_24%),linear-gradient(180deg,_#f8fbff_0%,_#edf3fb_100%)] font-sans text-slate-900 dark:bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.10),_transparent_24%),radial-gradient(circle_at_top_right,_rgba(96,165,250,0.12),_transparent_24%),linear-gradient(180deg,_#020617_0%,_#0f172a_100%)] dark:text-slate-100">
-            <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
+        <div className="flex min-h-screen w-full flex-col bg-background">
+            <Sidebar isOpen={sidebarOpen} />
 
-            <div className={cn(
-                "flex-1 flex flex-col overflow-hidden transition-all duration-300",
-                sidebarOpen ? "lg:ml-64" : "lg:ml-24"
-            )}>
+            <div className="flex flex-col sm:pl-52 flex-1 min-w-0">
                 <MobileHeader darkMode={darkMode} setDarkMode={setDarkMode} />
-                <Header title={getTitle()} darkMode={darkMode} setDarkMode={setDarkMode} />
+                <div className="hidden sm:block sticky top-0 z-30 bg-background">
+                    <Header title={getTitle()} darkMode={darkMode} setDarkMode={setDarkMode} />
+                </div>
 
-                <main className="flex-1 overflow-y-auto px-4 pb-24 pt-4 lg:px-8 lg:pb-8 lg:pt-6">
-                    <div className="mx-auto max-w-[1440px]">
-                        {children}
-                    </div>
+                <main className="grid flex-1 items-start gap-4 p-4 pb-24 sm:p-6 sm:pb-8 md:gap-8 min-w-0 w-full max-w-full overflow-x-hidden">
+                    {children}
                 </main>
             </div>
 

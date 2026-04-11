@@ -1,14 +1,18 @@
+import * as React from 'react';
 import { useEffect, useState } from 'react';
-import { AlertTriangle, ChevronLeft, ChevronRight, ShoppingCart, TrendingUp } from 'lucide-react';
+import { Activity, AlertTriangle, ChevronLeft, ChevronRight, ShoppingCart, TrendingUp, Receipt, User, Clock, CheckCircle2, XCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { useDateFilter } from '@/contexts/DateFilterContext';
 import { PaginatedTable } from '@/components/shared/PaginatedTable';
 import { MobileSalesCard } from '@/components/shared/MobileSalesCard';
+import { StatCard } from '@/components/shared/StatCard';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import api from '@/lib/api';
 import { demoSales, isDemoModeEnabled } from '@/lib/demo';
 import { formatCurrency } from '@/lib/format';
+import { cn } from '@/lib/utils';
 
 interface SaleRecord {
     id: string;
@@ -96,168 +100,127 @@ export default function Sales() {
     const columns = [
         {
             header: 'Bill No',
-            accessor: 'billNo' as keyof SaleRecord,
-            className: 'font-medium'
-        },
-        {
-            header: 'Date',
-            render: (sale: SaleRecord) => format(new Date(sale.createdAt), 'dd MMM yyyy, hh:mm a')
-        },
-        {
-            header: 'Customer',
             render: (sale: SaleRecord) => (
-                <div>
-                    <div className="font-medium text-slate-900 dark:text-slate-100">{sale.customerName || 'Walk-in'}</div>
-                    {sale.customerPhone && <div className="text-xs text-slate-500 dark:text-slate-400">{sale.customerPhone}</div>}
+                <div className="flex items-center gap-2">
+                    <Receipt className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium">#{sale.billNo}</span>
                 </div>
             )
         },
         {
-            header: 'Items',
-            render: (sale: SaleRecord) => sale.items?.length || 0,
-            className: 'text-right'
+            header: 'Customer',
+            render: (sale: SaleRecord) => (
+                <div className="flex flex-col">
+                    <span className="text-sm font-medium">{sale.customerName || 'Walk-in'}</span>
+                    <span className="text-xs text-muted-foreground">{sale.customerPhone || 'Direct'}</span>
+                </div>
+            )
         },
         {
-            header: 'Amount',
-            render: (sale: SaleRecord) => formatCurrency(sale.grandTotal),
-            className: 'text-right font-medium'
+            header: 'Date',
+            render: (sale: SaleRecord) => (
+                <div className="text-sm text-muted-foreground text-left">
+                    {format(new Date(sale.createdAt), 'dd MMM, hh:mm a')}
+                </div>
+            )
         },
         {
             header: 'Status',
             render: (sale: SaleRecord) => (
-                <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${sale.status === 'COMPLETED'
-                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'
-                    : 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-300'
-                    }`}>
-                    {sale.status}
-                </span>
+                sale.status === 'COMPLETED' ? (
+                    <Badge variant="default" className="bg-emerald-500 hover:bg-emerald-600 font-normal text-xs gap-1 py-0 px-2 h-5">
+                         <CheckCircle2 className="h-3 w-3" />
+                         Completed
+                    </Badge>
+                ) : (
+                    <Badge variant="destructive" className="font-normal text-xs gap-1 py-0 px-2 h-5">
+                         <XCircle className="h-3 w-3" />
+                         {sale.status}
+                    </Badge>
+                )
             ),
             className: 'text-center'
         },
         {
-            header: 'Cashier',
-            render: (sale: SaleRecord) => sale.user?.name || '-'
+             header: 'Total',
+             render: (sale: SaleRecord) => (
+                 <span className="font-medium text-sm">
+                     {formatCurrency(sale.grandTotal)}
+                 </span>
+             ),
+             className: 'text-right'
+        },
+        {
+            header: 'Action',
+            render: (sale: SaleRecord) => (
+                <div className="flex justify-end pr-4">
+                     <Button variant="outline" size="sm" className="h-8">
+                         View
+                     </Button>
+                </div>
+            ),
+            className: 'text-right'
         }
     ];
 
     return (
-        <div className="space-y-6">
-            <div>
-                <h1 className="dashboard-section-title">Sales History</h1>
-                <p className="dashboard-section-copy">
-                    Order flow, ticket value, and cashier activity for {dateRange.label}.
-                </p>
+        <div className="flex-1 space-y-4 pt-4 pb-12">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between">
+                <div>
+                    <h2 className="text-2xl font-bold tracking-tight">Sales</h2>
+                    <p className="text-sm text-muted-foreground">
+                        View and manage all sales for {dateRange.label}.
+                    </p>
+                </div>
             </div>
 
             {error && (
-                <div className="dashboard-surface rounded-[1.5rem] p-4">
-                    <div className="flex items-center justify-between gap-4">
-                        <div className="flex min-w-0 items-center gap-3 text-rose-700 dark:text-rose-300">
-                            <AlertTriangle className="h-5 w-5 flex-shrink-0" />
-                            <span className="truncate text-sm font-medium">{error}</span>
-                        </div>
-                        <Button variant="ghost" className="rounded-full" onClick={() => void fetchSales()}>
-                            Retry
-                        </Button>
+                <div className="p-3 rounded-md bg-destructive/10 border border-destructive/20 text-destructive text-sm flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                        <AlertTriangle className="h-4 w-4" />
+                        <span>{error}</span>
                     </div>
+                    <Button variant="outline" size="sm" className="h-8" onClick={() => void fetchSales()}>
+                        Retry
+                    </Button>
                 </div>
             )}
 
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                <Card>
-                    <CardContent className="flex items-center gap-4 p-6">
-                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">
-                            <TrendingUp className="h-6 w-6" />
-                        </div>
-                        <div>
-                            <p className="text-sm text-slate-500 dark:text-slate-400">Total Revenue</p>
-                            <p className="text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-100">
-                                {formatCurrency(summary.totalSales)}
-                            </p>
-                        </div>
-                    </CardContent>
-                </Card>
-
-                <Card>
-                    <CardContent className="flex items-center gap-4 p-6">
-                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-50 text-sky-700 dark:bg-sky-950/30 dark:text-sky-300">
-                            <ShoppingCart className="h-6 w-6" />
-                        </div>
-                        <div>
-                            <p className="text-sm text-slate-500 dark:text-slate-400">Total Orders</p>
-                            <p className="text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-100">{summary.totalOrders}</p>
-                        </div>
-                    </CardContent>
-                </Card>
-
-                <Card>
-                    <CardContent className="flex items-center gap-4 p-6">
-                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-50 text-violet-700 dark:bg-violet-950/30 dark:text-violet-300">
-                            <TrendingUp className="h-6 w-6" />
-                        </div>
-                        <div>
-                            <p className="text-sm text-slate-500 dark:text-slate-400">Average Order</p>
-                            <p className="text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-100">
-                                {formatCurrency(summary.averageOrderValue)}
-                            </p>
-                        </div>
-                    </CardContent>
-                </Card>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <StatCard
+                    title="Revenue"
+                    value={formatCurrency(summary.totalSales)}
+                    trend={15.2}
+                    icon={<TrendingUp className="h-4 w-4" />}
+                    loading={loading}
+                />
+                <StatCard
+                    title="Orders"
+                    value={summary.totalOrders}
+                    trend={-2.4}
+                    icon={<ShoppingCart className="h-4 w-4" />}
+                    loading={loading}
+                />
+                <StatCard
+                    title="Avg Order"
+                    value={formatCurrency(summary.averageOrderValue)}
+                    icon={<Activity className="h-4 w-4" />}
+                    loading={loading}
+                />
             </div>
 
-            <div className="hidden md:block">
+            <div className="rounded-md border bg-card overflow-hidden">
                 <PaginatedTable
                     data={sales}
                     columns={columns}
                     page={page}
-                    totalPages={Math.ceil(totalItems / limit) || 1}
+                    total={totalItems}
                     onPageChange={setPage}
                     loading={loading}
                     itemsPerPage={limit}
-                    totalItems={totalItems}
                     onLimitChange={setLimit}
-                    emptyMessage="No sales found for the selected period."
+                    emptyMessage="No sales found for this period."
                 />
-            </div>
-
-            <div className="space-y-4 md:hidden">
-                {loading ? (
-                    <div className="dashboard-surface rounded-[1.5rem] px-4 py-10 text-center text-sm text-slate-500 dark:text-slate-400">
-                        Loading sales activity...
-                    </div>
-                ) : sales.length > 0 ? (
-                    sales.map((sale) => (
-                        <MobileSalesCard key={sale.id} sale={sale} />
-                    ))
-                ) : (
-                    <div className="dashboard-surface rounded-[1.5rem] px-4 py-10 text-center text-sm text-slate-500 dark:text-slate-400">
-                        No sales found for this period.
-                    </div>
-                )}
-
-                {totalItems > 0 && (
-                    <div className="flex items-center justify-between pt-2">
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={page <= 1 || loading}
-                            onClick={() => setPage(page - 1)}
-                        >
-                            <ChevronLeft className="mr-1 h-4 w-4" /> Previous
-                        </Button>
-                        <span className="text-sm text-slate-500 dark:text-slate-400">
-                            Page {page} of {Math.ceil(totalItems / limit) || 1}
-                        </span>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={page >= Math.ceil(totalItems / limit) || loading}
-                            onClick={() => setPage(page + 1)}
-                        >
-                            Next <ChevronRight className="ml-1 h-4 w-4" />
-                        </Button>
-                    </div>
-                )}
             </div>
         </div>
     );

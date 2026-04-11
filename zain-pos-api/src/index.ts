@@ -14,6 +14,7 @@ import maintenanceRoutes from './routes/maintenance';
 import activityRoutes from './routes/activity';
 import notificationRoutes from './routes/notifications';
 import adminRoutes from './routes/admin';
+import customersRoutes from './routes/customers';
 
 dotenv.config();
 
@@ -51,6 +52,7 @@ app.use('/api/maintenance', maintenanceRoutes);
 app.use('/api/activity', activityRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/customers', customersRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
@@ -66,3 +68,4 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 httpServer.listen(PORT, () => {
     console.log(`🚀 API server running on http://localhost:${PORT}`);
 });
+

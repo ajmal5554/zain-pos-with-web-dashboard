@@ -3,11 +3,15 @@ import React, { useState, useEffect } from 'react';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Trash2, Type, Image as ImageIcon, Layout, AlignLeft, AlignCenter, AlignRight, Bold, RotateCcw, CreditCard, Menu, DollarSign, Percent, Hash } from 'lucide-react';
+import { GripVertical, Trash2, Type, Image as ImageIcon, Layout, AlignLeft, AlignCenter, AlignRight, Bold, RotateCcw, CreditCard, Menu, DollarSign, Percent, Hash, Download, Upload } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { DEFAULT_RECEIPT_PRINTER_CONFIG, generateReceiptHtml, type ReceiptData, type ReceiptPrinterConfig } from '../../services/print.service';
 import { useAuthStore } from '../../store/authStore';
+
+interface ReceiptDesignerProps {
+    printerSettings?: any;
+}
 
 // --- Types ---
 
@@ -25,6 +29,7 @@ export interface ReceiptBlock {
         showVariantInfo?: boolean;
         tableHeaderBold?: boolean;
         tableRowBold?: boolean;
+        fontFamily?: string;
     };
     visible: boolean;
 }
@@ -65,7 +70,6 @@ const SortableBlock = ({ block, onRemove, onEdit, isSelected }: any) => {
                     <span className="font-bold text-sm capitalize">{block.type.replace('_', ' ')}</span>
                     {!block.visible && <span className="text-xs bg-gray-100 text-gray-500 px-1 rounded">Hidden</span>}
                 </div>
-                {block.content && <div className="text-xs text-gray-500 truncate font-mono">{block.content}</div>}
             </div>
 
             <button onClick={() => onRemove(block.id)} className="text-gray-400 hover:text-red-500">
@@ -93,7 +97,7 @@ const getBlockIcon = (type: string) => {
 };
 
 // --- Main Designer Component ---
-export const ReceiptDesigner: React.FC = () => {
+export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ printerSettings }) => {
     const { user } = useAuthStore();
     const [blocks, setBlocks] = useState<ReceiptBlock[]>(DEFAULT_LAYOUT);
     const [selectedBlock, setSelectedBlock] = useState<ReceiptBlock | null>(null);
@@ -117,6 +121,12 @@ export const ReceiptDesigner: React.FC = () => {
         loadShopDetails();
         loadPrinterConfig();
     }, []);
+
+    useEffect(() => {
+        if (printerSettings) {
+            setPrinterConfig({ ...DEFAULT_RECEIPT_PRINTER_CONFIG, ...printerSettings });
+        }
+    }, [printerSettings]);
 
     useEffect(() => {
         const previewData: ReceiptData = {
@@ -160,8 +170,8 @@ export const ReceiptDesigner: React.FC = () => {
     const loadShopDetails = async () => {
         try {
             const result = await window.electronAPI.settings.get({ key: 'SHOP_SETTINGS' });
-            if (result) {
-                const data = JSON.parse(result as string);
+            if (result?.success && result.data) {
+                const data = JSON.parse(result.data as string);
                 setShopDetails(data);
             }
         } catch (error) {
@@ -172,8 +182,8 @@ export const ReceiptDesigner: React.FC = () => {
     const loadLayout = async () => {
         try {
             const result = await window.electronAPI.settings.get({ key: 'RECEIPT_LAYOUT' });
-            if (result) {
-                setBlocks(JSON.parse(result as string));
+            if (result?.success && result.data) {
+                setBlocks(JSON.parse(result.data as string));
             }
         } catch (error) {
             console.error("Failed to load layout", error);
@@ -183,8 +193,8 @@ export const ReceiptDesigner: React.FC = () => {
     const loadPrinterConfig = async () => {
         try {
             const result = await window.electronAPI.settings.get({ key: 'PRINTER_CONFIG' });
-            if (result) {
-                setPrinterConfig({ ...DEFAULT_RECEIPT_PRINTER_CONFIG, ...JSON.parse(result as string) });
+            if (result?.success && result.data) {
+                setPrinterConfig({ ...DEFAULT_RECEIPT_PRINTER_CONFIG, ...JSON.parse(result.data as string) });
             }
         } catch (error) {
             console.error("Failed to load printer config", error);
@@ -195,11 +205,14 @@ export const ReceiptDesigner: React.FC = () => {
         setSaving(true);
         try {
             const userId = user?.id || 'default-user';
-            await window.electronAPI.settings.set({
+            const result = await window.electronAPI.settings.set({
                 key: 'RECEIPT_LAYOUT',
                 value: JSON.stringify(blocks),
                 userId
             });
+            if (!result?.success) {
+                throw new Error(result?.error || 'Failed to save layout');
+            }
             alert('Layout saved successfully!');
         } catch (error) {
             console.error('Failed to save layout:', error);
@@ -211,13 +224,24 @@ export const ReceiptDesigner: React.FC = () => {
 
     const handleDragEnd = (event: any) => {
         const { active, over } = event;
-        if (active.id !== over.id) {
-            setBlocks((items) => {
-                const oldIndex = items.findIndex((i) => i.id === active.id);
-                const newIndex = items.findIndex((i) => i.id === over.id);
-                return arrayMove(items, oldIndex, newIndex);
-            });
+
+        // Validate both active and over exist and are different
+        if (!active?.id || !over?.id || active.id === over.id) {
+            return; // Invalid drag operation, do nothing
         }
+
+        setBlocks((items) => {
+            const oldIndex = items.findIndex((i) => i.id === active.id);
+            const newIndex = items.findIndex((i) => i.id === over.id);
+
+            // Validate indices are valid
+            if (oldIndex === -1 || newIndex === -1) {
+                console.warn('Invalid drag operation - item not found', { oldIndex, newIndex });
+                return items; // Return unchanged
+            }
+
+            return arrayMove(items, oldIndex, newIndex);
+        });
     };
 
     const handleReset = () => {
@@ -225,6 +249,67 @@ export const ReceiptDesigner: React.FC = () => {
             setBlocks(DEFAULT_LAYOUT);
             setSelectedBlock(null);
         }
+    };
+
+    const handleExportTemplate = () => {
+        try {
+            const template = {
+                version: '1.0',
+                type: 'receipt',
+                name: 'Receipt Template',
+                blocks,
+                printerConfig,
+                createdAt: new Date().toISOString(),
+                createdBy: user?.name || 'Unknown'
+            };
+
+            const json = JSON.stringify(template, null, 2);
+            const blob = new Blob([json], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `receipt-template-${Date.now()}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            alert('Template exported successfully!');
+        } catch (error) {
+            alert(`Failed to export template: ${(error as Error).message}`);
+        }
+    };
+
+    const handleImportTemplate = () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+
+        input.onchange = async (e) => {
+            const file = (e.target as HTMLInputElement).files?.[0];
+            if (!file) return;
+
+            try {
+                const text = await file.text();
+                const template = JSON.parse(text);
+
+                if (template.version !== '1.0' || template.type !== 'receipt') {
+                    throw new Error('Invalid template file. Expected receipt template version 1.0.');
+                }
+
+                if (!template.blocks) {
+                    throw new Error('Invalid template file. Missing blocks.');
+                }
+
+                setBlocks(template.blocks);
+                if (template.printerConfig) {
+                    setPrinterConfig({ ...DEFAULT_RECEIPT_PRINTER_CONFIG, ...template.printerConfig });
+                }
+                setSelectedBlock(null);
+                alert('Template imported successfully!');
+            } catch (error) {
+                alert(`Failed to import template: ${(error as Error).message}`);
+            }
+        };
+
+        input.click();
     };
 
     const addBlock = (type: ReceiptBlock['type']) => {
@@ -250,7 +335,8 @@ export const ReceiptDesigner: React.FC = () => {
             'marginBottom' in updates ||
             'showVariantInfo' in updates ||
             'tableHeaderBold' in updates ||
-            'tableRowBold' in updates
+            'tableRowBold' in updates ||
+            'fontFamily' in updates
         ) {
             updatedBlock = { ...selectedBlock, styles: { ...selectedBlock.styles, ...updates } };
         } else {
@@ -269,7 +355,15 @@ export const ReceiptDesigner: React.FC = () => {
     const renderBlockContent = (block: ReceiptBlock) => {
         switch (block.type) {
             case 'logo':
-                return <div className="bg-gray-200 h-16 flex items-center justify-center text-xs text-gray-500 font-mono border border-dashed border-gray-400 mb-2">[LOGO]</div>;
+                const logoWidth = block.styles.fontSize || 60;
+                return (
+                    <div
+                        className="bg-gray-200 flex items-center justify-center text-xs text-gray-500 font-mono border border-dashed border-gray-400 mb-2"
+                        style={{ width: `${logoWidth}%`, margin: '0 auto', height: '64px' }}
+                    >
+                        [LOGO {logoWidth}%]
+                    </div>
+                );
 
             case 'header_row_1':
                 return (
@@ -302,7 +396,7 @@ export const ReceiptDesigner: React.FC = () => {
                             <div>Date: {new Date().toLocaleDateString('en-GB')}</div>
                         </div>
                         <div className="text-right">
-                            <div>Customer: Walk-in</div>
+                            <div>Customer: Walk-in Customer</div>
                         </div>
                     </div>
                 );
@@ -313,11 +407,11 @@ export const ReceiptDesigner: React.FC = () => {
                         <table className="w-full text-right" style={{ fontSize: 'inherit' }}>
                             <tbody>
                                 <tr><td>Total Items:</td><td>2</td></tr>
-                                <tr><td>Basic Amt:</td><td>128.57</td></tr>
-                                <tr><td>Less Discount:</td><td>0.00</td></tr>
-                                <tr><td>CGST:</td><td>3.21</td></tr>
-                                <tr><td>SGST:</td><td>3.21</td></tr>
-                                <tr className="font-bold border-t border-b border-dashed border-black">
+                                <tr><td>Taxable Amount (Excl. GST):</td><td>128.57</td></tr>
+                                <tr><td>Discount:</td><td>0.00</td></tr>
+                                <tr><td>CGST @2.5%:</td><td>3.21</td></tr>
+                                <tr><td>SGST @2.5%:</td><td>3.21</td></tr>
+                                <tr className="font-bold border-t border-dashed border-black">
                                     <td className="py-1">NET AMOUNT:</td>
                                     <td className="py-1">₹135.00</td>
                                 </tr>
@@ -457,8 +551,8 @@ export const ReceiptDesigner: React.FC = () => {
             </div>
 
             {/* RIGHT: Properties Panel */}
-            <div className="w-56 flex-shrink-0 bg-gray-50 dark:bg-gray-800/50 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
-                <div className="flex justify-between items-center mb-4">
+            <div className="w-56 flex-shrink-0 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-200 dark:border-gray-700 flex flex-col h-full overflow-hidden">
+                <div className="flex justify-between items-center p-3 pb-0">
                     <h3 className="text-lg font-bold">Properties</h3>
                     <div className="flex gap-1">
                         <Button size="sm" variant="secondary" onClick={handleReset} title="Reset to Default"><RotateCcw className="w-4 h-4" /></Button>
@@ -466,8 +560,23 @@ export const ReceiptDesigner: React.FC = () => {
                     </div>
                 </div>
 
-                {selectedBlock ? (
-                    <div className="space-y-4">
+                <div className="flex-1 overflow-y-auto p-3 pt-4">
+                    <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mb-4">
+                        <h4 className="text-xs font-bold text-gray-500 uppercase mb-2">Template Backup</h4>
+                        <div className="flex gap-2">
+                        <Button size="sm" variant="outline" onClick={handleExportTemplate} title="Export template as JSON">
+                            <Download className="w-4 h-4" />
+                            Export
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={handleImportTemplate} title="Import template from JSON">
+                            <Upload className="w-4 h-4" />
+                            Import
+                        </Button>
+                        </div>
+                    </div>
+
+                    {selectedBlock ? (
+                        <div className="space-y-4">
                         <div>
                             <label className="text-xs font-bold text-gray-500 uppercase">Type: {selectedBlock.type}</label>
                         </div>
@@ -510,20 +619,48 @@ export const ReceiptDesigner: React.FC = () => {
                             </div>
                         )}
 
-                        <div className="flex flex-col gap-2">
-                            <label className="text-xs font-bold text-gray-500 uppercase">Align & Style</label>
-                            <div className="flex bg-white dark:bg-gray-900 rounded border border-gray-200 dark:border-gray-700 p-1">
-                                <button onClick={() => updateSelectedBlock({ align: 'left' })} className={`flex-1 p-1 rounded ${selectedBlock.styles.align === 'left' ? 'bg-gray-200 dark:bg-gray-700' : ''}`}><AlignLeft className="w-4 h-4 mx-auto" /></button>
-                                <button onClick={() => updateSelectedBlock({ align: 'center' })} className={`flex-1 p-1 rounded ${selectedBlock.styles.align === 'center' ? 'bg-gray-200 dark:bg-gray-700' : ''}`}><AlignCenter className="w-4 h-4 mx-auto" /></button>
-                                <button onClick={() => updateSelectedBlock({ align: 'right' })} className={`flex-1 p-1 rounded ${selectedBlock.styles.align === 'right' ? 'bg-gray-200 dark:bg-gray-700' : ''}`}><AlignRight className="w-4 h-4 mx-auto" /></button>
-                                <button onClick={() => updateSelectedBlock({ bold: !selectedBlock.styles.bold })} className={`flex-1 p-1 rounded border-l ${selectedBlock.styles.bold ? 'bg-gray-200 dark:bg-gray-700' : ''}`}><Bold className="w-4 h-4 mx-auto" /></button>
+                        {selectedBlock.type !== 'logo' && (
+                            <div className="flex flex-col gap-2">
+                                <label className="text-xs font-bold text-gray-500 uppercase">Align & Style</label>
+                                <div className="flex bg-white dark:bg-gray-900 rounded border border-gray-200 dark:border-gray-700 p-1">
+                                    <button onClick={() => updateSelectedBlock({ align: 'left' })} className={`flex-1 p-1 rounded ${selectedBlock.styles.align === 'left' ? 'bg-gray-200 dark:bg-gray-700' : ''}`}><AlignLeft className="w-4 h-4 mx-auto" /></button>
+                                    <button onClick={() => updateSelectedBlock({ align: 'center' })} className={`flex-1 p-1 rounded ${selectedBlock.styles.align === 'center' ? 'bg-gray-200 dark:bg-gray-700' : ''}`}><AlignCenter className="w-4 h-4 mx-auto" /></button>
+                                    <button onClick={() => updateSelectedBlock({ align: 'right' })} className={`flex-1 p-1 rounded ${selectedBlock.styles.align === 'right' ? 'bg-gray-200 dark:bg-gray-700' : ''}`}><AlignRight className="w-4 h-4 mx-auto" /></button>
+                                    <button onClick={() => updateSelectedBlock({ bold: !selectedBlock.styles.bold })} className={`flex-1 p-1 rounded border-l ${selectedBlock.styles.bold ? 'bg-gray-200 dark:bg-gray-700' : ''}`}><Bold className="w-4 h-4 mx-auto" /></button>
+                                </div>
                             </div>
-                        </div>
+                        )}
+
+                        {selectedBlock.type !== 'logo' && (
+                            <div>
+                                <label className="text-xs font-bold text-gray-500 uppercase">Font Family</label>
+                                <select
+                                    className="input w-full text-sm"
+                                    value={selectedBlock.styles.fontFamily || 'Arial, sans-serif'}
+                                    onChange={(e) => updateSelectedBlock({ fontFamily: e.target.value })}
+                                >
+                                    <option value="Arial, sans-serif">Arial</option>
+                                    <option value="'Times New Roman', serif">Times New Roman</option>
+                                    <option value="'Courier New', monospace">Courier New</option>
+                                    <option value="Georgia, serif">Georgia</option>
+                                    <option value="Verdana, sans-serif">Verdana</option>
+                                    <option value="Tahoma, sans-serif">Tahoma</option>
+                                </select>
+                            </div>
+                        )}
 
                         <div className="grid grid-cols-2 gap-2">
                             <div>
-                                <label className="text-xs font-bold text-gray-500 uppercase">Size</label>
-                                <Input type="number" value={selectedBlock.styles.fontSize} onChange={(e) => updateSelectedBlock({ fontSize: parseInt(e.target.value) })} />
+                                <label className="text-xs font-bold text-gray-500 uppercase">
+                                    {selectedBlock.type === 'logo' ? 'Width %' : 'Size'}
+                                </label>
+                                <Input
+                                    type="number"
+                                    min={selectedBlock.type === 'logo' ? 10 : 6}
+                                    max={selectedBlock.type === 'logo' ? 100 : 72}
+                                    value={selectedBlock.styles.fontSize || (selectedBlock.type === 'logo' ? 60 : 12)}
+                                    onChange={(e) => updateSelectedBlock({ fontSize: parseInt(e.target.value) })}
+                                />
                             </div>
                             <div>
                                 <label className="text-xs font-bold text-gray-500 uppercase">Visible</label>
@@ -541,10 +678,11 @@ export const ReceiptDesigner: React.FC = () => {
                                 <Input type="number" value={selectedBlock.styles.marginBottom || 0} onChange={(e) => updateSelectedBlock({ marginBottom: parseInt(e.target.value) })} />
                             </div>
                         </div>
-                    </div>
-                ) : (
-                    <div className="text-center text-gray-400 mt-10 italic text-sm">Select a block to edit</div>
-                )}
+                        </div>
+                    ) : (
+                        <div className="text-center text-gray-400 mt-10 italic text-sm">Select a block to edit</div>
+                    )}
+                </div>
             </div>
         </div>
     );

@@ -12,6 +12,7 @@ export interface Invoice {
     itemCount: number; // always present (from list query)
     items: Array<{    // populated only on detail fetch (GET /invoices/:id)
         quantity: number;
+        sellingPrice: number;
         product: {
             name: string;
         };

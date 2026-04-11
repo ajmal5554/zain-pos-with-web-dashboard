@@ -1,12 +1,22 @@
+import * as React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import type { ValueType, NameType } from 'recharts/types/component/DefaultTooltipContent';
-import { AlertTriangle, BrainCircuit, TrendingUp } from 'lucide-react';
-import { addMonths, format, subMonths } from 'date-fns';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import type { ValueType } from 'recharts/types/component/DefaultTooltipContent';
+import { AlertTriangle, BrainCircuit, TrendingUp, Calendar, Zap, Sparkles, Activity } from 'lucide-react';
+import { format, addMonths } from 'date-fns';
+import { StatCard } from '@/components/shared/StatCard';
+import { 
+  Card, 
+  CardContent, 
+  CardDescription, 
+  CardHeader, 
+  CardTitle 
+} from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import api from '@/lib/api';
 import { formatCurrency } from '@/lib/format';
 import { isDemoModeEnabled } from '@/lib/demo';
+import { cn } from '@/lib/utils';
 
 interface DailyPoint {
     date: string;
@@ -68,7 +78,8 @@ export default function ForecastingPage() {
             }
 
             const endDate = new Date();
-            const startDate = subMonths(endDate, 12);
+            const startDate = new Date();
+            startDate.setMonth(startDate.getMonth() - 12);
             const response = await api.get<DailyPoint[]>('/sales/daily', {
                 params: {
                     startDate: startDate.toISOString(),
@@ -95,88 +106,130 @@ export default function ForecastingPage() {
     const growth = averageMonthly ? ((nextPrediction - averageMonthly) / averageMonthly) * 100 : 0;
 
     if (loading) {
-        return <div className="dashboard-surface rounded-[1.5rem] px-6 py-16 text-center text-sm text-slate-500 dark:text-slate-400">Loading forecasting...</div>;
+        return (
+            <div className="flex flex-col items-center justify-center p-24 text-center">
+                 <div className="h-14 w-14 rounded-full bg-muted flex items-center justify-center mb-6">
+                     <BrainCircuit className="h-7 w-7 text-muted-foreground" />
+                 </div>
+                 <p className="text-sm text-muted-foreground">Loading forecast...</p>
+            </div>
+        );
     }
 
     return (
-        <div className="space-y-6">
-            <div>
-                <h1 className="dashboard-section-title">Forecasting</h1>
-                <p className="dashboard-section-copy">Revenue outlook built from historical monthly sales patterns.</p>
+        <div className="flex-1 space-y-4 pt-4 pb-12">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between">
+                <div>
+                    <h2 className="text-2xl font-bold tracking-tight">Forecasting</h2>
+                    <p className="text-sm text-muted-foreground">
+                        Revenue outlook based on past sales.
+                    </p>
+                </div>
+                <div className="flex items-center gap-2">
+                     <Badge variant="secondary" className="gap-1.5">
+                         <Sparkles className="h-3 w-3" />
+                         AI Forecast
+                     </Badge>
+                </div>
             </div>
 
             {error && (
-                <div className="rounded-[1.5rem] border border-rose-200 bg-rose-50/80 px-5 py-4 text-sm font-medium text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/20 dark:text-rose-300">
-                    <div className="flex items-center gap-2">
-                        <AlertTriangle className="h-4 w-4" />
-                        {error}
-                    </div>
+                <div className="p-3 rounded-md bg-destructive/10 border border-destructive/20 text-destructive text-sm flex items-center gap-2">
+                    <AlertTriangle className="h-4 w-4" />
+                    <span>{error}</span>
                 </div>
             )}
 
-            <div className="grid gap-4 md:grid-cols-3">
-                <Card>
-                    <CardContent className="flex items-center gap-4 p-6">
-                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
-                            <BrainCircuit className="h-5 w-5" />
-                        </div>
-                        <div>
-                            <p className="text-sm text-slate-500 dark:text-slate-400">Next Month Projection</p>
-                            <p className="text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-100">{formatCurrency(nextPrediction)}</p>
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="flex items-center gap-4 p-6">
-                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
-                            <TrendingUp className="h-5 w-5" />
-                        </div>
-                        <div>
-                            <p className="text-sm text-slate-500 dark:text-slate-400">Growth vs Avg</p>
-                            <p className="text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-100">{growth.toFixed(1)}%</p>
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="flex items-center gap-4 p-6">
-                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
-                            <TrendingUp className="h-5 w-5" />
-                        </div>
-                        <div>
-                            <p className="text-sm text-slate-500 dark:text-slate-400">Latest Month</p>
-                            <p className="text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-100">{formatCurrency(lastRevenue)}</p>
-                        </div>
-                    </CardContent>
-                </Card>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <StatCard title="Next Month Prediction" value={formatCurrency(nextPrediction)} icon={<BrainCircuit className="h-4 w-4" />} trend={Number(growth.toFixed(1))} trendLabel="vs historical avg" />
+                <StatCard title="Expected Growth" value={`${growth.toFixed(1)}%`} icon={<Activity className="h-4 w-4" />} />
+                <StatCard title="Last Month Revenue" value={formatCurrency(lastRevenue)} icon={<Calendar className="h-4 w-4" />} />
             </div>
 
-            <Card>
-                <CardHeader>
-                    <CardTitle className="text-xl">Revenue Outlook</CardTitle>
+            <Card className="overflow-hidden">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <div className="space-y-1">
+                        <CardTitle className="text-base font-semibold">Revenue Forecast Model</CardTitle>
+                        <CardDescription className="text-xs">Historical data vs projected growth.</CardDescription>
+                    </div>
+                    <div className="flex items-center gap-4 text-xs">
+                         <div className="flex items-center gap-2">
+                              <div className="h-2 w-2 rounded-full bg-slate-400" />
+                              <span className="text-muted-foreground">Actual Revenue</span>
+                         </div>
+                         <div className="flex items-center gap-2">
+                              <div className="h-2 w-2 rounded-full bg-primary" />
+                              <span className="text-muted-foreground">Predicted Revenue</span>
+                         </div>
+                    </div>
                 </CardHeader>
-                <CardContent>
-                    <ResponsiveContainer width="100%" height={360}>
-                        <AreaChart data={chartData}>
-                            <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                            <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                            <YAxis tickFormatter={(value) => formatCurrency(value).replace('.00', '')} />
-                            <Tooltip
-                                formatter={(value: ValueType, name: NameType) => {
-                                    const normalized = typeof value === 'number'
-                                        ? value
-                                        : typeof value === 'string'
-                                            ? Number(value)
-                                            : null;
-                                    return [
-                                        normalized !== null && !Number.isNaN(normalized) ? formatCurrency(normalized) : '-',
-                                        name === 'predicted' ? 'Forecast' : 'Revenue'
-                                    ];
-                                }}
+                <CardContent className="pt-4">
+                    <ResponsiveContainer width="100%" height={350}>
+                        <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                            <defs>
+                                <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.15}/>
+                                    <stop offset="95%" stopColor="#94a3b8" stopOpacity={0}/>
+                                </linearGradient>
+                                <linearGradient id="colorPredicted" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.2}/>
+                                    <stop offset="95%" stopColor="var(--primary)" stopOpacity={0}/>
+                                </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
+                            <XAxis 
+                                dataKey="month" 
+                                axisLine={false}
+                                tickLine={false}
+                                tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }}
+                                dy={10}
                             />
-                            <Area type="monotone" dataKey="revenue" stroke="#0f172a" fill="#cbd5e1" fillOpacity={0.5} />
-                            <Area type="monotone" dataKey="predicted" stroke="#0ea5e9" fill="#bae6fd" fillOpacity={0.7} strokeDasharray="6 4" />
+                            <YAxis 
+                                axisLine={false}
+                                tickLine={false}
+                                tickFormatter={(value) => `\u20B9${(value / 1000).toFixed(0)}k`}
+                                tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }}
+                            />
+                            <Tooltip
+                                contentStyle={{ 
+                                    backgroundColor: 'var(--background)', 
+                                    borderRadius: '8px', 
+                                    border: '1px solid var(--border)', 
+                                    boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
+                                }}
+                                itemStyle={{ fontSize: '14px', fontWeight: 600 }}
+                                labelStyle={{ color: 'var(--muted-foreground)', fontSize: '12px', marginBottom: '8px' }}
+                                formatter={(value: ValueType) => [formatCurrency(Number(value)), 'Revenue']}
+                            />
+                            <Area 
+                                type="monotone" 
+                                dataKey="revenue" 
+                                stroke="#64748b" 
+                                strokeWidth={2}
+                                fillOpacity={1} 
+                                fill="url(#colorRevenue)" 
+                            />
+                            <Area 
+                                type="monotone" 
+                                dataKey="predicted" 
+                                stroke="var(--primary)" 
+                                strokeWidth={2}
+                                strokeDasharray="5 5"
+                                fillOpacity={1} 
+                                fill="url(#colorPredicted)" 
+                            />
                         </AreaChart>
                     </ResponsiveContainer>
+                    
+                    <div className="mt-8 p-4 rounded-md bg-muted/50 border flex items-start gap-4">
+                         <div className="mt-0.5">
+                             <Zap className="h-5 w-5 text-muted-foreground" />
+                         </div>
+                         <div>
+                             <p className="text-sm font-semibold">How this works</p>
+                             <p className="text-sm text-muted-foreground mt-1">This forecast uses historical sales data to predict future revenue, giving more weight to recent months to capture current trends.</p>
+                         </div>
+                    </div>
                 </CardContent>
             </Card>
         </div>

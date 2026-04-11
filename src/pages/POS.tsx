@@ -12,6 +12,7 @@ import { useLocation } from 'react-router-dom';
 
 export const POS: React.FC = () => {
     const location = useLocation();
+    const leaveWarningMessage = 'Navigating away will close the update option for this saved sale. You can still use refund/exchange later, but you will lose the direct update option now. Continue?';
     const [shopSettings, setShopSettings] = useState<any>(null);
 
     // Component State
@@ -30,6 +31,9 @@ export const POS: React.FC = () => {
     // Post-Sale Edit State
     const [currentSaleId, setCurrentSaleId] = useState<string | null>(null);
     const [originalPaidAmount, setOriginalPaidAmount] = useState(0);
+    const [originalSaleData, setOriginalSaleData] = useState<any>(null);
+    const [hasChanges, setHasChanges] = useState(false);
+    const [isEditMode, setIsEditMode] = useState(false);
 
     // Split Payment States
     const [splitAmounts, setSplitAmounts] = useState({ CASH: 0, CARD: 0, UPI: 0 });
@@ -65,6 +69,16 @@ export const POS: React.FC = () => {
     useEffect(() => {
         loadData();
     }, []);
+
+    useEffect(() => {
+        return () => {
+            // Preserve unfinished draft carts, but do not carry finalized/edit-loaded sales
+            // into a fresh POS session after leaving this screen.
+            if (currentSaleId) {
+                clearCart();
+            }
+        };
+    }, [currentSaleId, clearCart]);
 
     // Auto-sync paidAmount for non-cash payments when discount changes
     // CASH: let it stay (customer may over-pay and receive change)
@@ -109,6 +123,140 @@ export const POS: React.FC = () => {
         return () => clearTimeout(timer);
     }, [searchQuery]);
 
+    // Note: isEditMode and hasChanges are now set in loadData() to avoid race conditions
+
+    // Mark as changed when user modifies anything in edit mode
+    const markAsChanged = useCallback(() => {
+        if (isEditMode) {
+            setHasChanges(true);
+        }
+    }, [isEditMode]);
+
+    const normalizedEditState = useMemo(() => {
+        const normalizeItems = (saleItems: any[] = []) =>
+            saleItems
+                .map((item: any) => ({
+                    variantId: item.variantId || '',
+                    productName: item.productName || '',
+                    variantInfo: item.variantInfo || '',
+                    quantity: Number(item.quantity || 0),
+                    mrp: Number(item.mrp || item.sellingPrice || 0),
+                    sellingPrice: Number(item.sellingPrice || 0),
+                    discount: Number(item.discount || 0),
+                    taxRate: Number(item.taxRate || 0),
+                }))
+                .sort((a: any, b: any) => a.variantId.localeCompare(b.variantId));
+
+        const normalizePayments = (payments: any[] = []) =>
+            payments
+                .map((payment: any) => ({
+                    paymentMode: payment.paymentMode || '',
+                    amount: Number(payment.amount || 0),
+                }))
+                .sort((a: any, b: any) => a.paymentMode.localeCompare(b.paymentMode));
+
+        const currentState = {
+            customerName: customerName || 'Walk-in Customer',
+            discount: Number(parseFloat(discountAmount) || 0),
+            paymentMethod,
+            paidAmount: paymentMethod === 'SPLIT'
+                ? Number(Object.values(splitAmounts).reduce((a, b) => a + b, 0))
+                : Number(parseFloat(paidAmount) || 0),
+            items: normalizeItems(items),
+            payments: paymentMethod === 'SPLIT'
+                ? normalizePayments(
+                    Object.entries(splitAmounts)
+                        .filter(([_, amount]) => amount > 0)
+                        .map(([mode, amount]) => ({ paymentMode: mode, amount }))
+                )
+                : normalizePayments([{ paymentMode: paymentMethod, amount: Math.max(0, Number(parseFloat(paidAmount) || 0)) }]),
+        };
+
+        const originalState = !originalSaleData ? null : {
+            customerName: originalSaleData.customerName || 'Walk-in Customer',
+            discount: Number(originalSaleData.discount || 0),
+            paymentMethod: originalSaleData.paymentMethod || 'CASH',
+            paidAmount: Number(originalSaleData.paidAmount || 0),
+            items: normalizeItems(originalSaleData.items || []),
+            payments: normalizePayments(
+                (originalSaleData.paymentMethod === 'SPLIT' && originalSaleData.payments?.length)
+                    ? originalSaleData.payments
+                    : [{ paymentMode: originalSaleData.paymentMethod || 'CASH', amount: originalSaleData.paidAmount || 0 }]
+            ),
+        };
+
+        return { currentState, originalState };
+    }, [
+        originalSaleData,
+        items,
+        customerName,
+        discountAmount,
+        paidAmount,
+        paymentMethod,
+        splitAmounts,
+    ]);
+
+    const hasDetectedChanges = useMemo(() => {
+        if (!isEditMode || !normalizedEditState.originalState) {
+            return false;
+        }
+
+        return JSON.stringify(normalizedEditState.currentState) !== JSON.stringify(normalizedEditState.originalState);
+    }, [isEditMode, normalizedEditState]);
+
+    const hasPostSaveUpdateWindow = useMemo(() => {
+        return !!currentSaleId && isEditMode && !!originalSaleData;
+    }, [currentSaleId, isEditMode, originalSaleData]);
+
+    const releasePostSaveUpdateWindow = useCallback(() => {
+        clearCart();
+        setPaidAmount('');
+        setDiscountAmount('');
+        setShowPayment(false);
+        setCurrentSaleId(null);
+        setOriginalPaidAmount(0);
+        setCustomerName('Walk-in Customer');
+        setSaleSuccess(false);
+        setPrintError(false);
+        setIsEditMode(false);
+        setHasChanges(false);
+        setOriginalSaleData(null);
+        setSplitAmounts({ CASH: 0, CARD: 0, UPI: 0 });
+    }, [clearCart]);
+
+    useEffect(() => {
+        window.posLeaveGuard = {
+            isActive: () => hasPostSaveUpdateWindow,
+            confirmLeave: () => {
+                if (!hasPostSaveUpdateWindow) return true;
+                const confirmed = window.confirm(leaveWarningMessage);
+                if (confirmed) {
+                    releasePostSaveUpdateWindow();
+                }
+                return confirmed;
+            }
+        };
+
+        return () => {
+            if (window.posLeaveGuard?.confirmLeave) {
+                delete window.posLeaveGuard;
+            }
+        };
+    }, [hasPostSaveUpdateWindow, releasePostSaveUpdateWindow]);
+
+    useEffect(() => {
+        if (!hasPostSaveUpdateWindow) return;
+
+        const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+            event.preventDefault();
+            event.returnValue = leaveWarningMessage;
+            return leaveWarningMessage;
+        };
+
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }, [hasPostSaveUpdateWindow, leaveWarningMessage]);
+
     const loadData = async () => {
         // Check for sale in location state (Edit/Exchange mode)
         const saleToEdit = location.state?.sale;
@@ -121,6 +269,13 @@ export const POS: React.FC = () => {
             setPaidAmount(saleToEdit.paidAmount?.toString() || '');
             setDiscountAmount(saleToEdit.discount?.toString() || '');
             setOriginalPaidAmount(saleToEdit.paidAmount || 0);
+            
+            // Store original sale data for change detection
+            setOriginalSaleData(saleToEdit);
+            
+            // Set edit mode BEFORE loading items so markAsChanged doesn't fire
+            setIsEditMode(true);
+            setHasChanges(false);
 
             // Load original invoice items into cart for true edit mode
             (saleToEdit.items || []).forEach((item: any) => {
@@ -136,6 +291,9 @@ export const POS: React.FC = () => {
                     taxRate: item.taxRate || 0,
                 });
             });
+            
+            // Ensure hasChanges stays false after loading items
+            setHasChanges(false);
 
             // Pre-fill split amounts if invoice is split-paid
             if (saleToEdit.paymentMethod === 'SPLIT' && saleToEdit.payments?.length) {
@@ -151,12 +309,15 @@ export const POS: React.FC = () => {
             if (items.length === 0) {
                 setCurrentSaleId(null);
                 setOriginalPaidAmount(0);
+                setOriginalSaleData(null);
                 setPaidAmount('');
                 setDiscountAmount('');
                 setShowPayment(false);
                 setSplitAmounts({ CASH: 0, CARD: 0, UPI: 0 });
                 setCustomerName('Walk-in Customer');
             }
+            setIsEditMode(false);
+            setHasChanges(false);
             // Always load the next bill number
             await loadNextBillNo();
         }
@@ -300,6 +461,7 @@ export const POS: React.FC = () => {
                     discount: 0,
                     taxRate: variant.product?.taxRate || 0,
                 });
+                markAsChanged();
                 setBarcode('');
                 setTimeout(() => barcodeInputRef.current?.focus(), 20);
             } else {
@@ -328,6 +490,7 @@ export const POS: React.FC = () => {
             discount: 0,
             taxRate: variant.product.taxRate,
         });
+        markAsChanged();
         setTimeout(() => barcodeInputRef.current?.focus(), 20);
     };
 
@@ -336,6 +499,22 @@ export const POS: React.FC = () => {
             alert('Cart is empty!');
             return;
         }
+        
+        // Validate discount doesn't exceed total
+        const discountValue = parseFloat(discountAmount) || 0;
+        const total = getGrandTotal();
+        
+        if (discountValue > total) {
+            alert(
+                `Invalid discount!\n\n` +
+                `Discount: ₹${discountValue.toFixed(2)}\n` +
+                `Bill Total: ₹${total.toFixed(2)}\n\n` +
+                `Discount cannot exceed bill total.`
+            );
+            discountInputRef.current?.focus();
+            return;
+        }
+        
         setPaidAmount(getGrandTotal().toFixed(2));
         setDiscountAmount('');
         setShowPayment(true);
@@ -419,6 +598,9 @@ export const POS: React.FC = () => {
         setCustomerName('Walk-in Customer');
         setSaleSuccess(false);
         setPrintError(false);
+        setIsEditMode(false);
+        setHasChanges(false);
+        setOriginalSaleData(null);
         loadNextBillNo();
         loadProducts(); // Refresh stock
         // Focus barcode
@@ -429,6 +611,23 @@ export const POS: React.FC = () => {
         if (items.length === 0) return;
 
         const { tax, discount, finalTotal, paid, change } = calculateTotals();
+
+        // Validate split payment amounts sum to total
+        if (paymentMethod === 'SPLIT') {
+            const splitTotal = Object.values(splitAmounts).reduce((a, b) => a + b, 0);
+            const difference = Math.abs(splitTotal - finalTotal);
+            
+            if (difference > 0.01) {  // Allow 1 paisa rounding difference
+                alert(
+                    `Split payment error!\n\n` +
+                    `Bill Total: ₹${finalTotal.toFixed(2)}\n` +
+                    `Split Total: ₹${splitTotal.toFixed(2)}\n` +
+                    `Difference: ₹${difference.toFixed(2)}\n\n` +
+                    `Please adjust payment amounts.`
+                );
+                return;
+            }
+        }
 
         // Permission: Max Discount Check
         if (user?.role !== 'ADMIN' && discount > (user?.maxDiscount || 0)) {
@@ -445,6 +644,7 @@ export const POS: React.FC = () => {
 
         try {
             const subtotal = getSubtotal();
+            // Use adjusted tax (after discount) for CGST/SGST split
             const cgst = tax / 2;
             const sgst = tax / 2;
 
@@ -493,6 +693,9 @@ export const POS: React.FC = () => {
                         }]
                 };
 
+                // NOTE: Change detection is now handled by useEffect and button disable state
+                // No need to validate here - button is already disabled if no changes
+
                 const updateResult = await (window.electronAPI as any).sales.updateSale({
                     saleId: currentSaleId,
                     saleData: saleUpdateData,
@@ -501,6 +704,11 @@ export const POS: React.FC = () => {
 
                 if (updateResult.success) {
                     const sale = updateResult.data;
+                    setCurrentSaleId(sale.id);
+                    setOriginalSaleData(sale);
+                    setOriginalPaidAmount(sale.paidAmount || 0);
+                    setIsEditMode(true);
+                    setHasChanges(false);
                     if (shouldPrint) {
                         await printReceipt(sale);
                     }
@@ -556,13 +764,16 @@ export const POS: React.FC = () => {
             if (result.success) {
                 const sale = result.data;
                 setBillNo(sale.billNo); // Sync with server-assigned bill number
+                setCurrentSaleId(sale.id);
+                setOriginalSaleData(sale);
+                setOriginalPaidAmount(sale.paidAmount || 0);
+                setIsEditMode(true);
+                setHasChanges(false);
                 // Print receipt
                 if (shouldPrint) {
                     await printReceipt(sale);
                 }
 
-                // Set Current Sale ID to allow Review
-                setCurrentSaleId(sale.id);
                 setSaleSuccess(true);
                 setTimeout(() => setSaleSuccess(false), 2500);
             } else {
@@ -660,7 +871,7 @@ export const POS: React.FC = () => {
                         <label className="text-gray-500 font-bold text-xs uppercase">Customer Name</label>
                         <Input
                             value={customerName}
-                            onChange={(e) => setCustomerName(e.target.value)}
+                            onChange={(e) => { setCustomerName(e.target.value); markAsChanged(); }}
                             placeholder="Walk-in Customer"
                             className="h-9"
                         />
@@ -727,11 +938,11 @@ export const POS: React.FC = () => {
 
                                         {/* Qty Controls */}
                                         <div className="flex items-center justify-center gap-1">
-                                            <button onClick={() => updateQuantity(item.variantId, Math.max(1, item.quantity - 1))} className="p-0.5 hover:bg-gray-200 rounded text-gray-500">
+                                            <button onClick={() => { updateQuantity(item.variantId, Math.max(1, item.quantity - 1)); markAsChanged(); }} className="p-0.5 hover:bg-gray-200 rounded text-gray-500">
                                                 <Minus className="w-3 h-3" />
                                             </button>
                                             <span className="font-bold w-6 text-center">{item.quantity}</span>
-                                            <button onClick={() => updateQuantity(item.variantId, item.quantity + 1)} className="p-0.5 hover:bg-gray-200 rounded text-gray-500">
+                                            <button onClick={() => { updateQuantity(item.variantId, item.quantity + 1); markAsChanged(); }} className="p-0.5 hover:bg-gray-200 rounded text-gray-500">
                                                 <Plus className="w-3 h-3" />
                                             </button>
                                         </div>
@@ -744,7 +955,14 @@ export const POS: React.FC = () => {
                                         {/* Delete Button */}
                                         <div className="text-center">
                                             <button
-                                                onClick={() => removeItem(item.variantId)}
+                                                onClick={() => {
+                                                    if (showPayment && items.length === 1) {
+                                                        alert('You cannot remove the last item from this sale here. Use New to cancel this bill or add another item first.');
+                                                        return;
+                                                    }
+                                                    removeItem(item.variantId);
+                                                    markAsChanged();
+                                                }}
                                                 className="p-1 text-red-500 hover:bg-red-50 rounded"
                                             >
                                                 <Trash2 className="w-4 h-4" />
@@ -858,7 +1076,7 @@ export const POS: React.FC = () => {
                                                 ref={discountInputRef}
                                                 type="number"
                                                 value={discountAmount}
-                                                onChange={(e) => setDiscountAmount(e.target.value)}
+                                                onChange={(e) => { setDiscountAmount(e.target.value); markAsChanged(); }}
                                                 className="w-24 h-11 font-bold border-orange-200 focus:border-orange-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                                 placeholder="0"
                                             />
@@ -880,6 +1098,7 @@ export const POS: React.FC = () => {
                                                             key={m}
                                                             onClick={() => {
                                                                 setPaymentMethod(m as any);
+                                                                markAsChanged();
                                                                 if (m === 'SPLIT') setSplitAmounts({ CASH: 0, CARD: 0, UPI: 0 });
                                                             }}
                                                             className={`px-3 h-full rounded text-[11px] font-bold uppercase transition-all ${colorClasses[m]}`}
@@ -902,7 +1121,7 @@ export const POS: React.FC = () => {
                                                         <Input
                                                             type="number"
                                                             value={(splitAmounts as any)[mode] || ''}
-                                                            onChange={(e) => setSplitAmounts(prev => ({ ...prev, [mode]: parseFloat(e.target.value) || 0 }))}
+                                                            onChange={(e) => { setSplitAmounts(prev => ({ ...prev, [mode]: parseFloat(e.target.value) || 0 })); markAsChanged(); }}
                                                             className="h-11 text-center font-bold border-orange-300 bg-orange-50/30 px-2 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                                             placeholder="0"
                                                         />
@@ -931,7 +1150,7 @@ export const POS: React.FC = () => {
                                                         ref={paidAmountInputRef}
                                                         type="number"
                                                         value={paidAmount}
-                                                        onChange={(e) => setPaidAmount(e.target.value)}
+                                                        onChange={(e) => { setPaidAmount(e.target.value); markAsChanged(); }}
                                                         className="h-11 text-lg font-bold border-2 border-primary-500 px-3 selection:bg-primary-100 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                                         placeholder="0"
                                                     />
@@ -963,9 +1182,10 @@ export const POS: React.FC = () => {
 
                                             <Button
                                                 variant="outline"
-                                                className="h-11 px-4 flex items-center gap-2 font-bold border-2 border-blue-200 text-blue-600 hover:bg-blue-50 rounded-lg transition-all whitespace-nowrap"
+                                                className="h-11 px-4 flex items-center gap-2 font-bold border-2 border-blue-200 text-blue-600 hover:bg-blue-50 rounded-lg transition-all whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                                                 onClick={() => handleCompleteSale(false)}
-                                                disabled={processing}
+                                                disabled={processing || (!!currentSaleId && !hasDetectedChanges)}
+                                                title={currentSaleId && !hasDetectedChanges ? "No changes to update" : ""}
                                             >
                                                 <Save className="w-4 h-4" />
                                                 <span className="text-sm uppercase">
@@ -975,9 +1195,10 @@ export const POS: React.FC = () => {
 
                                             <Button
                                                 variant="success"
-                                                className="h-11 px-5 flex items-center gap-2 font-bold bg-gradient-to-r from-green-600 to-green-500 hover:from-green-700 hover:to-green-600 text-white rounded-lg shadow-md transition-all active:scale-[0.98] border-0 whitespace-nowrap"
+                                                className="h-11 px-5 flex items-center gap-2 font-bold bg-gradient-to-r from-green-600 to-green-500 hover:from-green-700 hover:to-green-600 text-white rounded-lg shadow-md transition-all active:scale-[0.98] border-0 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:from-green-600 disabled:hover:to-green-500"
                                                 onClick={() => handleCompleteSale(true)}
-                                                disabled={processing}
+                                                disabled={processing || (!!currentSaleId && !hasDetectedChanges)}
+                                                title={currentSaleId && !hasDetectedChanges ? "No changes to update" : ""}
                                             >
                                                 <Printer className="w-4 h-4" />
                                                 <span className="text-sm font-black uppercase">

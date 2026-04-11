@@ -5,7 +5,6 @@ import { Skeleton } from '../components/ui/Skeleton';
 import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
 import { db } from '../lib/db';
-import { auditService } from '../services/audit.service';
 import { printService } from '../services/print.service';
 import { format, isSameDay, isSameWeek, isSameMonth, isSameYear, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, startOfYear, endOfYear, addDays, addWeeks, addMonths, addYears } from 'date-fns';
 import { formatIndianCurrency } from '../lib/format';
@@ -15,6 +14,18 @@ import { useNavigate } from 'react-router-dom';
 import { AlertCircle, ArrowLeftRight, History, Minus, Plus, Undo2 } from 'lucide-react';
 
 type TimePeriod = 'day' | 'week' | 'month' | 'year' | 'all';
+
+const formatDateInputValue = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+const parseDateInputValue = (value: string): Date => {
+    const [year, month, day] = value.split('-').map(Number);
+    return new Date(year, (month || 1) - 1, day || 1);
+};
 
 const toValidDate = (value: unknown): Date | null => {
     if (!value) return null;
@@ -27,11 +38,20 @@ const formatDateSafe = (value: unknown, pattern: string, fallback = 'Invalid dat
     return parsed ? format(parsed, pattern) : fallback;
 };
 
+const extractReplacementBillNo = (remarks: string | undefined): string | null => {
+    if (!remarks) return null;
+    const match = remarks.match(/Replacement Bill #(\d+)/);
+    return match?.[1] || null;
+};
+
+const isReplacementSale = (sale: any): boolean =>
+    sale?.paymentMethod === 'EXCHANGE' || (sale?.remarks || '').includes('Replacement sale for Invoice');
+
 export const Sales: React.FC = () => {
     const [sales, setSales] = useState<any[]>([]);
     const [searchQuery, setSearchQuery] = useState('');
     const [timePeriod, setTimePeriod] = useState<TimePeriod>('day');
-    const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+    const [selectedDate, setSelectedDate] = useState(formatDateInputValue(new Date()));
     const [paymentFilter, setPaymentFilter] = useState<string>('all');
     const [staffFilter, setStaffFilter] = useState<string>('all');
     const [staffOptions, setStaffOptions] = useState<Array<{ id: string; name: string }>>([]);
@@ -62,6 +82,21 @@ export const Sales: React.FC = () => {
     const [refundReason, setRefundReason] = useState('');
     const [replacementPaymentMethod, setReplacementPaymentMethod] = useState<'CASH' | 'CARD' | 'UPI'>('CASH');
     const [diffAmount, setDiffAmount] = useState(0);
+
+    const getEffectiveLineTotal = (item: any) => {
+        const explicitTotal = Number(item?.total ?? 0);
+        if (explicitTotal > 0) return explicitTotal;
+        return Number(item?.sellingPrice || 0) * Number(item?.quantity || 0);
+    };
+
+    const getEffectiveUnitAmount = (item: any) => {
+        const baseQty = Number(item?.quantity || 0);
+        if (baseQty <= 0) return Number(item?.sellingPrice || 0);
+        return getEffectiveLineTotal(item) / baseQty;
+    };
+
+    const getReturnValue = (item: any, qtyKey: 'returnQty' | 'refundQty') =>
+        getEffectiveUnitAmount(item) * Number(item?.[qtyKey] || 0);
 
     // New stats states for entire filtered range
     const [totalMatchedRevenue, setTotalMatchedRevenue] = useState(0);
@@ -125,19 +160,18 @@ export const Sales: React.FC = () => {
 
             let where: any = {};
 
-            const baseDate = new Date(selectedDate);
-            const now = new Date();
+            const baseDate = parseDateInputValue(selectedDate);
 
             if (timePeriod === 'day') {
                 const start = startOfDay(baseDate);
                 const end = endOfDay(baseDate);
-                where.createdAt = { gte: start.toISOString(), lte: end.toISOString() };
+                where.createdAt = { gte: start, lte: end };
             } else if (timePeriod === 'week') {
-                where.createdAt = { gte: startOfWeek(baseDate, { weekStartsOn: 1 }).toISOString(), lte: endOfWeek(baseDate, { weekStartsOn: 1 }).toISOString() };
+                where.createdAt = { gte: startOfWeek(baseDate, { weekStartsOn: 1 }), lte: endOfWeek(baseDate, { weekStartsOn: 1 }) };
             } else if (timePeriod === 'month') {
-                where.createdAt = { gte: startOfMonth(baseDate).toISOString(), lte: endOfMonth(baseDate).toISOString() };
+                where.createdAt = { gte: startOfMonth(baseDate), lte: endOfMonth(baseDate) };
             } else if (timePeriod === 'year') {
-                where.createdAt = { gte: startOfYear(baseDate).toISOString(), lte: endOfYear(baseDate).toISOString() };
+                where.createdAt = { gte: startOfYear(baseDate), lte: endOfYear(baseDate) };
             }
 
             // Add payment filter
@@ -185,10 +219,50 @@ export const Sales: React.FC = () => {
                 })
             ]);
 
+            const exchangeVariantIds = Array.from(new Set(
+                (data || []).flatMap((sale: any) =>
+                    (sale.exchanges || []).flatMap((exchange: any) =>
+                        (exchange.items || []).flatMap((item: any) => [item.returnedItemId, item.newItemId].filter(Boolean))
+                    )
+                )
+            ));
+
+            let enrichedSales = data;
+            if (exchangeVariantIds.length > 0) {
+                const variants = await db.productVariants.findMany({
+                    where: { id: { in: exchangeVariantIds as string[] } },
+                    include: { product: true }
+                });
+
+                const variantMap = new Map<string, { productName: string; variantInfo: string }>(
+                    (variants || []).map((variant: any) => [
+                        variant.id,
+                        {
+                            productName: variant.product?.name || 'Unknown Item',
+                            variantInfo: `${variant.size || ''} ${variant.color || ''}`.trim()
+                        }
+                    ])
+                );
+
+                enrichedSales = (data || []).map((sale: any) => ({
+                    ...sale,
+                    exchanges: (sale.exchanges || []).map((exchange: any) => ({
+                        ...exchange,
+                        items: (exchange.items || []).map((item: any) => ({
+                            ...item,
+                            returnedItemName: item.returnedItemId ? (variantMap.get(item.returnedItemId)?.productName || 'Returned Item') : null,
+                            returnedVariantInfo: item.returnedItemId ? (variantMap.get(item.returnedItemId)?.variantInfo || '') : '',
+                            newItemName: item.newItemId ? (variantMap.get(item.newItemId)?.productName || 'Added Item') : null,
+                            newVariantInfo: item.newItemId ? (variantMap.get(item.newItemId)?.variantInfo || '') : '',
+                        }))
+                    }))
+                }));
+            }
+
             setTotalMatchedRevenue(totalStats._sum.grandTotal || 0);
             setTotalMatchedBills(totalStats._count.id || 0);
             setTotalRecords(totalCount._count.id || 0);
-            setSales(data);
+            setSales(enrichedSales);
         } catch (error) {
             console.error('Failed to load sales:', error);
         } finally {
@@ -243,23 +317,32 @@ export const Sales: React.FC = () => {
             preparedReturnItems[0].returnQty = preparedReturnItems[0].quantity;
         }
 
+        try {
+            const variants = await db.productVariants.findMany({
+                where: { isActive: true },
+                include: { product: true }
+            });
+
+            const normalizedVariants = (variants || []).filter((variant: any) => variant?.product?.name).map((variant: any) => ({
+                ...variant,
+                stock: Number(variant.stock ?? 0),
+                sellingPrice: Number(variant.sellingPrice ?? 0),
+                size: variant.size || '',
+                color: variant.color || '',
+            }));
+
+            setAllProducts(normalizedVariants);
+        } catch (e) {
+            console.error("Failed to load products for exchange", e);
+            setAllProducts([]);
+        }
+
         setSelectedSaleForAction(sale);
         setReturnItems(preparedReturnItems);
         setExchangeNewItems([]);
         setReplacementPaymentMethod((sale.paymentMethod === 'CARD' || sale.paymentMethod === 'UPI') ? sale.paymentMethod : 'CASH');
         setDiffAmount(0);
         setIsExchangeModalOpen(true);
-
-        // Load products for exchange selection
-        try {
-            const variants = await db.productVariants.findMany({
-                where: { isActive: true },
-                include: { product: true }
-            });
-            setAllProducts(variants);
-        } catch (e) {
-            console.error("Failed to load products for exchange", e);
-        }
     };
 
     const handleRefundClick = (sale: any) => {
@@ -296,7 +379,7 @@ export const Sales: React.FC = () => {
     const submitExchange = async () => {
         if (!selectedSaleForAction) return;
 
-        const totalReturnedValue = returnItems.reduce((sum, it) => sum + (it.sellingPrice * it.returnQty), 0);
+        const totalReturnedValue = returnItems.reduce((sum, it) => sum + getReturnValue(it, 'returnQty'), 0);
         const totalNewValue = exchangeNewItems.reduce((sum, it) => sum + (it.sellingPrice * it.quantity), 0);
         const difference = totalNewValue - totalReturnedValue;
 
@@ -306,7 +389,7 @@ export const Sales: React.FC = () => {
                 returnedQty: ri.returnQty,
                 newId: null,
                 newQty: 0,
-                priceDiff: -(ri.sellingPrice * ri.returnQty)
+                priceDiff: -getReturnValue(ri, 'returnQty')
             }));
 
             const news = exchangeNewItems.map(ni => ({
@@ -356,7 +439,7 @@ export const Sales: React.FC = () => {
         }
 
         try {
-            const refundAmount = itemsToRefund.reduce((sum, it) => sum + (it.sellingPrice * it.refundQty), 0);
+            const refundAmount = itemsToRefund.reduce((sum, it) => sum + getReturnValue(it, 'refundQty'), 0);
             const refundData = {
                 originalInvoiceId: selectedSaleForAction.id,
                 userId: user?.id,
@@ -365,7 +448,7 @@ export const Sales: React.FC = () => {
                 items: itemsToRefund.map(it => ({
                     id: it.variantId,
                     qty: it.refundQty,
-                    amount: it.sellingPrice * it.refundQty
+                    amount: getReturnValue(it, 'refundQty')
                 })),
                 payments: [{
                     paymentMode: selectedSaleForAction.paymentMethod || 'CASH',
@@ -387,6 +470,7 @@ export const Sales: React.FC = () => {
     };
 
     const isSingleReturnItem = returnItems.length === 1;
+    const exchangeSelectableProducts = allProducts.filter((p: any) => !!p?.product?.name);
 
     const confirmVoid = async () => {
         if (!voidSaleId || !voidReason.trim()) return;
@@ -450,12 +534,15 @@ export const Sales: React.FC = () => {
         const totalAmount = selectedSaleForPaymentUpdate.grandTotal;
 
         let finalPayments = [];
+        let nextPaidAmount = totalAmount;
+        let nextChangeAmount = 0;
         if (method === 'SPLIT') {
             const sum = (parseFloat(cashAmount) || 0) + (parseFloat(upiAmount) || 0) + (parseFloat(cardAmount) || 0);
             if (Math.abs(sum - totalAmount) > 0.01) {
                 alert(`Total must equal ${formatIndianCurrency(totalAmount)}. Current sum: ${formatIndianCurrency(sum)}`);
                 return;
             }
+            nextPaidAmount = sum;
             if (parseFloat(cashAmount) > 0) finalPayments.push({ paymentMode: 'CASH', amount: parseFloat(cashAmount) });
             if (parseFloat(upiAmount) > 0) finalPayments.push({ paymentMode: 'UPI', amount: parseFloat(upiAmount) });
             if (parseFloat(cardAmount) > 0) finalPayments.push({ paymentMode: 'CARD', amount: parseFloat(cardAmount) });
@@ -470,21 +557,21 @@ export const Sales: React.FC = () => {
                 userId: user?.id,
                 paymentData: {
                     paymentMethod: method,
-                    paidAmount: selectedSaleForPaymentUpdate.paidAmount,
-                    changeAmount: selectedSaleForPaymentUpdate.changeAmount,
+                    paidAmount: nextPaidAmount,
+                    changeAmount: nextChangeAmount,
                     payments: finalPayments
                 }
             });
 
             if (!result.success) throw new Error(result.error);
 
-            await auditService.log(
-                'PAYMENT_UPDATE',
-                `Updated payment for Bill #${selectedSaleForPaymentUpdate.billNo} to ${method}.`,
-                user?.id
-            );
-
-            setSales(prev => prev.map(s => s.id === selectedSaleForPaymentUpdate.id ? { ...s, paymentMethod: method, payments: result.data.payments } : s));
+            setSales(prev => prev.map(s => s.id === selectedSaleForPaymentUpdate.id ? {
+                ...s,
+                paymentMethod: result.data.paymentMethod,
+                paidAmount: result.data.paidAmount,
+                changeAmount: result.data.changeAmount,
+                payments: result.data.payments
+            } : s));
             setIsPaymentModalOpen(false);
         } catch (error: any) {
             alert(`Failed: ${error.message}`);
@@ -534,17 +621,17 @@ export const Sales: React.FC = () => {
     };
 
     const shiftPeriod = (direction: -1 | 1) => {
-        const current = new Date(selectedDate);
+        const current = parseDateInputValue(selectedDate);
         let next = current;
         if (timePeriod === 'day') next = addDays(current, direction);
         else if (timePeriod === 'week') next = addWeeks(current, direction);
         else if (timePeriod === 'month') next = addMonths(current, direction);
         else if (timePeriod === 'year') next = addYears(current, direction);
-        setSelectedDate(next.toISOString().split('T')[0]);
+        setSelectedDate(formatDateInputValue(next));
     };
 
     const getRangeLabel = () => {
-        const base = new Date(selectedDate);
+        const base = parseDateInputValue(selectedDate);
         if (timePeriod === 'day') return format(base, 'dd MMM yyyy');
         if (timePeriod === 'week') return `${format(startOfWeek(base, { weekStartsOn: 1 }), 'dd MMM yyyy')} – ${format(endOfWeek(base, { weekStartsOn: 1 }), 'dd MMM yyyy')}`;
         if (timePeriod === 'month') return format(base, 'MMMM yyyy');
@@ -553,7 +640,7 @@ export const Sales: React.FC = () => {
     };
 
     const isCurrentPeriod = () => {
-        const base = new Date(selectedDate);
+        const base = parseDateInputValue(selectedDate);
         const now = new Date();
         if (timePeriod === 'day')   return isSameDay(now, base);
         if (timePeriod === 'week')  return isSameWeek(now, base, { weekStartsOn: 1 });
@@ -659,7 +746,7 @@ export const Sales: React.FC = () => {
                                     setSearchQuery('');
                                     setPaymentFilter('all');
                                     setStaffFilter('all');
-                                    setSelectedDate(new Date().toISOString().split('T')[0]);
+                                    setSelectedDate(formatDateInputValue(new Date()));
                                     setTimePeriod('day');
                                     setPage(1);
                                 }}
@@ -720,7 +807,7 @@ export const Sales: React.FC = () => {
 
                         {/* Today / This Week / This Month / This Year — highlighted when on current period */}
                         <button
-                            onClick={() => setSelectedDate(new Date().toISOString().split('T')[0])}
+                            onClick={() => setSelectedDate(formatDateInputValue(new Date()))}
                             className={`px-3 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-1 ${
                                 isCurrentPeriod()
                                     ? 'bg-primary-600 text-white shadow-sm'
@@ -861,6 +948,11 @@ export const Sales: React.FC = () => {
                                             <td className="font-bold whitespace-nowrap">
                                                 <div className="flex items-center gap-2">
                                                     <span className="text-primary-600">#{sale.billNo}</span>
+                                                    {isReplacementSale(sale) && (
+                                                        <span className="text-[10px] bg-green-100 text-green-800 px-1.5 py-0.5 rounded border border-green-200 font-black uppercase">
+                                                            Replacement Bill
+                                                        </span>
+                                                    )}
                                                     {sale.status === 'VOIDED' && (
                                                         <span className="text-[10px] bg-red-100 text-red-800 px-1.5 py-0.5 rounded border border-red-200 font-black uppercase">
                                                             VOID
@@ -945,11 +1037,11 @@ export const Sales: React.FC = () => {
                                                             </Button>
                                                         </div>
                                                     )}
-                                                    {(user?.role === 'ADMIN' || user?.permVoidSale) && sale.status !== 'VOIDED' && (
+                                                    {(user?.role === 'ADMIN' || user?.permVoidSale) && sale.status !== 'VOIDED' && sale.exchanges?.length === 0 && sale.refunds?.length === 0 && (
                                                         <Button
                                                             variant="danger"
                                                             size="sm"
-                                                            title="Void Bill (Legacy)"
+                                                            title="Void Bill"
                                                             onClick={() => handleVoidClick(sale.id)}
                                                             className="shadow-sm"
                                                         >
@@ -965,6 +1057,41 @@ export const Sales: React.FC = () => {
                                             <tr className="bg-gray-50/50 dark:bg-gray-900/20 animate-in fade-in slide-in-from-top-2 duration-200">
                                                 <td colSpan={9} className="p-0 border-b border-gray-200 dark:border-gray-700">
                                                     <div className="px-14 py-4 bg-white dark:bg-gray-800/40 m-2 rounded-xl border border-gray-100 dark:border-gray-700 shadow-inner">
+                                                        {(() => {
+                                                            const replacementBillNo = extractReplacementBillNo(sale.remarks);
+                                                            const exchangedItems = (sale.exchanges || []).flatMap((ex: any) => (ex.items || []).filter((ei: any) => ei.returnedItemId));
+
+                                                            if (exchangedItems.length === 0 && !replacementBillNo) return null;
+
+                                                            return (
+                                                                <div className="mb-5 rounded-xl border border-orange-200 bg-orange-50/80 px-4 py-3">
+                                                                    <div className="text-[10px] font-black uppercase tracking-widest text-orange-700 mb-2">
+                                                                        Exchange Details
+                                                                    </div>
+                                                                    <div className="space-y-1 text-xs text-orange-900">
+                                                                        {exchangedItems.map((exchangeItem: any, idx: number) => {
+                                                                            return (
+                                                                                <div key={`ex-detail-${idx}`} className="flex items-center justify-between gap-3">
+                                                                                    <span>
+                                                                                        Returned {exchangeItem.returnedItemName || 'Item'} x{exchangeItem.returnedQty || 0}
+                                                                                        {exchangeItem.newItemName ? ` -> Added ${exchangeItem.newItemName} x${exchangeItem.newQty || 0}` : ''}
+                                                                                    </span>
+                                                                                    <span className="font-bold">
+                                                                                        {exchangeItem.priceDiff < 0 ? formatIndianCurrency(Math.abs(exchangeItem.priceDiff)) : ''}
+                                                                                    </span>
+                                                                                </div>
+                                                                            );
+                                                                        })}
+                                                                        {replacementBillNo && (
+                                                                            <div className="pt-1 font-bold text-orange-700">
+                                                                                Replacement billed separately on Bill #{replacementBillNo}
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })()}
+
                                                         <h4 className="text-xs font-black uppercase text-gray-400 mb-3 tracking-widest flex items-center gap-2">
                                                             <Tag className="w-3 h-3" />
                                                             Items Purchased
@@ -1008,11 +1135,11 @@ export const Sales: React.FC = () => {
                                                                 <div key={`new-${idx}`} className="flex justify-between items-center p-3 bg-green-50 dark:bg-green-900/10 rounded-lg border border-green-100 dark:border-green-900/30">
                                                                     <div className="min-w-0">
                                                                         <div className="font-bold text-sm text-green-800 dark:text-green-400 truncate flex items-center gap-2">
-                                                                            Added Item
+                                                                            {newItem.newItemName || 'Added Item'}
                                                                             <span className="text-[8px] bg-green-200 text-green-700 px-1 rounded">EXCHANGE</span>
                                                                         </div>
                                                                         <div className="text-[10px] text-green-600/70 font-medium">
-                                                                            Qty: {newItem.newQty} | Price: {formatIndianCurrency(newItem.priceDiff / newItem.newQty)}
+                                                                            {newItem.newVariantInfo ? `${newItem.newVariantInfo} | ` : ''}Qty: {newItem.newQty} | Price: {formatIndianCurrency(newItem.priceDiff / newItem.newQty)}
                                                                         </div>
                                                                     </div>
                                                                     <div className="text-right flex-shrink-0 ml-4">
@@ -1284,7 +1411,7 @@ export const Sales: React.FC = () => {
                         <div className="flex justify-between items-center bg-gray-50 dark:bg-gray-900 p-4 rounded-2xl border-2 border-gray-100 dark:border-gray-700 shadow-inner">
                             <div className="text-gray-500 font-bold uppercase text-[10px] tracking-widest">Total Refund Amount</div>
                             <div className="text-2xl font-black text-red-600">
-                                {formatIndianCurrency(returnItems.reduce((sum, it) => sum + (it.sellingPrice * it.refundQty), 0))}
+                                {formatIndianCurrency(returnItems.reduce((sum, it) => sum + getReturnValue(it, 'refundQty'), 0))}
                             </div>
                         </div>
                     </div>
@@ -1368,7 +1495,7 @@ export const Sales: React.FC = () => {
                                     }}
                                 >
                                     <option value="">Search & Select Product...</option>
-                                    {allProducts.filter(p => p.stock > 0).map(p => (
+                                    {exchangeSelectableProducts.map(p => (
                                         <option key={p.id} value={p.id}>{p.product.name} ({p.size} {p.color}) - ₹{p.sellingPrice}</option>
                                     ))}
                                 </select>
@@ -1402,7 +1529,7 @@ export const Sales: React.FC = () => {
                             <div className="text-center p-3 rounded-xl bg-gray-50 border border-gray-100">
                                 <div className="text-[10px] font-bold text-gray-400 uppercase">Returned Value</div>
                                 <div className="text-sm font-black text-gray-700">
-                                    {formatIndianCurrency(returnItems.reduce((sum, it) => sum + (it.sellingPrice * it.returnQty), 0))}
+                                    {formatIndianCurrency(returnItems.reduce((sum, it) => sum + getReturnValue(it, 'returnQty'), 0))}
                                 </div>
                             </div>
                             <div className="text-center p-3 rounded-xl bg-gray-50 border border-gray-100">
@@ -1413,8 +1540,8 @@ export const Sales: React.FC = () => {
                             </div>
                             <div className="text-center p-3 rounded-xl bg-blue-50 border border-blue-100">
                                 <div className="text-[10px] font-bold text-blue-400 uppercase">Final Difference</div>
-                                <div className={`text-lg font-black ${exchangeNewItems.reduce((sum, it) => sum + (it.sellingPrice * it.quantity), 0) - returnItems.reduce((sum, it) => sum + (it.sellingPrice * it.returnQty), 0) > 0 ? 'text-blue-700' : 'text-green-700'}`}>
-                                    {formatIndianCurrency(exchangeNewItems.reduce((sum, it) => sum + (it.sellingPrice * it.quantity), 0) - returnItems.reduce((sum, it) => sum + (it.sellingPrice * it.returnQty), 0))}
+                                <div className={`text-lg font-black ${exchangeNewItems.reduce((sum, it) => sum + (it.sellingPrice * it.quantity), 0) - returnItems.reduce((sum, it) => sum + getReturnValue(it, 'returnQty'), 0) > 0 ? 'text-blue-700' : 'text-green-700'}`}>
+                                    {formatIndianCurrency(exchangeNewItems.reduce((sum, it) => sum + (it.sellingPrice * it.quantity), 0) - returnItems.reduce((sum, it) => sum + getReturnValue(it, 'returnQty'), 0))}
                                 </div>
                             </div>
                         </div>

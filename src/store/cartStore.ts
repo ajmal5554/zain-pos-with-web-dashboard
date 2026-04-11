@@ -59,11 +59,16 @@ export const useCartStore = create<CartState>()(
                 items: state.items.filter(i => i.variantId !== variantId)
             })),
 
-            updateQuantity: (variantId, quantity) => set((state) => ({
-                items: state.items.map(i =>
-                    i.variantId === variantId ? { ...i, quantity } : i
-                )
-            })),
+            updateQuantity: (variantId, quantity) => set((state) => {
+                // Validate quantity: must be positive integer, max 9999
+                const validQty = Math.max(1, Math.min(9999, Math.floor(Math.abs(quantity))));
+                
+                return {
+                    items: state.items.map(i =>
+                        i.variantId === variantId ? { ...i, quantity: validQty } : i
+                    )
+                };
+            }),
 
             updateDiscount: (variantId, discount) => set((state) => ({
                 items: state.items.map(i =>

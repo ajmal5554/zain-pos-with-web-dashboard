@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Trash2, Type, Image as ImageIcon, Layout, AlignLeft, AlignCenter, AlignRight, Bold, Columns, RotateCcw } from 'lucide-react';
+import { GripVertical, Trash2, Type, Image as ImageIcon, Layout, AlignLeft, AlignCenter, AlignRight, Bold, Columns, RotateCcw, Download, Upload } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { useAuthStore } from '../../store/authStore';
@@ -91,6 +91,7 @@ export const LabelDesigner: React.FC = () => {
     const [blocks, setBlocks] = useState<LabelBlock[]>(DEFAULT_LABEL_LAYOUT);
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
+    const [loadError, setLoadError] = useState<string>('');
     const [shopDetails, setShopDetails] = useState({
         shopName: 'Zain POS',
     });
@@ -112,17 +113,21 @@ export const LabelDesigner: React.FC = () => {
     const loadStickerConfig = async () => {
         try {
             const res = await window.electronAPI.settings.get({ key: 'STICKER_PRINT_CONFIG' });
-            if (res) {
-                setStickConfig({ ...DEFAULT_STICKER_CONFIG, ...JSON.parse(res as string) });
+            if (res?.success && res.data) {
+                setStickConfig({ ...DEFAULT_STICKER_CONFIG, ...JSON.parse(res.data as string) });
+            } else if (!res?.success) {
+                console.warn('Failed to load sticker config:', res?.error);
             }
-        } catch (e) { console.error(e); }
+        } catch (e) {
+            console.error('Error loading sticker config:', e);
+        }
     };
 
     const loadShopDetails = async () => {
         try {
             const result = await window.electronAPI.settings.get({ key: 'SHOP_SETTINGS' });
-            if (result) {
-                setShopDetails(JSON.parse(result as string));
+            if (result?.success && result.data) {
+                setShopDetails(JSON.parse(result.data as string));
             }
         } catch (error) {
             console.error("Failed to load shop settings", error);
@@ -131,11 +136,18 @@ export const LabelDesigner: React.FC = () => {
 
     const loadLayout = async () => {
         try {
+            setLoadError('');
             const result = await window.electronAPI.settings.get({ key: 'LABEL_LAYOUT' });
-            if (result) {
-                setBlocks(JSON.parse(result as string));
+            if (result?.success && result.data) {
+                setBlocks(JSON.parse(result.data as string));
+            } else if (!result?.success) {
+                const errorMsg = result?.error || 'Unknown error';
+                setLoadError(`Failed to load layout: ${errorMsg}`);
+                console.error('Failed to load layout:', errorMsg);
             }
-        } catch (error) {
+        } catch (error: any) {
+            const errorMsg = error?.message || 'Unknown error';
+            setLoadError(`Error loading layout: ${errorMsg}`);
             console.error("Failed to load layout", error);
         }
     };
@@ -144,7 +156,7 @@ export const LabelDesigner: React.FC = () => {
         setSaving(true);
         try {
             const userId = user?.id || 'default-user';
-            await Promise.all([
+            const results = await Promise.all([
                 window.electronAPI.settings.set({
                     key: 'LABEL_LAYOUT',
                     value: JSON.stringify(blocks),
@@ -156,6 +168,10 @@ export const LabelDesigner: React.FC = () => {
                     userId
                 })
             ]);
+            const failed = results.find((result: { success?: boolean; error?: string }) => !result?.success);
+            if (failed) {
+                throw new Error(failed.error || 'Failed to save settings');
+            }
             alert('Label layout and printer calibration saved!');
         } catch (error) {
             console.error('Failed to save settings:', error);
@@ -167,13 +183,24 @@ export const LabelDesigner: React.FC = () => {
 
     const handleDragEnd = (event: any) => {
         const { active, over } = event;
-        if (active.id !== over.id) {
-            setBlocks((items) => {
-                const oldIndex = items.findIndex((i) => i.id === active.id);
-                const newIndex = items.findIndex((i) => i.id === over.id);
-                return arrayMove(items, oldIndex, newIndex);
-            });
+
+        // Validate both active and over exist and are different
+        if (!active?.id || !over?.id || active.id === over.id) {
+            return; // Invalid drag operation, do nothing
         }
+
+        setBlocks((items) => {
+            const oldIndex = items.findIndex((i) => i.id === active.id);
+            const newIndex = items.findIndex((i) => i.id === over.id);
+
+            // Validate indices are valid
+            if (oldIndex === -1 || newIndex === -1) {
+                console.warn('Invalid drag operation - item not found', { oldIndex, newIndex });
+                return items; // Return unchanged
+            }
+
+            return arrayMove(items, oldIndex, newIndex);
+        });
     };
 
     const handleReset = () => {
@@ -182,6 +209,70 @@ export const LabelDesigner: React.FC = () => {
             setStickConfig(DEFAULT_STICKER_CONFIG);
             setSelectedId(null);
         }
+    };
+
+    const handleExportTemplate = () => {
+        try {
+            const template = {
+                version: '1.0',
+                type: 'label',
+                name: 'Label Template',
+                blocks,
+                stickConfig,
+                createdAt: new Date().toISOString(),
+                createdBy: user?.name || 'Unknown'
+            };
+
+            const json = JSON.stringify(template, null, 2);
+            const blob = new Blob([json], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `label-template-${Date.now()}.json`;
+            a.click();
+
+            URL.revokeObjectURL(url);
+            alert('✅ Template exported successfully!');
+        } catch (error) {
+            alert(`❌ Failed to export template: ${(error as Error).message}`);
+        }
+    };
+
+    const handleImportTemplate = () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+
+        input.onchange = async (e) => {
+            const file = (e.target as HTMLInputElement).files?.[0];
+            if (!file) return;
+
+            try {
+                const text = await file.text();
+                const template = JSON.parse(text);
+
+                // Validate template structure
+                if (template.version !== '1.0' || template.type !== 'label') {
+                    throw new Error('Invalid template file. Expected label template version 1.0.');
+                }
+
+                if (!template.blocks || !template.stickConfig) {
+                    throw new Error('Invalid template file. Missing required fields.');
+                }
+
+                // Apply template
+                setBlocks(template.blocks);
+                setStickConfig({ ...DEFAULT_STICKER_CONFIG, ...template.stickConfig });
+                setSelectedId(null);
+
+                alert(`✅ Template imported successfully!\nName: ${template.name || 'Untitled'}\nCreated: ${template.createdAt ? new Date(template.createdAt).toLocaleDateString() : 'Unknown'}`);
+            } catch (error) {
+                alert(`❌ Failed to import template: ${(error as Error).message}`);
+            }
+        };
+
+        input.click();
     };
 
     const addBlock = (type: LabelBlock['type']) => {
@@ -229,6 +320,20 @@ export const LabelDesigner: React.FC = () => {
 
     return (
         <div className="flex flex-col gap-6">
+            {/* Load Error Alert */}
+            {loadError && (
+                <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-400">
+                    <div className="flex items-start gap-2">
+                        <span className="text-lg">⚠️</span>
+                        <div>
+                            <p className="font-semibold">Failed to Load Template</p>
+                            <p className="text-xs mt-1">{loadError}</p>
+                            <p className="text-xs mt-1 text-red-600 dark:text-red-500">Using default layout. Your changes will save as new template.</p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Main Designer Area */}
             <div className="flex h-[calc(100vh-320px)] min-h-[500px] gap-4">
                 {/* LEFT: Tools */}
@@ -326,6 +431,21 @@ export const LabelDesigner: React.FC = () => {
                         </div>
                     </div>
 
+                    {/* Template Import/Export */}
+                    <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                        <h4 className="text-xs font-bold text-gray-500 uppercase mb-2">Template Backup</h4>
+                        <div className="flex gap-2">
+                            <Button size="sm" variant="outline" onClick={handleExportTemplate} title="Export template as JSON">
+                                <Download className="w-4 h-4" />
+                                Export
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={handleImportTemplate} title="Import template from JSON">
+                                <Upload className="w-4 h-4" />
+                                Import
+                            </Button>
+                        </div>
+                    </div>
+
                     {selectedId && selectedBlock ? (
                         <div className="space-y-4">
                             <div className="p-3 bg-blue-50 dark:bg-blue-900/10 rounded-lg border border-blue-100 dark:border-blue-900/30 mb-4">
@@ -408,25 +528,41 @@ export const LabelDesigner: React.FC = () => {
 
             {/* Bottom Calibration Panel */}
             <div className="p-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <div className="flex flex-col md:flex-row gap-8">
-                    <div className="flex-none">
-                        <h4 className="text-sm font-black text-gray-400 uppercase mb-1 flex items-center gap-2">
+                <div className="grid grid-cols-1 xl:grid-cols-[240px_minmax(0,1fr)] gap-6 items-start">
+                    <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/20 p-4">
+                        <h4 className="text-sm font-black text-gray-500 uppercase mb-2 flex items-center gap-2 tracking-wide">
                             <Settings className="w-4 h-4" />
                             Printer Calibration
                         </h4>
-                        <p className="text-xs text-gray-500 max-w-[200px]">These settings align the printed output to your physical labels (32x18mm).</p>
+                        <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">
+                            Fine-tune label size, spacing, margins, and timing so the printed output aligns with your physical labels.
+                        </p>
+                        <div className="mt-3 inline-flex rounded-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 px-3 py-1 text-xs font-semibold text-gray-500">
+                            Target: 32 x 18 mm
+                        </div>
                     </div>
 
-                    <div className="flex-1 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
-                        <Input label="Width (mm)" type="number" value={stickConfig.width} onChange={e => setStickConfig({ ...stickConfig, width: Number(e.target.value) })} />
-                        <Input label="Height (mm)" type="number" value={stickConfig.height} onChange={e => setStickConfig({ ...stickConfig, height: Number(e.target.value) })} />
-                        <Input label="Per Row" type="number" value={stickConfig.perRow} onChange={e => setStickConfig({ ...stickConfig, perRow: Number(e.target.value) })} />
-                        <Input label="Zoom (%)" type="number" value={stickConfig.contentScale} onChange={e => setStickConfig({ ...stickConfig, contentScale: Number(e.target.value) })} />
-                        <Input label="Gap X" type="number" value={stickConfig.gapX} onChange={e => setStickConfig({ ...stickConfig, gapX: Number(e.target.value) })} />
-                        <Input label="Gap Y" type="number" value={stickConfig.gapY} onChange={e => setStickConfig({ ...stickConfig, gapY: Number(e.target.value) })} />
-                        <Input label="Margin L" type="number" value={stickConfig.marginLeft} onChange={e => setStickConfig({ ...stickConfig, marginLeft: Number(e.target.value) })} />
-                        <Input label="Margin T" type="number" value={stickConfig.marginTop} onChange={e => setStickConfig({ ...stickConfig, marginTop: Number(e.target.value) })} />
-                        <Input label="Row Delay (ms)" type="number" value={(stickConfig as any).rowDelayMs || 1200} onChange={e => setStickConfig({ ...stickConfig, rowDelayMs: Number(e.target.value) })} />
+                    <div className="space-y-4">
+                        <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                            <h5 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-3">Label Setup</h5>
+                            <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-4">
+                                <Input label="Width (mm)" type="number" value={stickConfig.width} onChange={e => setStickConfig({ ...stickConfig, width: Number(e.target.value) })} />
+                                <Input label="Height (mm)" type="number" value={stickConfig.height} onChange={e => setStickConfig({ ...stickConfig, height: Number(e.target.value) })} />
+                                <Input label="Per Row" type="number" value={stickConfig.perRow} onChange={e => setStickConfig({ ...stickConfig, perRow: Number(e.target.value) })} />
+                                <Input label="Zoom (%)" type="number" value={stickConfig.contentScale} onChange={e => setStickConfig({ ...stickConfig, contentScale: Number(e.target.value) })} />
+                                <Input label="Row Delay (ms)" type="number" value={(stickConfig as any).rowDelayMs || 1200} onChange={e => setStickConfig({ ...stickConfig, rowDelayMs: Number(e.target.value) })} />
+                            </div>
+                        </div>
+
+                        <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                            <h5 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-3">Spacing & Offsets</h5>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <Input label="Gap X" type="number" value={stickConfig.gapX} onChange={e => setStickConfig({ ...stickConfig, gapX: Number(e.target.value) })} />
+                                <Input label="Gap Y" type="number" value={stickConfig.gapY} onChange={e => setStickConfig({ ...stickConfig, gapY: Number(e.target.value) })} />
+                                <Input label="Margin L" type="number" value={stickConfig.marginLeft} onChange={e => setStickConfig({ ...stickConfig, marginLeft: Number(e.target.value) })} />
+                                <Input label="Margin T" type="number" value={stickConfig.marginTop} onChange={e => setStickConfig({ ...stickConfig, marginTop: Number(e.target.value) })} />
+                            </div>
+                        </div>
                     </div>
                 </div>
 

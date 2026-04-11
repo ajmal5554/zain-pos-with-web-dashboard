@@ -1,8 +1,25 @@
 import { type ReactNode } from 'react';
 import { ArrowDownRight, ArrowUpRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Card, CardContent } from "@/components/ui/card"
+
+/**
+ * Formats trend percentage value
+ * Prevents confusing notation like "-99%+" by capping and clearly showing direction
+ */
+function formatTrendValue(trend: number): string {
+    const absValue = Math.abs(trend);
+    
+    // For large changes (>99%), show "99%+" without the minus sign
+    // The arrow already indicates direction
+    if (absValue > 99) {
+        return '99%+';
+    }
+    
+    // For normal ranges, show the actual percentage
+    return `${absValue.toFixed(1)}%`;
+}
 
 interface StatCardProps {
     title: string;
@@ -12,41 +29,62 @@ interface StatCardProps {
     icon: ReactNode;
     loading?: boolean;
     className?: string;
+    variant?: 'default' | 'warning' | 'success';
+    subtitle?: string;
 }
 
-export function StatCard({ title, value, trend, trendLabel, icon, loading, className }: StatCardProps) {
-    if (loading) return <Skeleton className="h-36 w-full rounded-[1.5rem]" />;
+export function StatCard({ title, value, trend, trendLabel, icon, loading, className, variant = 'default', subtitle }: StatCardProps) {
+    if (loading) return <Skeleton className="h-[120px] w-full rounded-xl" />;
+
+    // Smarter trend color logic: only show red/green for significant changes
+    let trendColor = 'text-muted-foreground';
+    if (trend !== undefined) {
+        const absValue = Math.abs(trend);
+        if (absValue < 10) {
+            // Small change (<10%) - neutral gray
+            trendColor = 'text-muted-foreground';
+        } else if (absValue < 30) {
+            // Moderate change (10-30%) - amber/yellow
+            trendColor = trend >= 0 ? 'text-emerald-600' : 'text-amber-600';
+        } else {
+            // Significant change (>30%) - green/red
+            trendColor = trend >= 0 ? 'text-emerald-600' : 'text-rose-600';
+        }
+    }
 
     const isPositive = trend !== undefined ? trend >= 0 : false;
 
     return (
-        <Card className={cn("group h-full overflow-hidden border-slate-200/90 transition-all duration-300 hover:border-slate-300 hover:shadow-[0_30px_60px_-32px_rgba(15,23,42,0.18)] dark:hover:border-slate-700", className)}>
-            <CardContent className="flex min-h-[146px] flex-col justify-between p-6">
-                <div className="flex items-start justify-between gap-4">
-                    <p className="min-h-[44px] max-w-[70%] text-xs font-semibold uppercase leading-5 tracking-[0.24em] text-slate-400 dark:text-slate-500">
+        <Card className={cn(
+            "rounded-xl border bg-card text-card-foreground shadow-sm",
+            variant === 'warning' && "border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/20",
+            variant === 'success' && "border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/20",
+            className
+        )}>
+            <CardContent className="p-3 sm:p-4">
+                <div className="flex flex-row items-start justify-between gap-1 pb-1.5">
+                    <h3 className="tracking-tight text-xs sm:text-sm font-medium text-muted-foreground leading-tight">
                         {title}
-                    </p>
-                    <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-600 transition-transform duration-300 group-hover:scale-105 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+                    </h3>
+                    <div className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5">
                         {icon}
                     </div>
                 </div>
-
-                <div>
-                    <h3 className="truncate text-3xl font-semibold tracking-tight text-slate-950 dark:text-slate-100">{value}</h3>
-
+                <div className="flex flex-col">
+                    <div className="text-xl sm:text-2xl font-bold leading-tight">{value}</div>
+                    {subtitle && !trend && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                            {subtitle}
+                        </p>
+                    )}
                     {trend !== undefined && (
-                        <div className="mt-4 flex items-center text-xs">
-                            <span className={cn(
-                                "flex items-center rounded-full px-2.5 py-1 font-semibold",
-                                isPositive
-                                    ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300"
-                                    : "bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-300"
-                            )}>
-                                {isPositive ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-                                {Math.abs(trend)}%
+                        <p className="text-xs text-muted-foreground mt-1 flex items-center">
+                            <span className={cn("inline-flex items-center font-medium mr-1", trendColor)}>
+                                {isPositive ? <ArrowUpRight className="mr-0.5 h-3 w-3" /> : <ArrowDownRight className="mr-0.5 h-3 w-3" />}
+                                {formatTrendValue(trend)}
                             </span>
-                            <span className="ml-2 text-slate-400 dark:text-slate-500">{trendLabel}</span>
-                        </div>
+                            {trendLabel || 'change'}
+                        </p>
                     )}
                 </div>
             </CardContent>

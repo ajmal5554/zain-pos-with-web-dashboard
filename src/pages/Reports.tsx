@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { FileText, FileSpreadsheet, List, LayoutGrid, ArrowUpDown, Calendar, Hash } from 'lucide-react';
+import { FileText, FileSpreadsheet, List, LayoutGrid, ArrowUpDown, Calendar, Hash, ShieldAlert } from 'lucide-react';
 import { formatIndianCurrency } from '../lib/format';
 import {
     format,
@@ -14,11 +14,11 @@ import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import { db } from '../lib/db';
 import { useAuthStore } from '../store/authStore';
-import { ShieldAlert } from 'lucide-react';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface SaleItemRow {
+    variantId?: string;
     productName: string;
     variantInfo?: string;
     quantity: number;
@@ -44,6 +44,23 @@ interface PaymentRow {
     amount: number;
 }
 
+interface RefundItemRow {
+    variantId: string;
+    quantity: number;
+    amount: number;
+}
+
+interface RefundPaymentRow {
+    paymentMode: string;
+    amount: number;
+}
+
+interface RefundRow {
+    totalRefundAmount: number;
+    items?: RefundItemRow[];
+    payments?: RefundPaymentRow[];
+}
+
 interface SaleRow {
     id: string;
     billNo: string;
@@ -59,8 +76,11 @@ interface SaleRow {
     status: string;
     createdAt: string;
     actualSaleDate?: string;
+    remarks?: string;
     items: SaleItemRow[];
     payments?: PaymentRow[];
+    refunds?: RefundRow[];
+    reportStatus?: 'COMPLETED' | 'REFUNDED' | 'PARTIALLY_REFUNDED';
 }
 
 interface TaxSlabSummary {
@@ -124,10 +144,26 @@ interface ReportData {
     endDate: Date;
     taxInvoices: SaleRow[];
     allSales: SaleRow[];
+    exchangeReplacementSales: SaleRow[];
     taxInvoiceTotals: ReportTotals;
     allSalesTotals: ReportTotals;
+    exchangeReplacementTotals: ReportTotals;
     dailySummaries: DailySummary[];
 }
+
+const formatDateInputValue = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+const parseDateInputValue = (value: string, endOfDay = false): Date => {
+    const [year, month, day] = value.split('-').map(Number);
+    const parsed = new Date(year, (month || 1) - 1, day || 1);
+    parsed.setHours(endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0);
+    return parsed;
+};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -151,24 +187,124 @@ function getPaymentBreakdown(sale: SaleRow): PaymentSummary {
     return result;
 }
 
+function getRefundPaymentBreakdown(sale: SaleRow): PaymentSummary {
+    const result: PaymentSummary = { cash: 0, upi: 0, card: 0 };
+
+    for (const refund of sale.refunds || []) {
+        if (refund.payments && refund.payments.length > 0) {
+            for (const payment of refund.payments) {
+                const mode = (payment.paymentMode || '').toUpperCase();
+                if (mode === 'CASH') result.cash += Number(payment.amount || 0);
+                else if (mode === 'UPI') result.upi += Number(payment.amount || 0);
+                else if (mode === 'CARD') result.card += Number(payment.amount || 0);
+            }
+        }
+    }
+
+    return result;
+}
+
+function clampRatio(value: number): number {
+    if (!Number.isFinite(value)) return 0;
+    return Math.max(0, Math.min(1, value));
+}
+
+function getNetSaleForReport(sale: SaleRow): SaleRow {
+    const refunds = sale.refunds || [];
+    if (refunds.length === 0) {
+        return {
+            ...sale,
+            reportStatus: 'COMPLETED',
+        };
+    }
+
+    const totalRefundAmount = refunds.reduce((sum, refund) => sum + Number(refund.totalRefundAmount || 0), 0);
+    const refundRatio = clampRatio(totalRefundAmount / Math.max(Number(sale.grandTotal || 0), 0.01));
+
+    const refundByVariant = new Map<string, { qty: number; amount: number }>();
+    for (const refund of refunds) {
+        for (const item of refund.items || []) {
+            const existing = refundByVariant.get(item.variantId) || { qty: 0, amount: 0 };
+            existing.qty += Number(item.quantity || 0);
+            existing.amount += Number(item.amount || 0);
+            refundByVariant.set(item.variantId, existing);
+        }
+    }
+
+    const netItems = (sale.items || []).flatMap((item) => {
+        const refunded = refundByVariant.get(item.variantId || '') || { qty: 0, amount: 0 };
+        const originalQty = Number(item.quantity || 0);
+        const refundedQty = Math.min(originalQty, Number(refunded.qty || 0));
+        const remainingQty = Math.max(0, originalQty - refundedQty);
+
+        if (remainingQty <= 0) {
+            return [];
+        }
+
+        const originalLineTotal = Number(
+            item.total ?? ((Number(item.sellingPrice || 0) * Number(item.quantity || 0)) - Number(item.discount || 0))
+        );
+        const refundedAmount = Math.min(originalLineTotal, Number(refunded.amount || 0));
+        const remainingLineTotal = Math.max(0, originalLineTotal - refundedAmount);
+        const remainingBaseAmount = Number(item.sellingPrice || 0) * remainingQty;
+        const remainingDiscount = Math.max(0, remainingBaseAmount - remainingLineTotal);
+        const remainingTaxAmount = item.taxRate > 0
+            ? (remainingLineTotal * item.taxRate) / (100 + item.taxRate)
+            : 0;
+
+        return [{
+            ...item,
+            quantity: remainingQty,
+            discount: remainingDiscount,
+            taxAmount: remainingTaxAmount,
+            total: remainingLineTotal,
+        }];
+    });
+
+    const originalPayments = getPaymentBreakdown(sale);
+    const refundPayments = getRefundPaymentBreakdown(sale);
+    const netPayments: PaymentRow[] = [
+        { paymentMode: 'CASH', amount: Math.max(0, originalPayments.cash - refundPayments.cash) },
+        { paymentMode: 'UPI', amount: Math.max(0, originalPayments.upi - refundPayments.upi) },
+        { paymentMode: 'CARD', amount: Math.max(0, originalPayments.card - refundPayments.card) },
+    ].filter((payment) => payment.amount > 0);
+
+    const netSale: SaleRow = {
+        ...sale,
+        subtotal: Math.max(0, Number(sale.subtotal || 0) * (1 - refundRatio)),
+        discount: Math.max(0, Number(sale.discount || 0) * (1 - refundRatio)),
+        taxAmount: Math.max(0, Number(sale.taxAmount || 0) * (1 - refundRatio)),
+        cgst: Math.max(0, Number(sale.cgst || 0) * (1 - refundRatio)),
+        sgst: Math.max(0, Number(sale.sgst || 0) * (1 - refundRatio)),
+        grandTotal: Math.max(0, Number(sale.grandTotal || 0) - totalRefundAmount),
+        items: netItems,
+        payments: netPayments,
+        reportStatus: totalRefundAmount >= Number(sale.grandTotal || 0) - 0.009 ? 'REFUNDED' : 'PARTIALLY_REFUNDED',
+    };
+
+    return netSale;
+}
+
 function buildTaxSlabs(items: SaleItemRow[]): TaxSlabSummary[] {
     const slabMap = new Map<number, TaxSlabSummary>();
 
     for (const item of items) {
         const rate = item.taxRate;
-        const taxableValue = item.sellingPrice * item.quantity - item.discount;
-        const halfRate = rate / 2;
-        const cgst = (taxableValue * halfRate) / 100;
-        const sgst = (taxableValue * halfRate) / 100;
+        // Tax-inclusive pricing: Extract tax from the after-discount amount
+        const amountWithTax = item.sellingPrice * item.quantity - item.discount;
+        const taxAmount = (amountWithTax * rate) / (100 + rate);
+        const taxableValue = amountWithTax - taxAmount;
+        const cgst = taxAmount / 2;
+        const sgst = taxAmount / 2;
 
         const existing = slabMap.get(rate);
         if (existing) {
             existing.taxableValue += taxableValue;
             existing.cgst += cgst;
             existing.sgst += sgst;
-            existing.totalTax += cgst + sgst;
+            existing.totalTax += taxAmount;
         } else {
-            slabMap.set(rate, { rate, taxableValue, cgst, sgst, totalTax: cgst + sgst });
+            slabMap.set(rate, { rate, taxableValue, cgst, sgst, totalTax: taxAmount });
         }
     }
 
@@ -180,10 +316,12 @@ function buildHsnSummary(items: SaleItemRow[]): HsnSummary[] {
 
     for (const item of items) {
         const hsn = item.variant?.product?.hsn || 'N/A';
-        const taxableValue = item.sellingPrice * item.quantity - item.discount;
-        const halfRate = item.taxRate / 2;
-        const cgst = (taxableValue * halfRate) / 100;
-        const sgst = (taxableValue * halfRate) / 100;
+        // Tax-inclusive pricing: Extract tax from the after-discount amount
+        const amountWithTax = item.sellingPrice * item.quantity - item.discount;
+        const taxAmount = (amountWithTax * item.taxRate) / (100 + item.taxRate);
+        const taxableValue = amountWithTax - taxAmount;
+        const cgst = taxAmount / 2;
+        const sgst = taxAmount / 2;
 
         const existing = hsnMap.get(hsn);
         if (existing) {
@@ -191,7 +329,7 @@ function buildHsnSummary(items: SaleItemRow[]): HsnSummary[] {
             existing.taxableValue += taxableValue;
             existing.cgst += cgst;
             existing.sgst += sgst;
-            existing.totalTax += cgst + sgst;
+            existing.totalTax += taxAmount;
         } else {
             hsnMap.set(hsn, {
                 hsn,
@@ -201,7 +339,7 @@ function buildHsnSummary(items: SaleItemRow[]): HsnSummary[] {
                 taxRate: item.taxRate,
                 cgst,
                 sgst,
-                totalTax: cgst + sgst,
+                totalTax: taxAmount,
             });
         }
     }
@@ -315,6 +453,23 @@ function compareBillNos(a: string, b: string): number {
     return isNew(a) ? 1 : -1; // new format always after legacy
 }
 
+function isReplacementSale(sale: SaleRow): boolean {
+    return sale.paymentMethod === 'EXCHANGE' || (sale.remarks || '').includes('Replacement sale for Invoice');
+}
+
+function formatGstBillLabel(sale: SaleRow): string {
+    if (isReplacementSale(sale)) {
+        return `${sale.billNo} (REPLACEMENT BILL)`;
+    }
+    if (sale.reportStatus === 'REFUNDED') {
+        return `${sale.billNo} (REFUNDED)`;
+    }
+    if (sale.reportStatus === 'PARTIALLY_REFUNDED') {
+        return `${sale.billNo} (PARTIAL REFUND)`;
+    }
+    return String(sale.billNo);
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
 
 export const Reports: React.FC = () => {
@@ -325,6 +480,39 @@ export const Reports: React.FC = () => {
     const [loading, setLoading] = useState(false);
     const [reportType, setReportType] = useState<'detailed' | 'summary'>('summary');
     const [sortBy, setSortBy] = useState<'date' | 'billNo'>('date');
+    
+    // Shop settings for PDF header
+    const [shopSettings, setShopSettings] = useState({
+        shopName: 'ZAIN GENTS PALACE',
+        address: 'CHIRAMMAL TOWER, BEHIND CANARA BANK\nRAJA ROAD, NILESHWAR',
+        phone: '9037106449, 7907026827',
+        gstin: '32PVGPS0686J1ZV',
+        email: '',
+    });
+
+    // Load shop settings from the persisted settings table
+    useEffect(() => {
+        const loadShopSettings = async () => {
+            try {
+                const result = await db.settings.findUnique({ where: { key: 'SHOP_SETTINGS' } });
+                if (!result?.value) return;
+
+                const parsed = JSON.parse(result.value);
+                setShopSettings(prev => ({
+                    ...prev,
+                    shopName: parsed.shopName || prev.shopName,
+                    address: parsed.address || prev.address,
+                    phone: parsed.phone || prev.phone,
+                    gstin: parsed.gstin || prev.gstin,
+                    email: parsed.email || prev.email,
+                }));
+            } catch (error) {
+                console.error('Failed to load shop settings:', error);
+            }
+        };
+
+        loadShopSettings();
+    }, []);
 
     if (user?.role !== 'ADMIN' && !user?.permViewGstReports) {
         return (
@@ -344,14 +532,12 @@ export const Reports: React.FC = () => {
         try {
             setLoading(true);
 
-            const start = new Date(startDate);
-            start.setHours(0, 0, 0, 0);
-            const end = new Date(endDate);
-            end.setHours(23, 59, 59, 999);
+            const start = parseDateInputValue(startDate);
+            const end = parseDateInputValue(endDate, true);
 
             const sales: SaleRow[] = await db.sales.findMany({
                 where: {
-                    createdAt: { gte: start.toISOString(), lte: end.toISOString() },
+                    createdAt: { gte: start, lte: end },
                     status: 'COMPLETED',
                 },
                 include: {
@@ -363,20 +549,32 @@ export const Reports: React.FC = () => {
                         },
                     },
                     payments: true,
+                    refunds: {
+                        include: {
+                            items: true,
+                            payments: true,
+                        },
+                    },
                 },
                 orderBy: { createdAt: 'asc' },
             });
 
-            const taxInvoices = sales.filter((s) => !s.isHistorical);
+            const nettedSales = sales.map((sale) => getNetSaleForReport(sale));
+
+            const exchangeReplacementSales = nettedSales.filter(isReplacementSale);
+            const regularSales = nettedSales.filter((s) => !isReplacementSale(s));
+            const taxInvoices = regularSales.filter((s) => !s.isHistorical);
 
             setReportData({
                 startDate: start,
                 endDate: end,
                 taxInvoices,
-                allSales: sales,
+                allSales: nettedSales,
+                exchangeReplacementSales,
                 taxInvoiceTotals: calculateTotals(taxInvoices),
-                allSalesTotals: calculateTotals(sales),
-                dailySummaries: buildDailySummaries(sales),
+                allSalesTotals: calculateTotals(regularSales),
+                exchangeReplacementTotals: calculateTotals(exchangeReplacementSales),
+                dailySummaries: buildDailySummaries(regularSales),
             });
         } catch (error) {
             console.error('Failed to generate report:', error);
@@ -394,16 +592,44 @@ export const Reports: React.FC = () => {
         if (!reportData) return alert('Please generate a report first');
 
         const doc = new jsPDF('landscape');
+        const pageWidth = doc.internal.pageSize.getWidth();
         const dateRange = `From ${format(reportData.startDate, 'dd/MM/yyyy')} To ${format(reportData.endDate, 'dd/MM/yyyy')}`;
 
-        doc.setFontSize(14);
+        // Professional header with shop details
+        doc.setFontSize(16);
         doc.setFont('helvetica', 'bold');
-        doc.text('ZAIN GENTS PALACE', 14, 15);
+        // Center the shop name
+        const shopNameWidth = doc.getTextWidth(shopSettings.shopName);
+        doc.text(shopSettings.shopName, (pageWidth - shopNameWidth) / 2, 15);
+        
+        // Shop address (centered)
         doc.setFontSize(10);
         doc.setFont('helvetica', 'normal');
-        doc.text(dateRange, 14, 22);
-
-        let currentY = 30;
+        const addressLines = shopSettings.address.split('\n');
+        let currentY = 22;
+        addressLines.forEach(line => {
+            const lineWidth = doc.getTextWidth(line);
+            doc.text(line, (pageWidth - lineWidth) / 2, currentY);
+            currentY += 4;
+        });
+        
+        // Phone and GSTIN on same line (centered)
+        const contactInfo = `Ph: ${shopSettings.phone}  |  GSTIN: ${shopSettings.gstin}`;
+        const contactWidth = doc.getTextWidth(contactInfo);
+        doc.text(contactInfo, (pageWidth - contactWidth) / 2, currentY);
+        currentY += 2;
+        
+        // Separator line
+        doc.setLineWidth(0.5);
+        doc.line(14, currentY, pageWidth - 14, currentY);
+        currentY += 5;
+        
+        // Date range (centered)
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'bold');
+        const dateWidth = doc.getTextWidth(dateRange);
+        doc.text(dateRange, (pageWidth - dateWidth) / 2, currentY);
+        currentY += 5;
 
         if (reportType === 'summary') {
             // Summary Report
@@ -412,17 +638,38 @@ export const Reports: React.FC = () => {
             doc.text('DAILY SALES SUMMARY', 14, currentY);
             currentY += 5;
 
-            const summaryColumns = ['DATE', 'BILL FROM', 'BILL TO', 'BILLS', 'SUBTOTAL', 'DISCOUNT', 'TAXABLE', 'CGST', 'SGST', 'GST', 'GRAND TOTAL', 'CASH', 'UPI', 'CARD'];
+            const summaryColumns = ['DATE', 'BILL FROM', 'BILL TO', 'BILLS', 'GROSS AMOUNT\n(incl. GST)', 'DISCOUNT', 'NET AMOUNT\n(incl. GST)', 'TAXABLE AMOUNT\n(excl. GST)', 'CGST', 'SGST', 'TOTAL GST', 'AMOUNT PAID', 'CASH', 'UPI', 'CARD'];
 
             // Sort summaries based on user selection
             const sortedSummaries = [...reportData.dailySummaries].sort((a, b) =>
                 sortBy === 'billNo' ? compareBillNos(a.billFrom, b.billFrom) : a.date.localeCompare(b.date)
             );
 
+            // Include Grand Total row directly in the summary table
+            const a = reportData.allSalesTotals;
+            const totalTaxableAmount = a.taxableValue - a.totalTax; // Tax-exclusive amount
+            const grandTotalRow = [
+                'GRAND TOTAL',                           
+                '',                                      
+                '',                                      
+                a.count.toString(),                      
+                a.subtotal.toFixed(2),                   
+                a.discount.toFixed(2),                   
+                a.taxableValue.toFixed(2),              
+                totalTaxableAmount.toFixed(2),          // New taxable amount column
+                a.cgst.toFixed(2),                      
+                a.sgst.toFixed(2),                      
+                a.totalTax.toFixed(2),                  
+                a.grandTotal.toFixed(2),                
+                a.payment.cash.toFixed(2),              
+                a.payment.upi.toFixed(2),               
+                a.payment.card.toFixed(2),              
+            ];
+
             autoTable(doc, {
                 startY: currentY,
                 head: [summaryColumns],
-                body: sortedSummaries.map((d) => [
+                body: [...sortedSummaries.map((d) => [
                     format(new Date(d.date), 'dd/MMM/yy'),
                     d.billFrom.toString(),
                     d.billTo.toString(),
@@ -430,6 +677,7 @@ export const Reports: React.FC = () => {
                     d.subtotal.toFixed(2),
                     d.discount.toFixed(2),
                     d.taxableValue.toFixed(2),
+                    (d.taxableValue - d.totalTax).toFixed(2), // Tax-exclusive taxable amount
                     d.cgst.toFixed(2),
                     d.sgst.toFixed(2),
                     d.totalTax.toFixed(2),
@@ -437,32 +685,23 @@ export const Reports: React.FC = () => {
                     d.cash.toFixed(2),
                     d.upi.toFixed(2),
                     d.card.toFixed(2),
-                ]),
+                ]), grandTotalRow],
                 theme: 'grid',
                 styles: { fontSize: 7, cellPadding: 1 },
                 headStyles: { fillColor: [240, 240, 240], textColor: [0, 0, 0], fontStyle: 'bold' },
-            });
-
-            currentY = (doc as any).lastAutoTable.finalY + 2;
-
-            // Grand Total Row
-            const a = reportData.allSalesTotals;
-            autoTable(doc, {
-                startY: currentY,
-                body: [[
-                    'GRAND TOTAL', '', '', a.count.toString(),
-                    a.subtotal.toFixed(2), a.discount.toFixed(2), a.taxableValue.toFixed(2),
-                    a.cgst.toFixed(2), a.sgst.toFixed(2), a.totalTax.toFixed(2),
-                    a.grandTotal.toFixed(2),
-                    a.payment.cash.toFixed(2), a.payment.upi.toFixed(2), a.payment.card.toFixed(2),
-                ]],
-                theme: 'grid',
-                styles: { fontSize: 7, cellPadding: 1, fontStyle: 'bold', fillColor: [200, 255, 200] },
+                bodyStyles: { fillColor: [255, 255, 255] },
+                // Style the last row (Grand Total) differently
+                didParseCell: function (data: any) {
+                    if (data.row.index === sortedSummaries.length) { // Last row is Grand Total
+                        data.cell.styles.fontStyle = 'bold';
+                        data.cell.styles.fillColor = [200, 255, 200];
+                    }
+                }
             });
 
         } else {
             // Detailed Report
-            const saleColumns = ['DATE', 'BILL NO', 'SUBTOTAL', 'DISCOUNT', 'TAXABLE', 'CGST', 'SGST', 'GST', 'GRAND TOTAL', 'PAYMENT'];
+            const saleColumns = ['DATE', 'BILL NO', 'GROSS AMOUNT\n(incl. GST)', 'DISCOUNT', 'NET AMOUNT\n(incl. GST)', 'TAXABLE AMOUNT\n(excl. GST)', 'CGST', 'SGST', 'TOTAL GST', 'AMOUNT PAID', 'PAYMENT'];
 
             const mapSaleRow = (sale: SaleRow) => {
                 const pb = getPaymentBreakdown(sale);
@@ -471,12 +710,16 @@ export const Reports: React.FC = () => {
                 if (pb.upi > 0) payModes.push('UPI');
                 if (pb.card > 0) payModes.push('Card');
 
+                const netAmount = sale.subtotal - sale.discount;
+                const taxableAmount = netAmount - sale.taxAmount; // Tax-exclusive base
+
                 return [
                     format(new Date(sale.createdAt), 'dd/MMM/yy'),
-                    sale.billNo.toString(),
+                    formatGstBillLabel(sale),
                     sale.subtotal.toFixed(2),
                     sale.discount.toFixed(2),
-                    (sale.subtotal - sale.discount).toFixed(2),
+                    netAmount.toFixed(2),
+                    taxableAmount.toFixed(2),
                     (sale.cgst || 0).toFixed(2),
                     (sale.sgst || 0).toFixed(2),
                     sale.taxAmount.toFixed(2),
@@ -495,54 +738,39 @@ export const Reports: React.FC = () => {
                 sortBy === 'billNo' ? compareBillNos(String(a.billNo), String(b.billNo)) : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
             );
 
+            // Include Grand Total row directly in the table body
+            const a = reportData.allSalesTotals;
+            const totalTaxableAmount = a.taxableValue - a.totalTax; // Tax-exclusive amount
+            const grandTotalRow = [
+                'GRAND TOTAL',                          
+                `${a.count} bills`,                     
+                a.subtotal.toFixed(2),                  
+                a.discount.toFixed(2),                   
+                a.taxableValue.toFixed(2),              
+                totalTaxableAmount.toFixed(2),         // New taxable amount column
+                a.cgst.toFixed(2),                      
+                a.sgst.toFixed(2),                      
+                a.totalTax.toFixed(2),                  
+                a.grandTotal.toFixed(2),                
+                'All modes',                                     
+            ];
+
             autoTable(doc, {
                 startY: currentY,
                 head: [saleColumns],
-                body: sortedSales.map(mapSaleRow),
+                body: [...sortedSales.map(mapSaleRow), grandTotalRow],
                 theme: 'grid',
                 styles: { fontSize: 8, cellPadding: 1 },
                 headStyles: { fillColor: [255, 255, 255], textColor: [0, 0, 0], fontStyle: 'bold' },
+                bodyStyles: { fillColor: [255, 255, 255] },
+                // Style the last row (Grand Total) differently
+                didParseCell: function (data: any) {
+                    if (data.row.index === sortedSales.length) { // Last row is Grand Total
+                        data.cell.styles.fontStyle = 'bold';
+                        data.cell.styles.fillColor = [220, 220, 220];
+                    }
+                }
             });
-
-            currentY = (doc as any).lastAutoTable.finalY + 2;
-
-            const a = reportData.allSalesTotals;
-            autoTable(doc, {
-                startY: currentY,
-                body: [[
-                    'GRAND TOTAL', '',
-                    a.subtotal.toFixed(2), a.discount.toFixed(2), a.taxableValue.toFixed(2),
-                    a.cgst.toFixed(2), a.sgst.toFixed(2), a.totalTax.toFixed(2),
-                    a.grandTotal.toFixed(2), '',
-                ]],
-                theme: 'grid',
-                styles: { fontSize: 8, cellPadding: 1, fontStyle: 'bold', fillColor: [220, 220, 220] },
-            });
-
-            currentY = (doc as any).lastAutoTable.finalY + 8;
-
-            // Tax Rate Breakdown
-            if (a.taxSlabs.length > 0) {
-                if (currentY > 160) { doc.addPage(); currentY = 15; }
-                doc.setFontSize(11);
-                doc.text('TAX RATE BREAKDOWN', 14, currentY);
-                currentY += 5;
-
-                autoTable(doc, {
-                    startY: currentY,
-                    head: [['GST Rate', 'Taxable Value', 'CGST', 'SGST', 'Total Tax']],
-                    body: a.taxSlabs.map((s) => [
-                        `${s.rate}%`,
-                        s.taxableValue.toFixed(2),
-                        `${(s.rate / 2).toFixed(1)}% = ${s.cgst.toFixed(2)}`,
-                        `${(s.rate / 2).toFixed(1)}% = ${s.sgst.toFixed(2)}`,
-                        s.totalTax.toFixed(2),
-                    ]),
-                    theme: 'grid',
-                    styles: { fontSize: 8, cellPadding: 1 },
-                    headStyles: { fillColor: [230, 230, 250], textColor: [0, 0, 0], fontStyle: 'bold' },
-                });
-            }
         }
 
         doc.save(`GST-${reportType === 'summary' ? 'Summary' : 'Detailed'}-${format(reportData.startDate, 'dd-MM-yyyy')}-to-${format(reportData.endDate, 'dd-MM-yyyy')}.pdf`);
@@ -565,14 +793,17 @@ export const Reports: React.FC = () => {
         );
 
         if (reportType === 'summary') {
-            const summaryHeader = ['DATE', 'BILL FROM', 'BILL TO', 'BILLS', 'SUBTOTAL', 'DISCOUNT', 'TAXABLE', 'CGST', 'SGST', 'GST', 'GRAND TOTAL', 'CASH', 'UPI', 'CARD'];
+            const summaryHeader = ['DATE', 'BILL FROM', 'BILL TO', 'BILLS', 'GROSS AMOUNT (incl. GST)', 'DISCOUNT', 'NET AMOUNT (incl. GST)', 'TAXABLE AMOUNT (excl. GST)', 'CGST', 'SGST', 'TOTAL GST', 'AMOUNT PAID', 'CASH', 'UPI', 'CARD'];
 
             const sortedSummaries = [...reportData.dailySummaries].sort((a, b) =>
                 sortBy === 'billNo' ? compareBillNos(a.billFrom, b.billFrom) : a.date.localeCompare(b.date)
             );
 
             const data = [
-                ['ZAIN GENTS PALACE'],
+                [shopSettings.shopName],
+                [shopSettings.address.replace('\n', ', ')],
+                [`Ph: ${shopSettings.phone}  |  GSTIN: ${shopSettings.gstin}`],
+                [],
                 [dateRange],
                 [],
                 ['DAILY SALES SUMMARY'],
@@ -581,17 +812,18 @@ export const Reports: React.FC = () => {
                     format(new Date(d.date), 'dd/MMM/yy'),
                     d.billFrom, d.billTo, d.billCount,
                     d.subtotal, d.discount, d.taxableValue,
+                    (d.taxableValue - d.totalTax), // Tax-exclusive taxable amount
                     d.cgst, d.sgst, d.totalTax, d.grandTotal,
                     d.cash, d.upi, d.card,
                 ]),
-                ['GRAND TOTAL', '', '', a.count, a.subtotal, a.discount, a.taxableValue, a.cgst, a.sgst, a.totalTax, a.grandTotal, a.payment.cash, a.payment.upi, a.payment.card],
+                ['GRAND TOTAL', '', '', a.count, a.subtotal, a.discount, a.taxableValue, (a.taxableValue - a.totalTax), a.cgst, a.sgst, a.totalTax, a.grandTotal, a.payment.cash, a.payment.upi, a.payment.card],
             ];
 
             const ws = XLSX.utils.aoa_to_sheet(data);
             XLSX.utils.book_append_sheet(wb, ws, 'Daily Summary');
 
         } else {
-            const header = ['DATE & TIME', 'BILL NO', 'CUSTOMER', 'SUBTOTAL', 'DISCOUNT', 'TAXABLE', 'CGST', 'SGST', 'GST', 'GRAND TOTAL', 'PAYMENT'];
+            const header = ['DATE & TIME', 'BILL NO', 'CUSTOMER', 'GROSS AMOUNT (incl. GST)', 'DISCOUNT', 'NET AMOUNT (incl. GST)', 'TAXABLE AMOUNT (excl. GST)', 'CGST', 'SGST', 'TOTAL GST', 'AMOUNT PAID', 'PAYMENT'];
 
             const mapSaleExcel = (sale: SaleRow) => {
                 const pb = getPaymentBreakdown(sale);
@@ -600,13 +832,17 @@ export const Reports: React.FC = () => {
                 if (pb.upi > 0) payModes.push('UPI');
                 if (pb.card > 0) payModes.push('Card');
 
+                const netAmount = sale.subtotal - sale.discount;
+                const taxableAmount = netAmount - sale.taxAmount; // Tax-exclusive base
+
                 return [
                     format(new Date(sale.createdAt), 'dd/MMM/yy HH:mm'),
                     sale.billNo,
                     sale.customerName || 'Walk-in Customer',
                     sale.subtotal,
                     sale.discount,
-                    sale.subtotal - sale.discount,
+                    netAmount,
+                    taxableAmount,
                     sale.cgst || 0,
                     sale.sgst || 0,
                     sale.taxAmount,
@@ -616,21 +852,16 @@ export const Reports: React.FC = () => {
             };
 
             const data = [
-                ['ZAIN GENTS PALACE'],
+                [shopSettings.shopName],
+                [shopSettings.address.replace('\n', ', ')],
+                [`Ph: ${shopSettings.phone}  |  GSTIN: ${shopSettings.gstin}`],
+                [],
                 [dateRange],
                 [],
                 ['DETAILED INVOICE REPORT'],
                 header,
                 ...sortedSales.map(mapSaleExcel),
-                ['GRAND TOTAL', '', '', a.subtotal, a.discount, a.taxableValue, a.cgst, a.sgst, a.totalTax, a.grandTotal, ''],
-                [],
-                ['TAX RATE BREAKDOWN'],
-                ['GST Rate', 'Taxable Value', 'CGST Rate', 'CGST Amt', 'SGST Rate', 'SGST Amt', 'Total Tax'],
-                ...a.taxSlabs.map((s) => [`${s.rate}%`, s.taxableValue, `${(s.rate / 2).toFixed(1)}%`, s.cgst, `${(s.rate / 2).toFixed(1)}%`, s.sgst, s.totalTax]),
-                [],
-                ['HSN-WISE SUMMARY'],
-                ['HSN Code', 'Description', 'Qty', 'Taxable Value', 'GST Rate', 'CGST', 'SGST', 'Total Tax'],
-                ...a.hsnSummary.map((h) => [h.hsn, h.description, h.quantity, h.taxableValue, `${h.taxRate}%`, h.cgst, h.sgst, h.totalTax]),
+                ['GRAND TOTAL', '', '', a.subtotal, a.discount, a.taxableValue, (a.taxableValue - a.totalTax), a.cgst, a.sgst, a.totalTax, a.grandTotal, ''],
                 [],
                 ['PAYMENT BREAKDOWN'],
                 ['Cash', a.payment.cash],
@@ -651,7 +882,10 @@ export const Reports: React.FC = () => {
         ];
 
         const itemsData: any[] = [
-            ['ZAIN GENTS PALACE'],
+            [shopSettings.shopName],
+            [shopSettings.address.replace('\n', ', ')],
+            [`Ph: ${shopSettings.phone}  |  GSTIN: ${shopSettings.gstin}`],
+            [],
             [dateRange],
             [],
             ['ITEMS DETAIL (ALL INVOICES)'],
@@ -887,6 +1121,33 @@ export const Reports: React.FC = () => {
             {/* Report Preview */}
             {reportData && a && (
                 <>
+                    {reportData.exchangeReplacementTotals.count > 0 && (
+                        <div className="card p-4 border-l-4 border-amber-500 bg-amber-50/40 dark:bg-amber-900/10">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div>
+                                    <p className="text-sm font-bold text-amber-800 dark:text-amber-300">Exchange Replacement Bills</p>
+                                    <p className="text-xs text-amber-700/80 dark:text-amber-400/80">
+                                        These bills stay visible in Sales History, but are excluded from the normal GST sales totals below.
+                                    </p>
+                                </div>
+                                <div className="flex gap-6 text-sm">
+                                    <div>
+                                        <span className="text-xs text-amber-700/80 block">Bills</span>
+                                        <span className="font-bold">{reportData.exchangeReplacementTotals.count}</span>
+                                    </div>
+                                    <div>
+                                        <span className="text-xs text-amber-700/80 block">Taxable</span>
+                                        <span className="font-bold">{formatIndianCurrency(reportData.exchangeReplacementTotals.taxableValue)}</span>
+                                    </div>
+                                    <div>
+                                        <span className="text-xs text-amber-700/80 block">Grand Total</span>
+                                        <span className="font-bold">{formatIndianCurrency(reportData.exchangeReplacementTotals.grandTotal)}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Summary Stats */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <div className="card p-4 border-l-4 border-blue-500">
@@ -996,7 +1257,7 @@ export const Reports: React.FC = () => {
                                                 return (
                                                     <tr key={sale.id} className="border-b dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-800/50">
                                                         <td className="py-2 px-3">{format(new Date(sale.createdAt), 'dd/MMM/yy')}</td>
-                                                        <td className="py-2 px-3 text-center font-mono">{sale.billNo}</td>
+                                                        <td className="py-2 px-3 text-center font-mono">{formatGstBillLabel(sale)}</td>
                                                         <td className="py-2 px-3 text-right">{formatIndianCurrency(sale.subtotal)}</td>
                                                         <td className="py-2 px-3 text-right text-red-500">{sale.discount > 0 ? `-${formatIndianCurrency(sale.discount)}` : '-'}</td>
                                                         <td className="py-2 px-3 text-right">{formatIndianCurrency(sale.subtotal - sale.discount)}</td>

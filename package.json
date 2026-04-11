@@ -13,6 +13,9 @@
     "preview": "vite preview",
     "electron:dev": "vite",
     "electron:build": "vite build && electron-builder",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "verify:smoke": "node scripts/release-smoke-check.js",
+    "verify:release": "npm run typecheck && npm run verify:smoke",
     "postinstall": "prisma generate",
     "import": "ts-node scripts/import-from-excel.ts",
     "test-sync": "ts-node scripts/test-sync.ts",
@@ -63,6 +66,13 @@
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
   },
+  "ts-node": {
+    "esm": true,
+    "compilerOptions": {
+      "module": "ESNext",
+      "moduleResolution": "Node16"
+    }
+  },
   "build": {
     "appId": "com.zaingentspalace.pos",
     "productName": "ZAIN GENTS PALACE POS",
@@ -109,6 +119,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
+      "include": "build/installer.nsh",
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "shortcutName": "ZAIN GENTS PALACE POS"

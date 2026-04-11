@@ -1,8 +1,26 @@
+import * as React from 'react';
 import { useEffect, useState } from 'react';
-import { FileSpreadsheet, ReceiptText } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { FileSpreadsheet, ReceiptText, Activity, TrendingUp, Calendar, Layers } from 'lucide-react';
+import { StatCard } from '@/components/shared/StatCard';
 import { formatCurrency } from '@/lib/format';
+import { 
+  Table, 
+  TableBody, 
+  TableCell, 
+  TableHead, 
+  TableHeader, 
+  TableRow 
+} from '@/components/ui/table';
+import { 
+  Card, 
+  CardContent, 
+  CardDescription, 
+  CardHeader, 
+  CardTitle 
+} from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import api from '@/lib/api';
+import { Button } from '@/components/ui/button';
 import { isDemoModeEnabled } from '@/lib/demo';
 
 interface GstSummary {
@@ -94,128 +112,164 @@ export default function Reports() {
     }
 
     if (loading || !report) {
-        return <div className="dashboard-surface rounded-[1.5rem] px-6 py-16 text-center text-sm text-slate-500 dark:text-slate-400">Loading GST reports...</div>;
+        return (
+            <div className="flex items-center justify-center p-24 text-muted-foreground">
+                Loading reports...
+            </div>
+        );
     }
 
     return (
-        <div className="space-y-6">
-            <div>
-                <h1 className="dashboard-section-title">GST Reports</h1>
-                <p className="dashboard-section-copy">Remote GST summary, slab breakdown, and bill-level tax visibility.</p>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-4">
-                <Stat label="Taxable Value" value={formatCurrency(report.summary.taxableValue)} />
-                <Stat label="CGST" value={formatCurrency(report.summary.cgst)} />
-                <Stat label="SGST" value={formatCurrency(report.summary.sgst)} />
-                <Stat label="Grand Total" value={formatCurrency(report.summary.grandTotal)} />
-            </div>
-
-            <div className="grid gap-6 xl:grid-cols-2">
-                <Card>
-                    <CardHeader>
-                        <CardTitle className="text-xl">GST Slabs</CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-0">
-                        <table className="w-full text-sm">
-                            <thead className="bg-slate-50/80 text-slate-400 dark:bg-slate-900/50 dark:text-slate-500">
-                                <tr>
-                                    <th className="px-4 py-4 text-left font-semibold uppercase tracking-[0.18em]">Rate</th>
-                                    <th className="px-4 py-4 text-right font-semibold uppercase tracking-[0.18em]">Taxable</th>
-                                    <th className="px-4 py-4 text-right font-semibold uppercase tracking-[0.18em]">CGST</th>
-                                    <th className="px-4 py-4 text-right font-semibold uppercase tracking-[0.18em]">SGST</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800">
-                                {report.slabs.map((slab) => (
-                                    <tr key={slab.rate}>
-                                        <td className="px-4 py-4 font-medium">{slab.rate}%</td>
-                                        <td className="px-4 py-4 text-right">{formatCurrency(slab.taxableValue)}</td>
-                                        <td className="px-4 py-4 text-right">{formatCurrency(slab.cgst)}</td>
-                                        <td className="px-4 py-4 text-right">{formatCurrency(slab.sgst)}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </CardContent>
-                </Card>
-
-                <Card>
-                    <CardHeader>
-                        <CardTitle className="text-xl">Daily GST Summary</CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-0">
-                        <table className="w-full text-sm">
-                            <thead className="bg-slate-50/80 text-slate-400 dark:bg-slate-900/50 dark:text-slate-500">
-                                <tr>
-                                    <th className="px-4 py-4 text-left font-semibold uppercase tracking-[0.18em]">Date</th>
-                                    <th className="px-4 py-4 text-right font-semibold uppercase tracking-[0.18em]">Bills</th>
-                                    <th className="px-4 py-4 text-right font-semibold uppercase tracking-[0.18em]">Taxable</th>
-                                    <th className="px-4 py-4 text-right font-semibold uppercase tracking-[0.18em]">Tax</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800">
-                                {report.daily.map((day) => (
-                                    <tr key={day.date}>
-                                        <td className="px-4 py-4 font-medium">{day.date}</td>
-                                        <td className="px-4 py-4 text-right">{day.bills}</td>
-                                        <td className="px-4 py-4 text-right">{formatCurrency(day.taxableValue)}</td>
-                                        <td className="px-4 py-4 text-right">{formatCurrency(day.totalTax)}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </CardContent>
-                </Card>
-            </div>
-
-            <Card>
-                <CardHeader>
-                    <CardTitle className="text-xl">Bill-Level GST Sales</CardTitle>
-                </CardHeader>
-                <CardContent className="p-0">
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                            <thead className="bg-slate-50/80 text-slate-400 dark:bg-slate-900/50 dark:text-slate-500">
-                                <tr>
-                                    <th className="px-4 py-4 text-left font-semibold uppercase tracking-[0.18em]">Bill</th>
-                                    <th className="px-4 py-4 text-left font-semibold uppercase tracking-[0.18em]">Customer</th>
-                                    <th className="px-4 py-4 text-right font-semibold uppercase tracking-[0.18em]">Taxable</th>
-                                    <th className="px-4 py-4 text-right font-semibold uppercase tracking-[0.18em]">Tax</th>
-                                    <th className="px-4 py-4 text-right font-semibold uppercase tracking-[0.18em]">Grand</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800">
-                                {report.sales.map((sale) => (
-                                    <tr key={sale.id}>
-                                        <td className="px-4 py-4 font-mono font-medium">{sale.billNo}</td>
-                                        <td className="px-4 py-4">{sale.customerName || 'Walk-in'}</td>
-                                        <td className="px-4 py-4 text-right">{formatCurrency(sale.taxableValue)}</td>
-                                        <td className="px-4 py-4 text-right">{formatCurrency(sale.totalTax)}</td>
-                                        <td className="px-4 py-4 text-right font-medium">{formatCurrency(sale.grandTotal)}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                </CardContent>
-            </Card>
-        </div>
-    );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-    return (
-        <Card>
-            <CardContent className="flex items-center gap-4 p-6">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
-                    {label.includes('Tax') ? <ReceiptText className="h-5 w-5" /> : <FileSpreadsheet className="h-5 w-5" />}
-                </div>
+        <div className="flex-1 space-y-4 pt-4">
+            <div className="flex items-center justify-between">
                 <div>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">{label}</p>
-                    <p className="text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-100">{value}</p>
+                    <h2 className="text-2xl font-bold tracking-tight">Reports & Taxes</h2>
+                    <p className="text-muted-foreground text-sm">
+                        View your sales and tax reports.
+                    </p>
                 </div>
-            </CardContent>
-        </Card>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <StatCard title="Taxable Value" value={formatCurrency(report.summary.taxableValue)} icon={<FileSpreadsheet className="h-4 w-4" />}  />
+                <StatCard title="Central GST" value={formatCurrency(report.summary.cgst)} icon={<ReceiptText className="h-4 w-4" />} />
+                <StatCard title="State GST" value={formatCurrency(report.summary.sgst)} icon={<ReceiptText className="h-4 w-4" />} />
+                <Card className="bg-primary text-primary-foreground shadow">
+                     <CardContent className="p-6">
+                         <div className="flex justify-between items-start">
+                             <div className="space-y-2">
+                                 <p className="text-sm font-medium opacity-80">Total Sales</p>
+                                 <h4 className="text-2xl font-bold">{formatCurrency(report.summary.grandTotal)}</h4>
+                             </div>
+                             <TrendingUp className="h-5 w-5 opacity-80" />
+                         </div>
+                         <div className="mt-4 flex items-center gap-2 text-xs opacity-80">
+                             <span>Including tax</span>
+                         </div>
+                     </CardContent>
+                </Card>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Slab Partitioning */}
+                <Card>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                        <div className="space-y-1">
+                            <CardTitle className="text-base font-semibold">Tax by Slabs</CardTitle>
+                            <CardDescription className="text-xs">GST breakdown by percentage.</CardDescription>
+                        </div>
+                        <Layers className="h-4 w-4 text-muted-foreground" />
+                    </CardHeader>
+                    <CardContent className="pt-4">
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>Tax Rate</TableHead>
+                                    <TableHead className="text-right">Taxable Amount</TableHead>
+                                    <TableHead className="text-right">CGST / SGST</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {report.slabs.map((slab) => (
+                                    <TableRow key={slab.rate}>
+                                        <TableCell>
+                                            <Badge variant="secondary" className="font-normal text-xs">
+                                                {slab.rate}%
+                                            </Badge>
+                                        </TableCell>
+                                        <TableCell className="text-right">{formatCurrency(slab.taxableValue)}</TableCell>
+                                        <TableCell className="text-right text-muted-foreground text-xs">
+                                            {formatCurrency(slab.cgst)} / {formatCurrency(slab.sgst)}
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </CardContent>
+                </Card>
+
+                {/* Daily Accumulation */}
+                <Card>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                        <div className="space-y-1">
+                            <CardTitle className="text-base font-semibold">Daily Sales</CardTitle>
+                            <CardDescription className="text-xs">Sales breakdown by day.</CardDescription>
+                        </div>
+                        <Calendar className="h-4 w-4 text-muted-foreground" />
+                    </CardHeader>
+                    <CardContent className="pt-4">
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>Date</TableHead>
+                                    <TableHead className="text-center">Bills</TableHead>
+                                    <TableHead className="text-right">Total Tax</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {report.daily.map((day) => (
+                                    <TableRow key={day.date}>
+                                        <TableCell>
+                                            <span className="text-sm">{day.date}</span>
+                                        </TableCell>
+                                        <TableCell className="text-center">
+                                            <span className="text-xs text-muted-foreground">{day.bills}</span>
+                                        </TableCell>
+                                        <TableCell className="text-right font-medium">
+                                            {formatCurrency(day.totalTax)}
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </CardContent>
+                </Card>
+
+                {/* Transaction Matrix */}
+                <Card className="col-span-1 md:col-span-2">
+                    <CardHeader className="flex flex-row items-center justify-between pb-2 border-b">
+                        <div className="space-y-1">
+                            <CardTitle className="text-base font-semibold">Recent Transactions</CardTitle>
+                            <CardDescription className="text-xs">List of recent sales and their tax details.</CardDescription>
+                        </div>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead className="pl-6">Bill No</TableHead>
+                                    <TableHead>Customer</TableHead>
+                                    <TableHead className="text-right">Taxable</TableHead>
+                                    <TableHead className="text-right">CGST / SGST</TableHead>
+                                    <TableHead className="pr-6 text-right">Total Amount</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {report.sales.map((sale) => (
+                                    <TableRow key={sale.id}>
+                                        <TableCell className="pl-6">
+                                             <div className="flex items-center gap-2">
+                                                 <ReceiptText className="h-4 w-4 text-muted-foreground" />
+                                                 <span className="font-medium text-sm">#{sale.billNo}</span>
+                                             </div>
+                                        </TableCell>
+                                        <TableCell>
+                                            <span className="text-sm">{sale.customerName || 'Walk-in'}</span>
+                                        </TableCell>
+                                        <TableCell className="text-right text-sm">{formatCurrency(sale.taxableValue)}</TableCell>
+                                        <TableCell className="text-right text-xs text-muted-foreground">
+                                            {formatCurrency(sale.cgst)} / {formatCurrency(sale.sgst)}
+                                        </TableCell>
+                                        <TableCell className="pr-6 text-right font-medium">
+                                            {formatCurrency(sale.grandTotal)}
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </CardContent>
+                </Card>
+            </div>
+        </div>
     );
 }

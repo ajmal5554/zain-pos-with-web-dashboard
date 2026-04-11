@@ -13,6 +13,7 @@ import { Users } from './pages/Users';
 import { Permissions } from './pages/Permissions';
 import { Forecasting } from './pages/Forecasting';
 import { MainLayout } from './components/Layout/MainLayout';
+import { WindowTitleBar } from './components/Layout/WindowTitleBar';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import { useAuthStore } from './store/authStore';
 
@@ -88,94 +89,99 @@ function App() {
     }, []);
 
     return (
-        <HashRouter>
-            <Routes>
-                <Route path="/login" element={<Login />} />
-                <Route
-                    path="/"
-                    element={
-                        <ProtectedRoute>
-                            <MainLayout />
-                        </ProtectedRoute>
-                    }
-                >
-                    <Route
-                        index
-                        element={
-                            <PermissionRoute perm="permViewReports">
-                                <PageBoundary><Dashboard /></PageBoundary>
-                            </PermissionRoute>
-                        }
-                    />
-                    <Route path="pos" element={<PageBoundary><POS /></PageBoundary>} />
-                    <Route
-                        path="products"
-                        element={
-                            <PermissionRoute perm="permManageProducts">
-                                <PageBoundary><Products /></PageBoundary>
-                            </PermissionRoute>
-                        }
-                    />
-                    <Route path="customers" element={<PageBoundary><Customers /></PageBoundary>} />
-                    <Route
-                        path="sales"
-                        element={
-                            <PermissionRoute perm="permViewSales">
-                                <PageBoundary><Sales /></PageBoundary>
-                            </PermissionRoute>
-                        }
-                    />
-                    <Route
-                        path="reports"
-                        element={
-                            <PermissionRoute perm="permViewGstReports">
-                                <PageBoundary><Reports /></PageBoundary>
-                            </PermissionRoute>
-                        }
-                    />
-                    <Route
-                        path="settings"
-                        element={
-                            <PermissionRoute perm="permEditSettings">
-                                <PageBoundary><Settings /></PageBoundary>
-                            </PermissionRoute>
-                        }
-                    />
-                    <Route
-                        path="users"
-                        element={
-                            <PermissionRoute perm="permManageUsers">
-                                <PageBoundary><Users /></PageBoundary>
-                            </PermissionRoute>
-                        }
-                    />
-                    <Route
-                        path="permissions"
-                        element={
-                            <PermissionRoute perm="permManageUsers">
-                                <PageBoundary><Permissions /></PageBoundary>
-                            </PermissionRoute>
-                        }
-                    />
-                    <Route
-                        path="activity"
-                        element={
-                            <PermissionRoute perm="permViewReports">
-                                <PageBoundary><ActivityPage /></PageBoundary>
-                            </PermissionRoute>
-                        }
-                    />
-                    <Route
-                        path="forecasting"
-                        element={
-                            <InsightsRoute>
-                                <PageBoundary><Forecasting /></PageBoundary>
-                            </InsightsRoute>
-                        }
-                    />
-                </Route>
-            </Routes>
-        </HashRouter>
+        <div className="h-screen flex flex-col bg-gray-50 dark:bg-dark-bg">
+            <WindowTitleBar />
+            <div className="flex-1 min-h-0">
+                <HashRouter>
+                    <Routes>
+                        <Route path="/login" element={<Login />} />
+                        <Route
+                            path="/"
+                            element={
+                                <ProtectedRoute>
+                                    <MainLayout />
+                                </ProtectedRoute>
+                            }
+                        >
+                            <Route
+                                index
+                                element={
+                                    <PermissionRoute perm="permViewReports">
+                                        <PageBoundary><Dashboard /></PageBoundary>
+                                    </PermissionRoute>
+                                }
+                            />
+                            <Route path="pos" element={<PageBoundary><POS /></PageBoundary>} />
+                            <Route
+                                path="products"
+                                element={
+                                    <PermissionRoute perm="permManageProducts">
+                                        <PageBoundary><Products /></PageBoundary>
+                                    </PermissionRoute>
+                                }
+                            />
+                            <Route path="customers" element={<PageBoundary><Customers /></PageBoundary>} />
+                            <Route
+                                path="sales"
+                                element={
+                                    <PermissionRoute perm="permViewSales">
+                                        <PageBoundary><Sales /></PageBoundary>
+                                    </PermissionRoute>
+                                }
+                            />
+                            <Route
+                                path="reports"
+                                element={
+                                    <PermissionRoute perm="permViewGstReports">
+                                        <PageBoundary><Reports /></PageBoundary>
+                                    </PermissionRoute>
+                                }
+                            />
+                            <Route
+                                path="settings"
+                                element={
+                                    <PermissionRoute perm="permEditSettings">
+                                        <PageBoundary><Settings /></PageBoundary>
+                                    </PermissionRoute>
+                                }
+                            />
+                            <Route
+                                path="users"
+                                element={
+                                    <PermissionRoute perm="permManageUsers">
+                                        <PageBoundary><Users /></PageBoundary>
+                                    </PermissionRoute>
+                                }
+                            />
+                            <Route
+                                path="permissions"
+                                element={
+                                    <PermissionRoute perm="permManageUsers">
+                                        <PageBoundary><Permissions /></PageBoundary>
+                                    </PermissionRoute>
+                                }
+                            />
+                            <Route
+                                path="activity"
+                                element={
+                                    <PermissionRoute perm="permViewReports">
+                                        <PageBoundary><ActivityPage /></PageBoundary>
+                                    </PermissionRoute>
+                                }
+                            />
+                            <Route
+                                path="forecasting"
+                                element={
+                                    <InsightsRoute>
+                                        <PageBoundary><Forecasting /></PageBoundary>
+                                    </InsightsRoute>
+                                }
+                            />
+                        </Route>
+                    </Routes>
+                </HashRouter>
+            </div>
+        </div>
     );
 }
 

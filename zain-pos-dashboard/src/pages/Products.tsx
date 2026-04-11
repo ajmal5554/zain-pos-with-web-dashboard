@@ -1,11 +1,32 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Edit, Plus, Search, Trash2 } from 'lucide-react';
+import { Edit, Plus, Search, Trash2, X, MoreHorizontal, Package2, Tag, FileText, ChevronRight } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { 
+  Table, 
+  TableBody, 
+  TableCell, 
+  TableHead, 
+  TableHeader, 
+  TableRow 
+} from '@/components/ui/table';
+import { 
+  Card, 
+  CardContent 
+} from '@/components/ui/card';
+import { 
+  Dialog, 
+  DialogContent, 
+  DialogDescription, 
+  DialogFooter, 
+  DialogHeader, 
+  DialogTitle 
+} from '@/components/ui/dialog';
+import { Badge } from '@/components/ui/badge';
 import { productService, type ManagedProduct, type ProductCategory, type ProductVariantForm } from '@/features/products/services/product.service';
 import { formatCurrency } from '@/lib/format';
 import { isDemoModeEnabled } from '@/lib/demo';
+import { cn } from '@/lib/utils';
 
 const emptyVariant: ProductVariantForm = {
     sku: '',
@@ -125,21 +146,23 @@ export default function ProductsPage() {
         try {
             await productService.deleteProduct(id);
             setProducts((current) => current.filter((product) => product.id !== id));
-            toast.success('Product deactivated');
+            toast.success('Product deleted');
         } catch (error: any) {
             toast.error(error?.response?.data?.error || 'Failed to delete product');
         }
     }
 
     return (
-        <div className="space-y-6">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex-1 space-y-4 pt-4">
+            <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="dashboard-section-title">Products</h1>
-                    <p className="dashboard-section-copy">Manage catalog, variants, barcodes, price points, and stock thresholds remotely.</p>
+                    <h2 className="text-2xl font-bold tracking-tight">Products</h2>
+                    <p className="text-muted-foreground text-sm">
+                        Manage your shop stock and items
+                    </p>
                 </div>
                 {!isDemoModeEnabled() && (
-                    <Button className="rounded-2xl" onClick={openCreateModal}>
+                    <Button onClick={openCreateModal}>
                         <Plus className="mr-2 h-4 w-4" />
                         Add Product
                     </Button>
@@ -147,138 +170,215 @@ export default function ProductsPage() {
             </div>
 
             <Card>
-                <CardHeader className="border-b border-slate-200/70 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900/40">
-                    <CardTitle className="text-xl">Catalog Search</CardTitle>
-                </CardHeader>
                 <CardContent className="p-4">
-                    <div className="relative max-w-md">
-                        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                        <input
-                            value={search}
-                            onChange={(e) => setSearch(e.target.value)}
-                            placeholder="Search by product name or barcode"
-                            className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-sky-700 dark:focus:ring-sky-950/40"
-                        />
+                    <div className="flex items-center space-x-2">
+                        <div className="relative flex-1">
+                            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                            <input
+                                type="text"
+                                placeholder="Search products..."
+                                value={search}
+                                onChange={(e) => setSearch(e.target.value)}
+                                className="w-full h-9 rounded-md border border-input bg-background pl-8 pr-3 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                            />
+                        </div>
+                        <Button variant="outline" className="h-9 px-4">
+                            <Tag className="mr-2 h-4 w-4" />
+                            Categories
+                        </Button>
                     </div>
                 </CardContent>
             </Card>
 
-            <Card className="overflow-hidden">
-                <CardContent className="p-0">
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                            <thead className="bg-slate-50/80 text-slate-400 dark:bg-slate-900/50 dark:text-slate-500">
-                                <tr>
-                                    <th className="px-4 py-4 text-left font-semibold uppercase tracking-[0.18em]">Product</th>
-                                    <th className="px-4 py-4 text-left font-semibold uppercase tracking-[0.18em]">Category</th>
-                                    <th className="px-4 py-4 text-left font-semibold uppercase tracking-[0.18em]">Barcode</th>
-                                    <th className="px-4 py-4 text-right font-semibold uppercase tracking-[0.18em]">Stock</th>
-                                    <th className="px-4 py-4 text-right font-semibold uppercase tracking-[0.18em]">Price</th>
-                                    <th className="px-4 py-4 text-right font-semibold uppercase tracking-[0.18em]">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800">
-                                {loading ? (
-                                    <tr>
-                                        <td colSpan={6} className="px-4 py-10 text-center text-slate-500 dark:text-slate-400">Loading products...</td>
-                                    </tr>
-                                ) : filteredProducts.map((product) => {
-                                    const primaryVariant = product.variants[0];
-                                    const totalStock = product.variants.reduce((sum, variant) => sum + Number(variant.stock || 0), 0);
-                                    return (
-                                        <tr key={product.id}>
-                                            <td className="px-4 py-4">
-                                                <div className="font-medium text-slate-950 dark:text-slate-100">{product.name}</div>
-                                                <div className="text-xs uppercase tracking-[0.18em] text-slate-400 dark:text-slate-500">
-                                                    {product.variants.length} variant{product.variants.length === 1 ? '' : 's'}
-                                                </div>
-                                            </td>
-                                            <td className="px-4 py-4 text-slate-500 dark:text-slate-400">{product.category?.name || 'Uncategorized'}</td>
-                                            <td className="px-4 py-4 font-mono text-slate-500 dark:text-slate-400">{primaryVariant?.barcode || '-'}</td>
-                                            <td className="px-4 py-4 text-right text-slate-900 dark:text-slate-100">{totalStock}</td>
-                                            <td className="px-4 py-4 text-right text-slate-900 dark:text-slate-100">{formatCurrency(primaryVariant?.sellingPrice || 0)}</td>
-                                            <td className="px-4 py-4">
-                                                <div className="flex justify-end gap-2">
-                                                    <Button variant="outline" size="sm" className="rounded-xl" onClick={() => openEditModal(product)}>
-                                                        <Edit className="mr-2 h-4 w-4" />
-                                                        Edit
-                                                    </Button>
-                                                    <Button variant="outline" size="sm" className="rounded-xl text-rose-600" onClick={() => void deleteProduct(product.id)}>
-                                                        <Trash2 className="mr-2 h-4 w-4" />
-                                                        Delete
-                                                    </Button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-                </CardContent>
-            </Card>
+            <div className="rounded-md border bg-card overflow-hidden">
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead className="w-[40%]">Product Details</TableHead>
+                            <TableHead>Category</TableHead>
+                            <TableHead>Barcode / SKU</TableHead>
+                            <TableHead className="text-right">Stock</TableHead>
+                            <TableHead className="text-right">Unit Price</TableHead>
+                            <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {loading ? (
+                            <TableRow>
+                                <TableCell colSpan={6} className="h-24 text-center">
+                                    Loading...
+                                </TableCell>
+                            </TableRow>
+                        ) : filteredProducts.length > 0 ? (
+                            filteredProducts.map((product) => {
+                                const primaryVariant = product.variants[0];
+                                const totalStock = product.variants.reduce((sum, variant) => sum + Number(variant.stock || 0), 0);
+                                return (
+                                    <TableRow key={product.id}>
+                                        <TableCell>
+                                            <div className="flex flex-col">
+                                                <span className="font-medium text-sm">{product.name}</span>
+                                                <span className="text-xs text-muted-foreground mt-1">
+                                                    {product.variants.length} Type{product.variants.length === 1 ? '' : 's'}
+                                                </span>
+                                            </div>
+                                        </TableCell>
+                                        <TableCell>
+                                            <Badge variant="secondary" className="font-normal text-xs">
+                                                {product.category?.name || 'None'}
+                                            </Badge>
+                                        </TableCell>
+                                        <TableCell>
+                                            <span className="text-sm text-muted-foreground">
+                                                {primaryVariant?.barcode || 'N/A'}
+                                            </span>
+                                        </TableCell>
+                                        <TableCell className="text-right">
+                                            <span className={cn(
+                                                "text-sm font-medium",
+                                                totalStock <= 5 ? "text-rose-500" : "text-emerald-600"
+                                            )}>
+                                                {totalStock}
+                                            </span>
+                                        </TableCell>
+                                        <TableCell className="text-right font-medium">
+                                            {formatCurrency(primaryVariant?.sellingPrice || 0)}
+                                        </TableCell>
+                                        <TableCell className="text-right">
+                                            <div className="flex justify-end space-x-2">
+                                                <Button 
+                                                    variant="ghost" 
+                                                    size="sm"
+                                                    onClick={() => openEditModal(product)}
+                                                >
+                                                    Edit
+                                                </Button>
+                                                <Button 
+                                                    variant="ghost" 
+                                                    size="icon"
+                                                    className="h-8 w-8 text-rose-500 hover:text-rose-600"
+                                                    onClick={() => void deleteProduct(product.id)}
+                                                >
+                                                    <Trash2 className="h-4 w-4" />
+                                                </Button>
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                );
+                            })
+                        ) : (
+                            <TableRow>
+                                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                                    No products found
+                                </TableCell>
+                            </TableRow>
+                        )}
+                    </TableBody>
+                </Table>
+            </div>
 
-            {showModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
-                    <Card className="w-full max-w-4xl">
-                        <CardHeader>
-                            <CardTitle>{editingProduct ? 'Edit Product' : 'Add Product'}</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="grid gap-4 md:grid-cols-2">
-                                <input className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="Product name" value={form.name} onChange={(e) => setForm((current) => ({ ...current, name: e.target.value }))} />
-                                <select className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-900" value={form.categoryId} onChange={(e) => setForm((current) => ({ ...current, categoryId: e.target.value }))}>
-                                    <option value="">Select category</option>
+            <Dialog open={showModal} onOpenChange={setShowModal}>
+                <DialogContent className="max-w-2xl">
+                    <DialogHeader>
+                        <DialogTitle>
+                            {editingProduct ? 'Edit Product' : 'Add New Product'}
+                        </DialogTitle>
+                        <DialogDescription>
+                            Enter product details and stock information here.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="space-y-4 py-4">
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">Product Name</label>
+                                <input 
+                                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                    placeholder="e.g. T-Shirt" 
+                                    value={form.name} 
+                                    onChange={(e) => setForm((current) => ({ ...current, name: e.target.value }))} 
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">Category</label>
+                                <select 
+                                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                    value={form.categoryId} 
+                                    onChange={(e) => setForm((current) => ({ ...current, categoryId: e.target.value }))}
+                                >
+                                    <option value="">No Category</option>
                                     {categories.map((category) => (
                                         <option key={category.id} value={category.id}>{category.name}</option>
                                     ))}
                                 </select>
-                                <input className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="HSN code" value={form.hsn} onChange={(e) => setForm((current) => ({ ...current, hsn: e.target.value }))} />
-                                <input className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="Tax rate" type="number" value={form.taxRate} onChange={(e) => setForm((current) => ({ ...current, taxRate: Number(e.target.value) || 0 }))} />
                             </div>
+                        </div>
 
-                            <textarea className="min-h-[96px] w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="Description" value={form.description} onChange={(e) => setForm((current) => ({ ...current, description: e.target.value }))} />
-
+                        <div className="space-y-4 pt-4 border-t">
+                            <div className="flex items-center justify-between">
+                                <h3 className="text-sm font-semibold">Item Types (Sizes/Colors)</h3>
+                                <Button 
+                                    variant="outline" 
+                                    size="sm" 
+                                    onClick={() => setForm((current) => ({ ...current, variants: [...current.variants, { ...emptyVariant }] }))}
+                                >
+                                    Add Item Type
+                                </Button>
+                            </div>
+                            
                             <div className="space-y-3">
-                                <div className="flex items-center justify-between">
-                                    <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-400 dark:text-slate-500">Variants</h3>
-                                    <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setForm((current) => ({ ...current, variants: [...current.variants, { ...emptyVariant }] }))}>
-                                        <Plus className="mr-2 h-4 w-4" />
-                                        Add Variant
-                                    </Button>
-                                </div>
-
                                 {form.variants.map((variant, index) => (
-                                    <div key={index} className="grid gap-3 rounded-2xl border border-slate-200 p-4 dark:border-slate-800 md:grid-cols-3 xl:grid-cols-5">
-                                        <input className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="SKU" value={variant.sku} onChange={(e) => updateVariant(index, { sku: e.target.value })} />
-                                        <input className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="Barcode" value={variant.barcode} onChange={(e) => updateVariant(index, { barcode: e.target.value })} />
-                                        <input className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="Size" value={variant.size} onChange={(e) => updateVariant(index, { size: e.target.value })} />
-                                        <input className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="Color" value={variant.color} onChange={(e) => updateVariant(index, { color: e.target.value })} />
-                                        <input className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="MRP" type="number" value={variant.mrp} onChange={(e) => updateVariant(index, { mrp: Number(e.target.value) || 0 })} />
-                                        <input className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="Selling price" type="number" value={variant.sellingPrice} onChange={(e) => updateVariant(index, { sellingPrice: Number(e.target.value) || 0 })} />
-                                        <input className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="Cost price" type="number" value={variant.costPrice} onChange={(e) => updateVariant(index, { costPrice: Number(e.target.value) || 0 })} />
-                                        <input className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="Stock" type="number" value={variant.stock} onChange={(e) => updateVariant(index, { stock: Number(e.target.value) || 0 })} />
-                                        <input className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="Min stock" type="number" value={variant.minStock} onChange={(e) => updateVariant(index, { minStock: Number(e.target.value) || 0 })} />
-                                        <div className="flex items-center justify-end">
-                                            {form.variants.length > 1 && (
-                                                <Button variant="outline" size="sm" className="rounded-xl text-rose-600" onClick={() => setForm((current) => ({ ...current, variants: current.variants.filter((_, variantIndex) => variantIndex !== index) }))}>
-                                                    <Trash2 className="mr-2 h-4 w-4" />
-                                                    Remove
-                                                </Button>
-                                            )}
-                                        </div>
+                                    <div key={index} className="flex gap-3 items-end p-3 bg-muted/50 rounded-lg border">
+                                         <div className="space-y-1 flex-1">
+                                            <label className="text-xs font-medium">Barcode / SKU</label>
+                                            <input 
+                                                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" 
+                                                value={variant.sku} 
+                                                onChange={(e) => updateVariant(index, { sku: e.target.value })} 
+                                            />
+                                         </div>
+                                         <div className="space-y-1 w-24">
+                                            <label className="text-xs font-medium">Price</label>
+                                            <input 
+                                                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" 
+                                                type="number" 
+                                                value={variant.sellingPrice} 
+                                                onChange={(e) => updateVariant(index, { sellingPrice: Number(e.target.value) })} 
+                                            />
+                                         </div>
+                                         <div className="space-y-1 w-24">
+                                            <label className="text-xs font-medium">Stock</label>
+                                            <input 
+                                                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" 
+                                                type="number" 
+                                                value={variant.stock} 
+                                                onChange={(e) => updateVariant(index, { stock: Number(e.target.value) })} 
+                                            />
+                                         </div>
+                                         <Button 
+                                            variant="ghost" 
+                                            size="icon" 
+                                            className="text-rose-500 shrink-0"
+                                            onClick={() => setForm((current) => ({ ...current, variants: current.variants.filter((_, i) => i !== index) }))}
+                                         >
+                                             <Trash2 className="h-4 w-4" />
+                                         </Button>
                                     </div>
                                 ))}
                             </div>
+                        </div>
+                    </div>
 
-                            <div className="flex justify-end gap-3">
-                                <Button variant="outline" onClick={() => setShowModal(false)}>Cancel</Button>
-                                <Button onClick={() => void saveProduct()}>{editingProduct ? 'Update' : 'Create'}</Button>
-                            </div>
-                        </CardContent>
-                    </Card>
-                </div>
-            )}
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setShowModal(false)}>
+                            Cancel
+                        </Button>
+                        <Button onClick={() => void saveProduct()}>
+                            Save Product
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

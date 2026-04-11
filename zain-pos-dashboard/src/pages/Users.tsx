@@ -1,10 +1,28 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Eye, EyeOff, KeyRound, Plus, Search, UserCheck, UserX } from 'lucide-react';
+import { Eye, EyeOff, Plus, Search, Fingerprint, Lock, ShieldCheck, AlertTriangle, User } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import { adminService, type AdminUser } from '@/features/admin/services/admin.service';
 import { isDemoModeEnabled } from '@/lib/demo';
+import { Button } from '@/components/ui/button';
+import { 
+  Table, 
+  TableBody, 
+  TableCell, 
+  TableHead, 
+  TableHeader, 
+  TableRow 
+} from '@/components/ui/table';
+import { 
+  Dialog, 
+  DialogContent, 
+  DialogDescription, 
+  DialogFooter, 
+  DialogHeader, 
+  DialogTitle 
+} from '@/components/ui/dialog';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
 
 export default function UsersPage() {
     const [users, setUsers] = useState<AdminUser[]>([]);
@@ -72,14 +90,16 @@ export default function UsersPage() {
     }
 
     return (
-        <div className="space-y-6">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex-1 space-y-4 pt-4">
+            <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="dashboard-section-title">Users</h1>
-                    <p className="dashboard-section-copy">Manage remote staff accounts and account status.</p>
+                    <h2 className="text-2xl font-bold tracking-tight">Users</h2>
+                    <p className="text-muted-foreground text-sm">
+                        Manage users and system access.
+                    </p>
                 </div>
                 {!isDemoModeEnabled() && (
-                    <Button className="rounded-2xl" onClick={() => setFormOpen(true)}>
+                    <Button onClick={() => setFormOpen(true)}>
                         <Plus className="mr-2 h-4 w-4" />
                         Add User
                     </Button>
@@ -87,128 +107,188 @@ export default function UsersPage() {
             </div>
 
             <Card>
-                <CardHeader className="border-b border-slate-200/70 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900/40">
-                    <CardTitle className="text-xl">Staff Directory</CardTitle>
-                </CardHeader>
                 <CardContent className="p-4">
-                    <div className="relative max-w-md">
-                        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <div className="relative max-w-sm flex-1">
+                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                         <input
+                            type="text"
+                            placeholder="Search users..."
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
-                            placeholder="Search users"
-                            className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-sky-700 dark:focus:ring-sky-950/40"
+                            className="w-full h-9 rounded-md border border-input bg-background pl-8 pr-3 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                         />
                     </div>
                 </CardContent>
             </Card>
 
-            <Card className="overflow-hidden">
-                <CardContent className="p-0">
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                            <thead className="bg-slate-50/80 text-slate-400 dark:bg-slate-900/50 dark:text-slate-500">
-                                <tr>
-                                    <th className="px-4 py-4 text-left font-semibold uppercase tracking-[0.18em]">Name</th>
-                                    <th className="px-4 py-4 text-left font-semibold uppercase tracking-[0.18em]">Username</th>
-                                    <th className="px-4 py-4 text-left font-semibold uppercase tracking-[0.18em]">Role</th>
-                                    <th className="px-4 py-4 text-left font-semibold uppercase tracking-[0.18em]">Status</th>
-                                    <th className="px-4 py-4 text-right font-semibold uppercase tracking-[0.18em]">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800">
-                                {loading ? (
-                                    [1, 2, 3].map((i) => (
-                                        <tr key={i}>
-                                            <td className="px-4 py-4"><div className="h-4 w-40 animate-pulse rounded bg-slate-100 dark:bg-slate-900" /></td>
-                                            <td className="px-4 py-4"><div className="h-4 w-24 animate-pulse rounded bg-slate-100 dark:bg-slate-900" /></td>
-                                            <td className="px-4 py-4"><div className="h-8 w-20 animate-pulse rounded-full bg-slate-100 dark:bg-slate-900" /></td>
-                                            <td className="px-4 py-4"><div className="h-8 w-20 animate-pulse rounded-full bg-slate-100 dark:bg-slate-900" /></td>
-                                            <td className="px-4 py-4"><div className="ml-auto h-8 w-28 animate-pulse rounded bg-slate-100 dark:bg-slate-900" /></td>
-                                        </tr>
-                                    ))
-                                ) : filteredUsers.map((user) => (
-                                    <tr key={user.id}>
-                                        <td className="px-4 py-4 font-medium text-slate-950 dark:text-slate-100">{user.name}</td>
-                                        <td className="px-4 py-4 text-slate-500 dark:text-slate-400">{user.username}</td>
-                                        <td className="px-4 py-4">
-                                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                                                {user.role}
-                                            </span>
-                                        </td>
-                                        <td className="px-4 py-4">
-                                            <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${user.isActive
-                                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'
-                                                : 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-300'
-                                                }`}>
-                                                {user.isActive ? <UserCheck className="h-3.5 w-3.5" /> : <UserX className="h-3.5 w-3.5" />}
-                                                {user.isActive ? 'Active' : 'Inactive'}
-                                            </span>
-                                        </td>
-                                        <td className="px-4 py-4">
-                                            <div className="flex justify-end gap-2">
-                                                <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setPasswordOpenFor(user)}>
-                                                    <KeyRound className="mr-2 h-4 w-4" />
-                                                    Password
-                                                </Button>
-                                                <Button variant="outline" size="sm" className="rounded-xl" onClick={() => void handleToggleActive(user)}>
-                                                    {user.isActive ? 'Disable' : 'Enable'}
-                                                </Button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                </CardContent>
-            </Card>
+            <div className="rounded-md border bg-card overflow-hidden">
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead className="w-[30%]">Name</TableHead>
+                            <TableHead>Username</TableHead>
+                            <TableHead>Role</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {loading ? (
+                            <TableRow>
+                                <TableCell colSpan={5} className="h-24 text-center">
+                                    Loading...
+                                </TableCell>
+                            </TableRow>
+                        ) : filteredUsers.length > 0 ? (
+                            filteredUsers.map((user) => (
+                                <TableRow key={user.id}>
+                                    <TableCell>
+                                         <div className="flex items-center gap-3">
+                                             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border bg-muted">
+                                                 <User className="h-4 w-4" />
+                                             </div>
+                                             <span className="font-medium text-sm">{user.name}</span>
+                                         </div>
+                                    </TableCell>
+                                    <TableCell>
+                                        <div className="text-sm text-muted-foreground">
+                                            {user.username}
+                                        </div>
+                                    </TableCell>
+                                    <TableCell>
+                                        <Badge variant="secondary" className="font-normal text-xs">
+                                            {user.role}
+                                        </Badge>
+                                    </TableCell>
+                                    <TableCell>
+                                        <Badge variant={user.isActive ? "default" : "destructive"} className="font-normal text-xs">
+                                            {user.isActive ? 'Active' : 'Deactivated'}
+                                        </Badge>
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                        <div className="flex justify-end gap-2">
+                                            <Button 
+                                                variant="outline" 
+                                                size="sm" 
+                                                className="h-8"
+                                                onClick={() => setPasswordOpenFor(user)}
+                                            >
+                                                Change Password
+                                            </Button>
+                                            <Button 
+                                                variant={user.isActive ? "secondary" : "default"} 
+                                                size="sm" 
+                                                className="h-8"
+                                                onClick={() => void handleToggleActive(user)}
+                                            >
+                                                {user.isActive ? 'Deactivate' : 'Activate'}
+                                            </Button>
+                                        </div>
+                                    </TableCell>
+                                </TableRow>
+                            ))
+                        ) : (
+                            <TableRow>
+                                <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
+                                    No users found.
+                                </TableCell>
+                            </TableRow>
+                        )}
+                    </TableBody>
+                </Table>
+            </div>
 
-            {formOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
-                    <Card className="w-full max-w-lg">
-                        <CardHeader>
-                            <CardTitle>Create User</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <input className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="Full name" value={form.name} onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))} />
-                            <input className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="Username" value={form.username} onChange={(e) => setForm((prev) => ({ ...prev, username: e.target.value }))} />
+            <Dialog open={formOpen} onOpenChange={setFormOpen}>
+                <DialogContent className="sm:max-w-[425px]">
+                    <DialogHeader>
+                        <DialogTitle>Add User</DialogTitle>
+                        <DialogDescription>Create a new user to access the dashboard.</DialogDescription>
+                    </DialogHeader>
+
+                    <div className="grid gap-4 py-4">
+                         <div className="space-y-2">
+                            <label className="text-sm font-medium">Full Name</label>
+                            <input 
+                                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" 
+                                placeholder="Enter full name" 
+                                value={form.name} 
+                                onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))} 
+                            />
+                         </div>
+                         <div className="space-y-2">
+                            <label className="text-sm font-medium">Username</label>
+                            <input 
+                                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" 
+                                placeholder="Enter username" 
+                                value={form.username} 
+                                onChange={(e) => setForm((prev) => ({ ...prev, username: e.target.value }))} 
+                            />
+                         </div>
+                         <div className="space-y-2">
+                            <label className="text-sm font-medium">Password</label>
                             <div className="relative">
-                                <input className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 pr-12 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="Password" type={showPassword ? 'text' : 'password'} value={form.password} onChange={(e) => setForm((prev) => ({ ...prev, password: e.target.value }))} />
-                                <button className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" onClick={() => setShowPassword((current) => !current)}>
+                                <input 
+                                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 pr-10" 
+                                    type={showPassword ? 'text' : 'password'} 
+                                    placeholder="••••••••" 
+                                    value={form.password} 
+                                    onChange={(e) => setForm((prev) => ({ ...prev, password: e.target.value }))} 
+                                />
+                                <button className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" onClick={() => setShowPassword(!showPassword)}>
                                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                                 </button>
                             </div>
-                            <select className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-900" value={form.role} onChange={(e) => setForm((prev) => ({ ...prev, role: e.target.value as 'ADMIN' | 'CASHIER' }))}>
+                         </div>
+                         <div className="space-y-2">
+                            <label className="text-sm font-medium">Role</label>
+                            <select 
+                                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" 
+                                value={form.role} 
+                                onChange={(e) => setForm((prev) => ({ ...prev, role: e.target.value as any }))}
+                            >
                                 <option value="CASHIER">Cashier</option>
                                 <option value="ADMIN">Admin</option>
                             </select>
-                            <div className="flex justify-end gap-3">
-                                <Button variant="outline" onClick={() => setFormOpen(false)}>Cancel</Button>
-                                <Button onClick={() => void handleCreateUser()}>Create</Button>
-                            </div>
-                        </CardContent>
-                    </Card>
-                </div>
-            )}
+                         </div>
+                    </div>
 
-            {passwordOpenFor && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
-                    <Card className="w-full max-w-lg">
-                        <CardHeader>
-                            <CardTitle>Change Password</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <p className="text-sm text-slate-500 dark:text-slate-400">Update password for {passwordOpenFor.name}.</p>
-                            <input className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="New password" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
-                            <div className="flex justify-end gap-3">
-                                <Button variant="outline" onClick={() => setPasswordOpenFor(null)}>Cancel</Button>
-                                <Button onClick={() => void handlePasswordChange()}>Update</Button>
-                            </div>
-                        </CardContent>
-                    </Card>
-                </div>
-            )}
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setFormOpen(false)}>Cancel</Button>
+                        <Button onClick={() => void handleCreateUser()}>Save User</Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={!!passwordOpenFor} onOpenChange={(open) => !open && setPasswordOpenFor(null)}>
+                <DialogContent className="sm:max-w-[425px]">
+                    <DialogHeader>
+                        <DialogTitle>Change Password</DialogTitle>
+                        <DialogDescription>Update password for {passwordOpenFor?.name}.</DialogDescription>
+                    </DialogHeader>
+
+                    <div className="py-4 space-y-4">
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium">New Password</label>
+                            <input 
+                                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" 
+                                type="password" 
+                                placeholder="Enter new password" 
+                                value={newPassword}
+                                onChange={(e) => setNewPassword(e.target.value)} 
+                            />
+                        </div>
+                        <div className="p-3 rounded-md bg-amber-50 text-amber-800 flex items-start gap-2 border border-amber-200">
+                             <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                             <p className="text-sm">Warning: Changing the password will log out this user.</p>
+                        </div>
+                    </div>
+
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setPasswordOpenFor(null)}>Cancel</Button>
+                        <Button onClick={() => void handlePasswordChange()}>Save Password</Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

@@ -323,7 +323,7 @@ export const Forecasting: React.FC = () => {
                 db.sales.findMany({
                     where: {
                         status: 'COMPLETED',
-                        createdAt: { gte: twoYearsAgo.toISOString() }
+                        createdAt: { gte: twoYearsAgo }
                     },
                     include: { items: true },
                     orderBy: { createdAt: 'asc' }

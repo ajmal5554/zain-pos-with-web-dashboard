@@ -28,6 +28,27 @@ import {
 import { startOfMonth, endOfMonth, eachDayOfInterval, format as formatDate } from 'date-fns';
 
 type FilterPeriod = 'today' | 'week' | 'month' | 'year' | 'all';
+type DashboardStat = {
+    label: string;
+    value: string | number;
+    icon: any;
+    color: string;
+    change?: ReturnType<typeof calculatePercentageChange>;
+    subtext?: string;
+    alert?: boolean;
+};
+
+const formatDateInputValue = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+const parseDateInputValue = (value: string): Date => {
+    const [year, month, day] = value.split('-').map(Number);
+    return new Date(year, (month || 1) - 1, day || 1);
+};
 
 export const Dashboard: React.FC = () => {
     const [loading, setLoading] = useState(true);
@@ -39,7 +60,7 @@ export const Dashboard: React.FC = () => {
     const [chartData, setChartData] = useState<any[]>([]);
     const [filterPeriod, setFilterPeriod] = useState<FilterPeriod>('today');
     const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
-    const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+    const [selectedDate, setSelectedDate] = useState(formatDateInputValue(new Date()));
     const [syncing, setSyncing] = useState(false);
     const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
 
@@ -54,7 +75,7 @@ export const Dashboard: React.FC = () => {
     const loadDashboardData = async () => {
         try {
             setLoading(true);
-            const targetDate = new Date(selectedDate);
+            const targetDate = parseDateInputValue(selectedDate);
             const [dailyReport, yesterdayReport, lowStock, topSelling] = await Promise.all([
                 reportsService.getDailySalesReport(targetDate),
                 reportsService.getYesterdaySalesReport(),
@@ -96,7 +117,7 @@ export const Dashboard: React.FC = () => {
         try {
             if (filterPeriod === 'today') {
                 // Show hourly breakdown for the selected date
-                const targetDate = new Date(selectedDate);
+                const targetDate = parseDateInputValue(selectedDate);
                 const todayReport = await reportsService.getDailySalesReport(targetDate);
                 const hours = Array.from({ length: 24 }, (_, i) => i);
 
@@ -116,7 +137,7 @@ export const Dashboard: React.FC = () => {
                 setChartData(hourlyData);
             } else if (filterPeriod === 'week') {
                 // Show last 7 days from selected date
-                const baseDate = new Date(selectedDate);
+                const baseDate = parseDateInputValue(selectedDate);
                 const days = Array.from({ length: 7 }, (_, i) => {
                     const date = new Date(baseDate);
                     date.setDate(baseDate.getDate() - (6 - i));
@@ -136,7 +157,7 @@ export const Dashboard: React.FC = () => {
 
                 setChartData(weekData);
             } else if (filterPeriod === 'month') {
-                const baseDate = new Date(selectedDate);
+                const baseDate = parseDateInputValue(selectedDate);
                 const monthlyReport = await reportsService.getMonthlySalesReport(baseDate);
                 const days = eachDayOfInterval({
                     start: startOfMonth(baseDate),
@@ -267,13 +288,14 @@ export const Dashboard: React.FC = () => {
         yesterdayStats?.totalTax || 0
     );
 
-    const stats = [
+    const stats: DashboardStat[] = [
         {
             label: "Today's Sales",
             value: formatIndianCurrency(todayStats?.totalSales || 0),
             icon: DollarSign,
             color: 'bg-green-500',
             change: salesChange,
+            subtext: 'Total revenue',
         },
         {
             label: 'All-Time Revenue',
@@ -288,6 +310,9 @@ export const Dashboard: React.FC = () => {
             icon: ShoppingBag,
             color: 'bg-blue-500',
             change: billsChange,
+            subtext: todayStats?.numberOfBills && todayStats?.totalSales 
+                ? `${formatIndianCurrency(todayStats.totalSales / todayStats.numberOfBills)} avg` 
+                : 'No bills yet',
         },
         {
             label: 'Tax Collected (Today)',
@@ -295,6 +320,7 @@ export const Dashboard: React.FC = () => {
             icon: Package,
             color: 'bg-purple-500',
             change: taxChange,
+            subtext: `${todayStats?.taxRate || 18}% GST`,
         },
         {
             label: 'Low Stock Items',
@@ -302,6 +328,7 @@ export const Dashboard: React.FC = () => {
             icon: AlertTriangle,
             color: 'bg-orange-500',
             alert: lowStockItems.length > 0,
+            subtext: lowStockItems.length > 0 ? 'Needs attention' : 'All good',
         },
     ];
 
@@ -610,7 +637,7 @@ export const Dashboard: React.FC = () => {
                     <div className="flex items-center justify-between border-b pb-2 dark:border-gray-700">
                         <h3 className="text-xl font-black text-gray-900 dark:text-white uppercase tracking-tight">Audit by Payment Mode</h3>
                         <div className="text-sm font-bold text-primary-600 bg-primary-50 dark:bg-primary-900/20 px-3 py-1 rounded-full border border-primary-200">
-                            Date: {formatDate(new Date(selectedDate), 'dd MMM yyyy')}
+                            Date: {formatDate(parseDateInputValue(selectedDate), 'dd MMM yyyy')}
                         </div>
                     </div>
 

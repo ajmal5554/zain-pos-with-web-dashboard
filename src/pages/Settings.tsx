@@ -12,7 +12,9 @@ import {
     Database,
     Package,
     Globe,
-    Info
+    Info,
+    Tag,
+    Wifi
 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -70,6 +72,10 @@ export const Settings: React.FC = () => {
 
     const [syncing, setSyncing] = useState(false);
     const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
+    
+    // Bulk sync state
+    const [bulkSyncing, setBulkSyncing] = useState(false);
+    const [bulkSyncProgress, setBulkSyncProgress] = useState({ total: 0, synced: 0, percentage: 0, message: '' });
 
     useEffect(() => {
         loadSettings();
@@ -78,33 +84,33 @@ export const Settings: React.FC = () => {
     const loadSettings = async () => {
         try {
             const shopResult = await window.electronAPI.settings.get({ key: 'SHOP_SETTINGS' });
-            if (shopResult) {
-                setShopSettings({ ...shopSettings, ...JSON.parse(shopResult as string) });
+            if (shopResult?.success && shopResult.data) {
+                setShopSettings(prev => ({ ...prev, ...JSON.parse(shopResult.data as string) }));
             }
 
             const printerResult = await window.electronAPI.settings.get({ key: 'PRINTER_CONFIG' });
-            if (printerResult) {
-                setPrinterSettings({ ...printerSettings, ...JSON.parse(printerResult as string) });
+            if (printerResult?.success && printerResult.data) {
+                setPrinterSettings(prev => ({ ...prev, ...JSON.parse(printerResult.data as string) }));
             }
 
             const apiResult = await window.electronAPI.settings.get({ key: 'CLOUD_API_URL' });
             const secretResult = await window.electronAPI.settings.get({ key: 'CLOUD_SYNC_SECRET' });
             const configResult = await window.electronAPI.settings.get({ key: 'CLOUD_SYNC_CONFIG' });
 
-            const interval = configResult ? JSON.parse(configResult as string).intervalMinutes : 0;
-            const apiUrl = apiResult ? apiResult : '';
-            const syncSecret = secretResult ? secretResult : '';
+            const interval = configResult?.success && configResult.data ? JSON.parse(configResult.data as string).intervalMinutes : 0;
+            const apiUrl = apiResult?.success ? apiResult.data || '' : '';
+            const syncSecret = secretResult?.success ? secretResult.data || '' : '';
 
             setSyncConfig({ apiUrl, syncSecret, intervalMinutes: interval });
 
             const backupResult = await window.electronAPI.settings.get({ key: 'BACKUP_CONFIG' });
-            if (backupResult) {
-                setBackupConfig(JSON.parse(backupResult as string));
+            if (backupResult?.success && backupResult.data) {
+                setBackupConfig(JSON.parse(backupResult.data as string));
             }
 
             const pmResult = await window.electronAPI.settings.get({ key: 'PAYMENT_METHODS' });
-            if (pmResult) {
-                setPaymentMethods(prev => ({ ...prev, ...JSON.parse(pmResult as string) }));
+            if (pmResult?.success && pmResult.data) {
+                setPaymentMethods(prev => ({ ...prev, ...JSON.parse(pmResult.data as string) }));
             }
         } catch (error) {
             console.error('Failed to load settings:', error);
@@ -114,7 +120,7 @@ export const Settings: React.FC = () => {
     const handleSaveShopSettings = async () => {
         try {
             const userId = user?.id || 'default-user';
-            await Promise.all([
+            const results = await Promise.all([
                 window.electronAPI.settings.set({
                     key: 'SHOP_SETTINGS',
                     value: JSON.stringify(shopSettings),
@@ -126,6 +132,16 @@ export const Settings: React.FC = () => {
                     userId
                 })
             ]);
+            const failed = results.find((result: { success?: boolean; error?: string }) => !result?.success);
+            if (failed) {
+                throw new Error(failed.error || 'Failed to save shop settings');
+            }
+            window.dispatchEvent(new CustomEvent('shop-brand-updated', {
+                detail: {
+                    shopName: shopSettings.shopName || 'Zain POS',
+                    logo: shopSettings.logo || '',
+                }
+            }));
             alert('Shop settings saved!');
         } catch (error) {
             alert('Failed to save shop settings');
@@ -133,16 +149,133 @@ export const Settings: React.FC = () => {
     };
 
     const handleSavePrinterSettings = async () => {
+        // Validate printer names before saving
+        if (!printerSettings.receiptPrinter?.trim()) {
+            alert('⚠️ Receipt Printer Name cannot be empty');
+            return;
+        }
+        if (!printerSettings.labelPrinter?.trim()) {
+            alert('⚠️ Label Printer Name cannot be empty');
+            return;
+        }
+
         try {
             const userId = user?.id || 'default-user';
-            await window.electronAPI.settings.set({
+            const result = await window.electronAPI.settings.set({
                 key: 'PRINTER_CONFIG',
                 value: JSON.stringify(printerSettings),
                 userId
             });
-            alert('Printer settings saved!');
+            if (!result?.success) {
+                throw new Error(result?.error || 'Failed to save printer settings');
+            }
+            alert('✅ Printer settings saved successfully!');
         } catch (error) {
-            alert('Failed to save printer settings');
+            alert(`❌ Failed to save printer settings: ${(error as Error).message}`);
+        }
+    };
+
+    const handlePrintTestReceipt = async () => {
+        try {
+            if (!printerSettings.receiptPrinter?.trim()) {
+                alert('⚠️ Please set a Receipt Printer Name first');
+                return;
+            }
+
+            const testData = {
+                shopName: shopSettings.shopName || 'Zain POS',
+                billNo: 'TEST-001',
+                date: new Date().toLocaleString(),
+                customer: 'Test Customer',
+                items: [
+                    { productName: 'Test Product 1', quantity: 1, rate: 100.00, amount: 100.00 },
+                    { productName: 'Test Product 2', quantity: 2, rate: 50.00, amount: 100.00 }
+                ],
+                subtotal: 200.00,
+                discount: 20.00,
+                cgst: 16.20,
+                sgst: 16.20,
+                total: 212.40,
+                paid: 250.00,
+                change: 37.60
+            };
+
+            const result = await window.electronAPI.print.testReceipt({
+                data: testData,
+                settings: printerSettings
+            });
+
+            if (result?.success) {
+                alert('✅ Test receipt sent to printer!');
+            } else {
+                throw new Error(result?.error || 'Unknown error');
+            }
+        } catch (error) {
+            alert(`❌ Failed to print test receipt: ${(error as Error).message}`);
+        }
+    };
+
+    const handlePrintTestLabel = async () => {
+        try {
+            if (!printerSettings.labelPrinter?.trim()) {
+                alert('⚠️ Please set a Label Printer Name first');
+                return;
+            }
+
+            const testData = {
+                shopName: shopSettings.shopName || 'Zain POS',
+                productName: 'Test Product',
+                productCode: 'TEST-001',
+                price: 'Rs.999.00',
+                barcode: '1234567890123'
+            };
+
+            const result = await window.electronAPI.print.testLabel({
+                data: testData,
+                printer: printerSettings.labelPrinter
+            });
+
+            if (result?.success) {
+                alert('✅ Test label sent to printer!');
+            } else {
+                throw new Error(result?.error || 'Unknown error');
+            }
+        } catch (error) {
+            alert(`❌ Failed to print test label: ${(error as Error).message}`);
+        }
+    };
+
+    const handleTestReceiptConnection = async () => {
+        try {
+            const result = await window.electronAPI.print.testConnection({
+                printer: printerSettings.receiptPrinter,
+                type: 'receipt'
+            });
+
+            if (result?.success) {
+                alert(`✅ Receipt printer connection successful!\nPrinter: ${printerSettings.receiptPrinter}\nStatus: Connected`);
+            } else {
+                throw new Error(result?.error || 'Cannot connect to printer');
+            }
+        } catch (error) {
+            alert(`❌ Receipt printer connection failed: ${(error as Error).message}`);
+        }
+    };
+
+    const handleTestLabelConnection = async () => {
+        try {
+            const result = await window.electronAPI.print.testConnection({
+                printer: printerSettings.labelPrinter,
+                type: 'label'
+            });
+
+            if (result?.success) {
+                alert(`✅ Label printer connection successful!\nPrinter: ${printerSettings.labelPrinter}\nStatus: Connected`);
+            } else {
+                throw new Error(result?.error || 'Cannot connect to printer');
+            }
+        } catch (error) {
+            alert(`❌ Label printer connection failed: ${(error as Error).message}`);
         }
     };
 
@@ -150,16 +283,22 @@ export const Settings: React.FC = () => {
         try {
             setSyncing(true);
             const userId = user?.id || 'default-user';
-            await window.electronAPI.settings.set({
+            const apiSaveResult = await window.electronAPI.settings.set({
                 key: 'CLOUD_API_URL',
                 value: syncConfig.apiUrl,
                 userId
             });
-            await window.electronAPI.settings.set({
+            if (!apiSaveResult?.success) {
+                throw new Error(apiSaveResult?.error || 'Failed to save cloud API URL');
+            }
+            const secretSaveResult = await window.electronAPI.settings.set({
                 key: 'CLOUD_SYNC_SECRET',
                 value: syncConfig.syncSecret,
                 userId
             });
+            if (!secretSaveResult?.success) {
+                throw new Error(secretSaveResult?.error || 'Failed to save cloud sync secret');
+            }
             await window.electronAPI.db.configureSync({ intervalMinutes: syncConfig.intervalMinutes });
             alert('Cloud Sync configured successfully!');
         } catch (error) {
@@ -193,11 +332,43 @@ export const Settings: React.FC = () => {
         }, 3000);
     };
 
+    const handleBulkSync = async () => {
+        if (bulkSyncing) return;
+        
+        if (!confirm('This will upload ALL unsynced data to the cloud. This may take several minutes. Continue?')) {
+            return;
+        }
+
+        try {
+            setBulkSyncing(true);
+            setBulkSyncProgress({ total: 0, synced: 0, percentage: 0, message: 'Starting bulk sync...' });
+
+            const res = await window.electronAPI.db.bulkSyncAll((progress: any) => {
+                setBulkSyncProgress(progress);
+            });
+
+            if (res.success) {
+                alert(res.message || 'Bulk sync completed successfully!');
+                setBulkSyncProgress({ total: 0, synced: 0, percentage: 100, message: 'Complete!' });
+            } else {
+                alert('Bulk sync failed: ' + (res.error || 'Unknown error'));
+            }
+        } catch (error: any) {
+            console.error('Bulk sync error:', error);
+            alert('Bulk sync failed: ' + error.message);
+        } finally {
+            setBulkSyncing(false);
+            setTimeout(() => {
+                setBulkSyncProgress({ total: 0, synced: 0, percentage: 0, message: '' });
+            }, 3000);
+        }
+    };
+
     const handleSaveBackupConfig = async () => {
         try {
             const res = await window.electronAPI.db.configureBackup(backupConfig);
             if (res.success) alert('Backup configuration updated!');
-            else alert('Failed to update backup config');
+            else alert(res.error || 'Failed to update backup config');
         } catch (e) {
             alert('Error saving backup config');
         }
@@ -404,6 +575,63 @@ export const Settings: React.FC = () => {
                                              syncStatus === 'error' ? 'Sync Failed - Retry' :
                                              'Sync Now (Manual)'}
                                         </Button>
+
+                                        {/* Bulk Sync Section */}
+                                        <div className="pt-4 border-t border-blue-200 dark:border-blue-900/30">
+                                            <div className="mb-3">
+                                                <h4 className="font-semibold text-sm flex items-center gap-2">
+                                                    <Upload className="w-4 h-4" />
+                                                    Initial Bulk Sync
+                                                </h4>
+                                                <p className="text-xs text-gray-500 mt-1">
+                                                    Upload ALL unsynced historical data to cloud. Run this once after configuring cloud settings.
+                                                </p>
+                                            </div>
+                                            
+                                            <Button
+                                                variant="outline"
+                                                onClick={handleBulkSync}
+                                                disabled={bulkSyncing || !syncConfig.apiUrl || !syncConfig.syncSecret}
+                                                className="w-full"
+                                            >
+                                                {bulkSyncing ? (
+                                                    <>
+                                                        <RefreshCw className="w-4 h-4 animate-spin" />
+                                                        Syncing... {bulkSyncProgress.percentage}%
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <Upload className="w-4 h-4" />
+                                                        Start Initial Sync
+                                                    </>
+                                                )}
+                                            </Button>
+
+                                            {bulkSyncing && (
+                                                <div className="mt-3 space-y-2">
+                                                    <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5 overflow-hidden">
+                                                        <div 
+                                                            className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+                                                            style={{ width: `${bulkSyncProgress.percentage}%` }}
+                                                        />
+                                                    </div>
+                                                    <p className="text-xs text-gray-600 dark:text-gray-400">
+                                                        {bulkSyncProgress.message}
+                                                    </p>
+                                                    {bulkSyncProgress.total > 0 && (
+                                                        <p className="text-xs text-gray-500">
+                                                            {bulkSyncProgress.synced.toLocaleString()} / {bulkSyncProgress.total.toLocaleString()} records
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            )}
+
+                                            {!syncConfig.apiUrl || !syncConfig.syncSecret && (
+                                                <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                                                    ⚠️ Configure API URL and Secret first
+                                                </p>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
 
@@ -438,14 +666,21 @@ export const Settings: React.FC = () => {
                                             </Button>
                                             <Button variant="outline" onClick={async () => {
                                                 const res = await window.electronAPI.db.backup();
-                                                if (res.success) alert('Manual Backup Created!');
+                                                if (res.success) {
+                                                    alert('Manual Backup Created!');
+                                                } else if (res.error) {
+                                                    alert(res.error);
+                                                }
                                             }} className="w-full">
                                                 Run Now
                                             </Button>
                                         </div>
                                         <Button variant="outline" className="w-full text-red-500 border-red-200 hover:bg-red-50 transition-colors" onClick={async () => {
                                             if (confirm('CRITICAL: This will overwrite ALL your current shop data with a backup file. Continue?')) {
-                                                await window.electronAPI.db.restore();
+                                                const res = await window.electronAPI.db.restore();
+                                                if (res?.success === false && res?.error) {
+                                                    alert(res.error);
+                                                }
                                             }
                                         }}>
                                             <RefreshCw className="w-4 h-4" />
@@ -491,18 +726,6 @@ export const Settings: React.FC = () => {
 
                             <div className="flex flex-wrap gap-6 p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700 max-w-2xl">
                                 <label className="flex items-center gap-2 cursor-pointer select-none">
-                                    <input type="checkbox" className="w-4 h-4 rounded text-blue-600" checked={printerSettings.showMRP} onChange={(e) => setPrinterSettings({ ...printerSettings, showMRP: e.target.checked })} />
-                                    <span className="text-sm font-medium">Show MRP on Receipt</span>
-                                </label>
-                                <label className="flex items-center gap-2 cursor-pointer select-none">
-                                    <input type="checkbox" className="w-4 h-4 rounded text-blue-600" checked={printerSettings.showRate} onChange={(e) => setPrinterSettings({ ...printerSettings, showRate: e.target.checked })} />
-                                    <span className="text-sm font-medium">Show Rate Column</span>
-                                </label>
-                                <label className="flex items-center gap-2 cursor-pointer select-none">
-                                    <input type="checkbox" className="w-4 h-4 rounded text-blue-600" checked={printerSettings.showItemDiscount} onChange={(e) => setPrinterSettings({ ...printerSettings, showItemDiscount: e.target.checked })} />
-                                    <span className="text-sm font-medium">Show Item Discount Column</span>
-                                </label>
-                                <label className="flex items-center gap-2 cursor-pointer select-none">
                                     <input type="checkbox" className="w-4 h-4 rounded text-blue-600" checked={printerSettings.showPaidLine} onChange={(e) => setPrinterSettings({ ...printerSettings, showPaidLine: e.target.checked })} />
                                     <span className="text-sm font-medium">Show Paid Line</span>
                                 </label>
@@ -512,10 +735,31 @@ export const Settings: React.FC = () => {
                                 </label>
                             </div>
 
-                            <Button variant="primary" onClick={handleSavePrinterSettings}>
-                                <Save className="w-4 h-4" />
-                                Save Print Configuration
-                            </Button>
+                            <div className="flex gap-2 flex-wrap">
+                                {/* Save Configuration Button */}
+                                <Button variant="primary" size="sm" onClick={handleSavePrinterSettings} className="px-3">
+                                    <Save className="w-4 h-4" />
+                                    Save Print Configuration
+                                </Button>
+                                
+                                {/* Print and Connection Test Buttons */}
+                                <Button variant="secondary" size="sm" onClick={handlePrintTestReceipt} className="px-3">
+                                    <Printer className="w-4 h-4" />
+                                    Test Receipt
+                                </Button>
+                                <Button variant="secondary" size="sm" onClick={handlePrintTestLabel} className="px-3">
+                                    <Tag className="w-4 h-4" />
+                                    Test Label
+                                </Button>
+                                <Button variant="outline" size="sm" onClick={handleTestReceiptConnection} className="px-3">
+                                    <Wifi className="w-4 h-4" />
+                                    Receipt Status
+                                </Button>
+                                <Button variant="outline" size="sm" onClick={handleTestLabelConnection} className="px-3">
+                                    <Wifi className="w-4 h-4" />
+                                    Label Status
+                                </Button>
+                            </div>
 
                             <div className="grid grid-cols-1 gap-12 pt-8 border-t border-gray-200 dark:border-dark-border">
                                 <div className="space-y-4">
@@ -523,7 +767,7 @@ export const Settings: React.FC = () => {
                                         <FileSpreadsheet className="w-4 h-4 text-green-500" />
                                         Invoice Template
                                     </h4>
-                                    <ReceiptDesigner />
+                                    <ReceiptDesigner printerSettings={printerSettings} />
                                 </div>
                                 <div className="space-y-4">
                                     <h4 className="font-bold flex items-center gap-2">

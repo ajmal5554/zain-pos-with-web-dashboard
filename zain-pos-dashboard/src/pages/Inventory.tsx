@@ -1,11 +1,27 @@
+import * as React from 'react';
 import { useState } from 'react';
-import { AlertTriangle, DollarSign, Package, Search, TrendingDown } from 'lucide-react';
+import { Activity, AlertTriangle, DollarSign, Search, TrendingDown, Layers, Box, BarChart3, ShieldAlert } from 'lucide-react';
 import { useInventoryMetrics } from '@/features/inventory/hooks/useInventoryMetrics';
 import { StockHealthBadge } from '@/features/inventory/components/StockHealthBadge';
 import { StatCard } from '@/components/shared/StatCard';
-import { MobileInventoryCard } from '@/components/shared/MobileInventoryCard';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { 
+  Table, 
+  TableBody, 
+  TableCell, 
+  TableHead, 
+  TableHeader, 
+  TableRow 
+} from '@/components/ui/table';
+import { 
+  Card, 
+  CardContent, 
+  CardDescription, 
+  CardHeader, 
+  CardTitle 
+} from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { formatCurrency } from '@/lib/format';
+
 
 export default function Inventory() {
     const { products, metrics, loading } = useInventoryMetrics();
@@ -17,142 +33,104 @@ export default function Inventory() {
     );
 
     return (
-        <div className="space-y-6">
-            <div>
-                <h1 className="dashboard-section-title">Inventory Intelligence</h1>
-                <p className="dashboard-section-copy">
-                    Search stock position, watch threshold pressure, and understand how much value is sitting on shelves.
-                </p>
+        <div className="flex-1 space-y-4 pt-4">
+            <div className="flex items-center justify-between">
+                <div>
+                    <h2 className="text-2xl font-bold tracking-tight">Stock</h2>
+                    <p className="text-muted-foreground text-sm">
+                        View stock levels and items that need reordering.
+                    </p>
+                </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <StatCard
-                    title="Inventory Value"
-                    value={formatCurrency(metrics.totalValue)}
-                    icon={<DollarSign className="h-5 w-5" />}
-                    loading={loading}
-                />
-                <StatCard
-                    title="Low Stock"
-                    value={metrics.lowStockCount}
-                    icon={<AlertTriangle className="h-5 w-5" />}
-                    loading={loading}
-                />
-                <StatCard
-                    title="Out of Stock"
-                    value={metrics.outOfStockCount}
-                    icon={<TrendingDown className="h-5 w-5" />}
-                    loading={loading}
-                />
-                <StatCard
-                    title="Products"
-                    value={metrics.totalItems}
-                    icon={<Package className="h-5 w-5" />}
-                    loading={loading}
-                />
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <StatCard title="Total Stock Value" value={formatCurrency(metrics.totalValue)} icon={<DollarSign className="h-4 w-4" />} loading={loading} />
+                <StatCard title="Low Stock Items" value={metrics.lowStockCount} icon={<AlertTriangle className="h-4 w-4" />} loading={loading} />
+                <StatCard title="Out of Stock" value={metrics.outOfStockCount} icon={<TrendingDown className="h-4 w-4" />} loading={loading} />
+                <StatCard title="Product Types" value={metrics.totalItems} icon={<Layers className="h-4 w-4" />} loading={loading} />
             </div>
 
-            <Card className="hidden md:block">
-                <CardHeader className="flex flex-col gap-4 border-b border-slate-200/70 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900/40 lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                        <CardTitle className="text-xl">Stock Report</CardTitle>
-                        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                            Filter by product name or barcode.
-                        </p>
-                    </div>
-                    <div className="relative w-full max-w-sm">
-                        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            {/* Pressure Alert Box */}
+            {metrics.lowStockCount > 0 && (
+                <div className="p-4 rounded-md bg-rose-50 border border-rose-200 flex items-start gap-4 text-rose-800">
+                     <ShieldAlert className="h-5 w-5 mt-0.5 text-rose-600 shrink-0" />
+                     <div>
+                         <p className="text-sm font-bold">Low Stock Alert</p>
+                         <p className="text-sm mt-1">{metrics.lowStockCount} items are running low. Please order more soon.</p>
+                     </div>
+                </div>
+            )}
+
+            <Card>
+                <CardContent className="p-4">
+                    <div className="relative flex-1">
+                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                         <input
                             type="text"
-                            placeholder="Search name or barcode"
-                            className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-sky-700 dark:focus:ring-sky-950/40"
+                            placeholder="Search items..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
+                            className="w-full h-9 rounded-md border border-input bg-background pl-8 pr-3 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                         />
-                    </div>
-                </CardHeader>
-                <CardContent className="p-0">
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                            <thead className="bg-white/70 text-slate-400 dark:bg-slate-950/60 dark:text-slate-500">
-                                <tr>
-                                    <th className="px-6 py-4 text-left font-semibold uppercase tracking-[0.18em]">Product</th>
-                                    <th className="px-6 py-4 text-left font-semibold uppercase tracking-[0.18em]">Category</th>
-                                    <th className="px-6 py-4 text-right font-semibold uppercase tracking-[0.18em]">Price</th>
-                                    <th className="px-6 py-4 text-center font-semibold uppercase tracking-[0.18em]">Stock</th>
-                                    <th className="px-6 py-4 text-center font-semibold uppercase tracking-[0.18em]">Status</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800">
-                                {loading ? (
-                                    [1, 2, 3, 4, 5].map((i) => (
-                                        <tr key={i}>
-                                            <td className="px-6 py-4"><div className="h-4 w-48 animate-pulse rounded bg-slate-100 dark:bg-slate-900" /></td>
-                                            <td className="px-6 py-4"><div className="h-4 w-24 animate-pulse rounded bg-slate-100 dark:bg-slate-900" /></td>
-                                            <td className="px-6 py-4"><div className="ml-auto h-4 w-16 animate-pulse rounded bg-slate-100 dark:bg-slate-900" /></td>
-                                            <td className="px-6 py-4"><div className="mx-auto h-4 w-12 animate-pulse rounded bg-slate-100 dark:bg-slate-900" /></td>
-                                            <td className="px-6 py-4"><div className="mx-auto h-8 w-24 animate-pulse rounded-full bg-slate-100 dark:bg-slate-900" /></td>
-                                        </tr>
-                                    ))
-                                ) : filteredProducts.length > 0 ? (
-                                    filteredProducts.map((product) => (
-                                        <tr key={product.id} className="bg-white/60 transition-colors hover:bg-slate-50 dark:bg-transparent dark:hover:bg-slate-900/40">
-                                            <td className="px-6 py-4 font-medium text-slate-950 dark:text-white">
-                                                {product.name}
-                                                <div className="mt-1 font-mono text-xs text-slate-400 dark:text-slate-500">{product.barcode || 'N/A'}</div>
-                                            </td>
-                                            <td className="px-6 py-4 text-slate-500 dark:text-slate-400">
-                                                {product.category?.name || 'Uncategorized'}
-                                            </td>
-                                            <td className="px-6 py-4 text-right font-medium text-slate-950 dark:text-slate-100">
-                                                {formatCurrency(product.price)}
-                                            </td>
-                                            <td className="px-6 py-4 text-center text-slate-700 dark:text-slate-300">
-                                                {product.stock}
-                                            </td>
-                                            <td className="px-6 py-4 text-center">
-                                                <StockHealthBadge stock={product.stock} minStock={product.minStock} />
-                                            </td>
-                                        </tr>
-                                    ))
-                                ) : (
-                                    <tr>
-                                        <td colSpan={5} className="px-6 py-10 text-center text-sm text-slate-500 dark:text-slate-400">
-                                            No products found.
-                                        </td>
-                                    </tr>
-                                )}
-                            </tbody>
-                        </table>
                     </div>
                 </CardContent>
             </Card>
 
-            <div className="space-y-4 md:hidden">
-                <div className="relative">
-                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                    <input
-                        type="text"
-                        placeholder="Search products"
-                        className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-sky-700 dark:focus:ring-sky-950/40"
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                    />
-                </div>
-
-                {loading ? (
-                    <div className="dashboard-surface rounded-[1.5rem] px-4 py-10 text-center text-sm text-slate-500 dark:text-slate-400">
-                        Loading products...
-                    </div>
-                ) : filteredProducts.length > 0 ? (
-                    filteredProducts.map((product) => (
-                        <MobileInventoryCard key={product.id} product={product} />
-                    ))
-                ) : (
-                    <div className="dashboard-surface rounded-[1.5rem] px-4 py-10 text-center text-sm text-slate-500 dark:text-slate-400">
-                        No products found.
-                    </div>
-                )}
+            <div className="rounded-md border bg-card overflow-hidden">
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead>Item</TableHead>
+                            <TableHead className="hidden sm:table-cell">Category</TableHead>
+                            <TableHead className="text-right">Price</TableHead>
+                            <TableHead className="text-center">Stock</TableHead>
+                            <TableHead className="hidden sm:table-cell text-center">Status</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {loading ? (
+                            <TableRow>
+                                <TableCell colSpan={5} className="h-24 text-center">
+                                    Loading...
+                                </TableCell>
+                            </TableRow>
+                        ) : filteredProducts.length > 0 ? (
+                            filteredProducts.map((product) => (
+                                <TableRow key={product.id}>
+                                    <TableCell className="max-w-[150px]">
+                                        <div className="flex flex-col gap-0.5">
+                                            <span className="font-medium text-sm leading-tight truncate">{product.name}</span>
+                                            {/* Show status badge inline on mobile only */}
+                                            <span className="sm:hidden">
+                                                <StockHealthBadge stock={product.stock} minStock={product.minStock} />
+                                            </span>
+                                        </div>
+                                    </TableCell>
+                                    <TableCell className="hidden sm:table-cell">
+                                        <Badge variant="secondary" className="font-normal text-xs">
+                                            {product.category?.name || 'General'}
+                                        </Badge>
+                                    </TableCell>
+                                    <TableCell className="text-right font-medium text-sm whitespace-nowrap">
+                                        {formatCurrency(product.price)}
+                                    </TableCell>
+                                    <TableCell className="text-center font-medium">
+                                        {product.stock}
+                                    </TableCell>
+                                    <TableCell className="hidden sm:table-cell text-center">
+                                        <StockHealthBadge stock={product.stock} minStock={product.minStock} />
+                                    </TableCell>
+                                </TableRow>
+                            ))
+                        ) : (
+                            <TableRow>
+                                <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
+                                    No items found.
+                                </TableCell>
+                            </TableRow>
+                        )}
+                    </TableBody>
+                </Table>
             </div>
         </div>
     );

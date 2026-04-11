@@ -2,14 +2,12 @@
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider      = "prisma-client-js"
-  binaryTargets = ["native", "debian-openssl-3.0.x"]
+  provider = "prisma-client-js"
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider = "sqlite"
+  url      = "file:../../prisma/pos.db"
 }
 
 model User {
@@ -301,7 +299,7 @@ model Notification {
   referenceId String?  @map("reference_id")
   read        Boolean  @default(false)
   createdAt   DateTime @default(now()) @map("created_at")
-  metadata    Json?
+  metadata    String?
 
   @@index([shopId])
   @@index([createdAt])
@@ -314,7 +312,7 @@ model PushSubscription {
   userId    String   @map("user_id")
   user      User     @relation(fields: [userId], references: [id])
   endpoint  String   @unique
-  keys      Json
+  keys      String
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

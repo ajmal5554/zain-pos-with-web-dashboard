@@ -1,22 +1,37 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ShieldCheck } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, Lock, Unlock, Settings2, Info, Percent } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { adminService, type AdminUser } from '@/features/admin/services/admin.service';
 import { isDemoModeEnabled } from '@/lib/demo';
+import { 
+  Table, 
+  TableBody, 
+  TableCell, 
+  TableHead, 
+  TableHeader, 
+  TableRow 
+} from '@/components/ui/table';
+import { 
+  Card, 
+  CardContent, 
+  CardDescription, 
+  CardHeader, 
+  CardTitle 
+} from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 
 const permissionColumns: Array<{ key: keyof AdminUser; label: string }> = [
-    { key: 'permAddItem', label: 'POS Items' },
+    { key: 'permAddItem', label: 'POS Entry' },
     { key: 'permPrintSticker', label: 'Stickers' },
     { key: 'permManageProducts', label: 'Products' },
     { key: 'permVoidSale', label: 'Void Bill' },
-    { key: 'permViewReports', label: 'Dashboard' },
+    { key: 'permViewReports', label: 'Stats' },
     { key: 'permViewSales', label: 'Sales' },
     { key: 'permViewGstReports', label: 'GST' },
-    { key: 'permEditSettings', label: 'Settings' },
-    { key: 'permManageInventory', label: 'Inventory' },
-    { key: 'permManageUsers', label: 'Users' },
-    { key: 'permViewInsights', label: 'Insights' }
+    { key: 'permEditSettings', label: 'Config' },
+    { key: 'permManageInventory', label: 'Stock' },
+    { key: 'permManageUsers', label: 'Users' }
 ];
 
 export default function PermissionsPage() {
@@ -59,83 +74,115 @@ export default function PermissionsPage() {
         try {
             const updated = await adminService.updateUser(user.id, { maxDiscount: value });
             setUsers((current) => current.map((entry) => entry.id === user.id ? updated : entry));
+            toast.success(`Discount limit set to ${value}%`);
         } catch (error: any) {
             toast.error(error?.response?.data?.error || 'Failed to update max discount');
         }
     }
 
     return (
-        <div className="space-y-6">
-            <div>
-                <h1 className="dashboard-section-title">Permissions</h1>
-                <p className="dashboard-section-copy">Control cashier access, GST visibility, and operational safeguards remotely.</p>
+        <div className="flex-1 space-y-4 pt-4">
+            <div className="flex items-center justify-between">
+                <div>
+                    <h2 className="text-2xl font-bold tracking-tight">Access & Permissions</h2>
+                    <p className="text-muted-foreground text-sm">
+                        Manage what users can access in the system.
+                    </p>
+                </div>
             </div>
 
-            <Card>
-                <CardHeader className="border-b border-slate-200/70 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900/40">
-                    <CardTitle className="text-xl">Role Matrix</CardTitle>
+            <Card className="overflow-hidden">
+                <CardHeader className="flex-row items-center justify-between space-y-0 pb-2 border-b bg-muted/50">
+                    <div>
+                        <CardTitle className="text-base font-semibold">User Permissions</CardTitle>
+                        <CardDescription className="text-xs">Control operations per user.</CardDescription>
+                    </div>
                 </CardHeader>
-                <CardContent className="p-0">
+                <CardContent className="p-0 border-t-0">
                     <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                            <thead className="bg-slate-50/80 text-slate-400 dark:bg-slate-900/50 dark:text-slate-500">
-                                <tr>
-                                    <th className="px-4 py-4 text-left font-semibold uppercase tracking-[0.18em]">User</th>
-                                    {permissionColumns.map((column) => (
-                                        <th key={column.key} className="px-4 py-4 text-center font-semibold uppercase tracking-[0.18em]">{column.label}</th>
+                        <Table>
+                            <TableHeader>
+                                <TableRow className="bg-muted/50">
+                                    <TableHead className="min-w-[180px] font-medium sticky left-0 bg-muted/50 shadow-sm z-10">User / Role</TableHead>
+                                    {permissionColumns.map((col) => (
+                                        <TableHead key={col.key} className="text-center font-medium min-w-[90px] text-xs px-2">
+                                            {col.label}
+                                        </TableHead>
                                     ))}
-                                    <th className="px-4 py-4 text-right font-semibold uppercase tracking-[0.18em]">Max Discount</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800">
+                                    <TableHead className="text-right font-medium min-w-[140px]">Max Discount (%)</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
                                 {loading ? (
-                                    <tr>
-                                        <td colSpan={permissionColumns.length + 2} className="px-4 py-10 text-center text-slate-500 dark:text-slate-400">Loading permissions...</td>
-                                    </tr>
+                                    <TableRow>
+                                        <TableCell colSpan={permissionColumns.length + 2} className="h-24 text-center text-muted-foreground">
+                                            Loading users...
+                                        </TableCell>
+                                    </TableRow>
                                 ) : sortedUsers.map((user) => (
-                                    <tr key={user.id}>
-                                        <td className="px-4 py-4">
-                                            <div className="font-medium text-slate-950 dark:text-slate-100">{user.name}</div>
-                                            <div className="text-xs uppercase tracking-[0.18em] text-slate-400 dark:text-slate-500">{user.role}</div>
-                                        </td>
+                                    <TableRow key={user.id} className="hover:bg-muted/20 transition-colors">
+                                        <TableCell className="font-medium sticky left-0 bg-background z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                                            <div className="text-sm">{user.name}</div>
+                                            <Badge variant={user.role === 'ADMIN' ? "default" : "secondary"} className="mt-1 font-normal text-[10px]">
+                                                {user.role}
+                                            </Badge>
+                                        </TableCell>
                                         {permissionColumns.map((column) => (
-                                            <td key={column.key} className="px-4 py-4 text-center">
+                                            <TableCell key={column.key} className="text-center">
                                                 {user.role === 'ADMIN' ? (
-                                                    <div className="flex justify-center">
-                                                        <ShieldCheck className="h-5 w-5 text-sky-600 dark:text-sky-300" />
+                                                    <div className="flex justify-center text-muted-foreground/30">
+                                                        <ShieldCheck className="h-4 w-4" />
                                                     </div>
                                                 ) : (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => void togglePermission(user, column.key)}
-                                                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${user[column.key] ? 'bg-slate-950 dark:bg-sky-400' : 'bg-slate-200 dark:bg-slate-700'}`}
-                                                    >
-                                                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${user[column.key] ? 'translate-x-6' : 'translate-x-1'}`} />
-                                                    </button>
+                                                    <div className="flex justify-center">
+                                                        <button
+                                                            onClick={() => void togglePermission(user, column.key)}
+                                                            className={cn(
+                                                                "relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50",
+                                                                user[column.key] ? "bg-primary" : "bg-input"
+                                                            )}
+                                                        >
+                                                            <span className={cn(
+                                                                "pointer-events-none block h-4 w-4 rounded-full bg-background shadow-lg ring-0 transition-transform",
+                                                                user[column.key] ? "translate-x-4" : "translate-x-0"
+                                                            )} />
+                                                        </button>
+                                                    </div>
                                                 )}
-                                            </td>
+                                            </TableCell>
                                         ))}
-                                        <td className="px-4 py-4">
+                                        <TableCell className="text-right">
                                             {user.role === 'ADMIN' ? (
-                                                <div className="text-right text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 dark:text-slate-500">Unlimited</div>
+                                                <span className="text-xs text-muted-foreground font-medium">Unlimited</span>
                                             ) : (
-                                                <div className="flex justify-end">
-                                                    <input
+                                                <div className="flex justify-end relative items-center max-w-[100px] ml-auto">
+                                                    <input 
                                                         type="number"
                                                         defaultValue={user.maxDiscount}
                                                         onBlur={(e) => void saveDiscount(user, Number(e.target.value) || 0)}
-                                                        className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-sm dark:border-slate-700 dark:bg-slate-900"
+                                                        className="w-full h-8 rounded-md border border-input bg-background pl-2 pr-6 text-sm tabular-nums text-right focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                                     />
+                                                    <div className="absolute right-2 text-muted-foreground pointer-events-none">
+                                                        <Percent className="h-3 w-3" />
+                                                    </div>
                                                 </div>
                                             )}
-                                        </td>
-                                    </tr>
+                                        </TableCell>
+                                    </TableRow>
                                 ))}
-                            </tbody>
-                        </table>
+                            </TableBody>
+                        </Table>
                     </div>
                 </CardContent>
             </Card>
+
+            <div className="rounded-md border bg-card p-4 flex items-start gap-4 text-sm text-muted-foreground">
+                 <ShieldAlert className="h-5 w-5 mt-0.5 text-accent-foreground shrink-0" />
+                 <div>
+                     <p className="font-semibold text-foreground">Note on Permissions</p>
+                     <p className="mt-1">Permissions update in real time. Users might need to refresh the page to see changes.</p>
+                 </div>
+            </div>
         </div>
     );
 }

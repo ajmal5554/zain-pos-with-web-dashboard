@@ -10,6 +10,14 @@ const api = {
         configureBackup: (config: any) => ipcRenderer.invoke('backup:configure', config),
         syncNow: () => ipcRenderer.invoke('cloud:syncNow'),
         configureSync: (config: { intervalMinutes: number }) => ipcRenderer.invoke('cloud:configure', config),
+        bulkSyncAll: (progressCallback?: (progress: any) => void) => {
+            if (progressCallback) {
+                ipcRenderer.on('cloud:bulkSyncProgress', (_event, progress) => {
+                    progressCallback(progress);
+                });
+            }
+            return ipcRenderer.invoke('cloud:bulkSyncAll');
+        },
     },
 
     // Settings
@@ -31,6 +39,7 @@ const api = {
     sales: {
         getNextBillNo: (dateStr?: string) => ipcRenderer.invoke('sales:getNextBillNo', dateStr),
         checkout: (data: any) => ipcRenderer.invoke('sales:checkout', data),
+        getSaleById: (saleId: string) => ipcRenderer.invoke('sales:getSaleById', saleId),
         updatePayment: (data: { saleId: string, paymentData: any, userId: string }) =>
             ipcRenderer.invoke('sales:updatePayment', data),
         updateSale: (data: { saleId: string, saleData: any, userId: string }) =>
@@ -45,6 +54,9 @@ const api = {
     print: {
         receipt: (data: any) => ipcRenderer.invoke('print:receipt', data),
         label: (data: any) => ipcRenderer.invoke('print:label', data),
+        testReceipt: (data: any) => ipcRenderer.invoke('print:testReceipt', data),
+        testLabel: (data: any) => ipcRenderer.invoke('print:testLabel', data),
+        testConnection: (data: any) => ipcRenderer.invoke('print:testConnection', data),
     },
 
     // Users
@@ -69,6 +81,21 @@ const api = {
     // App
     app: {
         quit: () => ipcRenderer.invoke('app:quit'),
+        minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
+        toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggleMaximize'),
+        closeWindow: () => ipcRenderer.invoke('window:close'),
+        getWindowState: () => ipcRenderer.invoke('window:getState'),
+        onWindowStateChange: (callback: (state: { isMaximized: boolean }) => void) => {
+            const listener = (_event: Electron.IpcRendererEvent, state: { isMaximized: boolean }) => {
+                callback(state);
+            };
+
+            ipcRenderer.on('window:stateChanged', listener);
+
+            return () => {
+                ipcRenderer.off('window:stateChanged', listener);
+            };
+        },
     },
 
     // Network Status
@@ -76,17 +103,16 @@ const api = {
         getStatus: () => ipcRenderer.invoke('network:getStatus'),
         forceCheck: () => ipcRenderer.invoke('network:forceCheck'),
         onChange: (callback: (status: { online: boolean; lastChecked: Date; checkMethod: string }) => void) => {
-            // Subscribe to network status changes
-            ipcRenderer.invoke('network:subscribe');
-
-            // Listen for status changes
-            const unsubscribe = () => {
-                ipcRenderer.removeAllListeners('network:statusChanged');
+            const listener = (_event: Electron.IpcRendererEvent, status: { online: boolean; lastChecked: Date; checkMethod: string }) => {
+                callback(status);
             };
 
-            ipcRenderer.on('network:statusChanged', (_event, status) => {
-                callback(status);
-            });
+            void ipcRenderer.invoke('network:subscribe');
+            ipcRenderer.on('network:statusChanged', listener);
+
+            const unsubscribe = () => {
+                ipcRenderer.off('network:statusChanged', listener);
+            };
 
             return unsubscribe;
         },

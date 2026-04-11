@@ -72,6 +72,12 @@ model Product {
 
   category Category         @relation(fields: [categoryId], references: [id])
   variants ProductVariant[]
+
+  // Cloud Sync Tracking
+  isSynced     Boolean   @default(false)
+  lastSyncedAt DateTime?
+
+  @@index([isSynced])
 }
 
 model ProductVariant {
@@ -93,6 +99,12 @@ model ProductVariant {
   product            Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
   saleItems          SaleItem[]
   inventoryMovements InventoryMovement[]
+
+  // Cloud Sync Tracking
+  isSynced     Boolean   @default(false)
+  lastSyncedAt DateTime?
+
+  @@index([isSynced])
 }
 
 model Customer {
@@ -106,6 +118,12 @@ model Customer {
   updatedAt DateTime @updatedAt
 
   // sales       Sale[] // Removed as per new Sale model
+
+  // Cloud Sync Tracking
+  isSynced     Boolean   @default(false)
+  lastSyncedAt DateTime?
+
+  @@index([isSynced])
 }
 
 model Sale {
@@ -150,11 +168,16 @@ model Sale {
   // If set, reports should use this date instead of createdAt for date range filtering
   actualSaleDate DateTime?
 
+  // Cloud Sync Tracking
+  isSynced     Boolean   @default(false)
+  lastSyncedAt DateTime?
+
   @@unique([billNo])
   @@index([createdAt])
   @@index([actualSaleDate])
   @@index([status])
   @@index([userId])
+  @@index([isSynced])
 }
 
 model InvoicePayment {
@@ -177,6 +200,12 @@ model Exchange {
   
   items             ExchangeItem[]
   payments          ExchangePayment[]
+
+  // Cloud Sync Tracking
+  isSynced     Boolean   @default(false)
+  lastSyncedAt DateTime?
+
+  @@index([isSynced])
 }
 
 model ExchangeItem {
@@ -210,6 +239,12 @@ model Refund {
   
   items             RefundItem[]
   payments          RefundPayment[]
+
+  // Cloud Sync Tracking
+  isSynced     Boolean   @default(false)
+  lastSyncedAt DateTime?
+
+  @@index([isSynced])
 }
 
 model RefundItem {
@@ -275,8 +310,13 @@ model InventoryMovement {
 
   variant ProductVariant @relation(fields: [variantId], references: [id])
 
+  // Cloud Sync Tracking
+  isSynced     Boolean   @default(false)
+  lastSyncedAt DateTime?
+
   @@index([variantId])
   @@index([createdAt])
+  @@index([isSynced])
 }
 
 model Setting {

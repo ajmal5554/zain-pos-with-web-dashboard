@@ -1,15 +1,33 @@
+import * as React from 'react';
 import { useEffect, useState, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, Download, Eye, Receipt, Search, X } from 'lucide-react';
+import { Activity, AlertTriangle, ChevronLeft, ChevronRight, Download, Eye, Receipt, Search, TrendingUp, X, FileText, Printer } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { MobileInvoiceCard } from '@/components/shared/MobileInvoiceCard';
 import { invoiceService, type Invoice, type InvoiceParams } from '@/features/invoices/services/invoice.service';
 import { PaginatedTable } from '@/components/shared/PaginatedTable';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { 
+  Card, 
+  CardContent, 
+  CardDescription, 
+  CardHeader, 
+  CardTitle 
+} from '@/components/ui/card';
+import { 
+  Dialog, 
+  DialogContent, 
+  DialogDescription, 
+  DialogFooter, 
+  DialogHeader, 
+  DialogTitle 
+} from '@/components/ui/dialog';
+import { Badge } from '@/components/ui/badge';
 import { useDateFilter } from '@/contexts/DateFilterContext';
 import api from '@/lib/api';
 import { demoInvoices, getDemoInvoicesPage, isDemoModeEnabled } from '@/lib/demo';
 import { formatCurrency } from '@/lib/format';
+import { StatCard } from '@/components/shared/StatCard';
+import { cn } from '@/lib/utils';
 
 export default function Invoices() {
     const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -28,6 +46,9 @@ export default function Invoices() {
 
     const inDemoMode = isDemoModeEnabled();
 
+    const totalRevenue = invoices.reduce((sum, inv) => sum + inv.total, 0);
+    const avgInvoice = invoices.length > 0 ? totalRevenue / invoices.length : 0;
+
     const handleViewInvoice = async (inv: Invoice) => {
         setSelectedInvoice(inv);
         if (inDemoMode || inv.items?.length) return;
@@ -37,7 +58,7 @@ export default function Invoices() {
             const full = await invoiceService.getInvoiceById(inv.id);
             setSelectedInvoice(full);
         } catch {
-            toast.error('Could not load invoice details');
+            toast.error('Could not load bill details');
         } finally {
             setModalLoading(false);
         }
@@ -95,10 +116,10 @@ export default function Invoices() {
             setTotalPages(data.pagination.pages);
             setTotalItems(data.pagination.total);
         } catch (err) {
-            console.error('Failed to load invoices', err);
-            setError('Failed to load invoices.');
+            console.error('Failed to load bills', err);
+            setError('Failed to load bills.');
             if (!inDemoMode) {
-                toast.error('Failed to load invoices');
+                toast.error('Failed to load bills');
             }
         } finally {
             setLoading(false);
@@ -115,7 +136,7 @@ export default function Invoices() {
 
     const handleExport = async () => {
         setExporting(true);
-        const toastId = toast.loading('Exporting invoices...');
+        const toastId = toast.loading('Exporting bills...');
         try {
             if (inDemoMode) {
                 toast.success('Demo mode does not export real files.', { id: toastId });
@@ -136,7 +157,7 @@ export default function Invoices() {
             const url = window.URL.createObjectURL(new Blob([response.data]));
             const link = document.createElement('a');
             link.href = url;
-            link.setAttribute('download', `invoices_${new Date().toISOString().split('T')[0]}.csv`);
+            link.setAttribute('download', `bills_${new Date().toISOString().split('T')[0]}.csv`);
             document.body.appendChild(link);
             link.click();
             link.remove();
@@ -152,212 +173,205 @@ export default function Invoices() {
 
     const columns = [
         {
-            header: 'Invoice #',
-            render: (inv: Invoice) => <span className="font-mono font-medium">#{inv.billNo}</span>
+            header: 'Bill No',
+            render: (inv: Invoice) => (
+                <div className="flex items-center gap-2">
+                    <Receipt className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium">#{inv.billNo}</span>
+                </div>
+            )
         },
         {
             header: 'Customer',
             render: (inv: Invoice) => (
                 <div>
-                    <p className="font-medium text-slate-900 dark:text-slate-100">{inv.customer.name}</p>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">{inv.customer.phone}</p>
+                    <p className="font-medium text-sm">{inv.customer.name}</p>
+                    <p className="text-xs text-muted-foreground">{inv.customer.phone}</p>
                 </div>
             )
         },
         {
             header: 'Date',
-            render: (inv: Invoice) => new Date(inv.createdAt).toLocaleDateString('en-IN', {
-                month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-            })
+            render: (inv: Invoice) => (
+                <div className="text-sm text-muted-foreground">
+                    {new Date(inv.createdAt).toLocaleDateString('en-IN', {
+                        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                    })}
+                </div>
+            )
         },
         {
             header: 'Items',
-            render: (inv: Invoice) => <span className="text-slate-600 dark:text-slate-400">{inv.itemCount} items</span>,
+            render: (inv: Invoice) => (
+                <Badge variant="secondary" className="font-normal text-xs">
+                    {inv.itemCount} items
+                </Badge>
+            ),
             className: 'text-center'
         },
         {
             header: 'Total',
-            render: (inv: Invoice) => <span className="font-bold">{formatCurrency(inv.total)}</span>,
+            render: (inv: Invoice) => <span className="font-medium text-sm">{formatCurrency(inv.total)}</span>,
             className: 'text-right'
         },
         {
-            header: 'Action',
+            header: 'Actions',
             render: (inv: Invoice) => (
-                <div className="flex justify-center">
-                    <Button variant="ghost" size="sm" onClick={() => void handleViewInvoice(inv)}>
-                        <Eye className="h-4 w-4" />
+                <div className="flex justify-end gap-2">
+                    <Button variant="outline" size="sm" className="h-8" onClick={() => void handleViewInvoice(inv)}>
+                        View
                     </Button>
                 </div>
             ),
-            className: 'text-center'
+            className: 'text-right'
         }
     ];
 
     return (
-        <div className="space-y-6 pb-20 lg:pb-6">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex-1 space-y-4 pt-4">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between">
                 <div>
-                    <h1 className="dashboard-section-title">Invoices</h1>
-                    <p className="dashboard-section-copy">Billing records for {dateRange.label}.</p>
+                    <h2 className="text-2xl font-bold tracking-tight">Bills</h2>
+                    <p className="text-muted-foreground text-sm">
+                        View and manage all bills for {dateRange.label}.
+                    </p>
                 </div>
-                <Button variant="outline" onClick={() => void handleExport()} disabled={exporting} className="rounded-2xl">
-                    <Download className="mr-2 h-4 w-4" />
-                    {exporting ? 'Exporting...' : 'Export CSV'}
-                </Button>
+                <div className="flex items-center gap-2">
+                    <Button 
+                        variant="outline" 
+                        onClick={() => void handleExport()} 
+                        disabled={exporting} 
+                    >
+                        <Download className="mr-2 h-4 w-4" />
+                        {exporting ? 'Exporting...' : 'Export to Excel'}
+                    </Button>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <StatCard 
+                    title="Total Bills" 
+                    value={totalItems} 
+                    icon={<Receipt className="h-4 w-4" />} 
+                    loading={loading}
+                />
+                <StatCard 
+                    title="Total Sales" 
+                    value={formatCurrency(totalRevenue)} 
+                    icon={<TrendingUp className="h-4 w-4" />} 
+                    loading={loading}
+                />
+                <StatCard 
+                    title="Average Bill" 
+                    value={formatCurrency(avgInvoice)} 
+                    icon={<Activity className="h-4 w-4" />} 
+                    loading={loading}
+                />
             </div>
 
             <Card>
-                <CardHeader className="border-b border-slate-200/70 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900/40">
-                    <CardTitle className="text-xl">Search Invoices</CardTitle>
-                </CardHeader>
                 <CardContent className="p-4">
-                    <div className="relative w-full md:w-96">
-                        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <div className="relative max-w-sm">
+                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                         <input
                             type="text"
-                            placeholder="Search invoice, customer, or phone"
+                            placeholder="Search by bill number, name, or phone..."
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
-                            className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-sky-700 dark:focus:ring-sky-950/40"
+                            className="w-full h-9 rounded-md border border-input bg-background pl-8 pr-3 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                         />
                     </div>
                 </CardContent>
             </Card>
 
             {error && (
-                <div className="rounded-[1.5rem] border border-rose-200 bg-rose-50/80 px-5 py-4 text-sm font-medium text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/20 dark:text-rose-300">
-                    {error}
+                <div className="p-3 rounded-md bg-destructive/10 border border-destructive/20 text-destructive text-sm flex items-center gap-2">
+                    <AlertTriangle className="h-4 w-4" />
+                    <span>{error}</span>
                 </div>
             )}
 
-            <div className="hidden md:block">
+            <div className="rounded-md border bg-card overflow-hidden">
                 <PaginatedTable
                     data={invoices}
                     columns={columns}
                     page={page}
-                    totalPages={totalPages}
+                    total={totalItems}
                     onPageChange={setPage}
                     loading={loading}
                     itemsPerPage={limit}
                     onLimitChange={setLimit}
-                    totalItems={totalItems}
-                    emptyMessage="No invoices found matching your criteria."
+                    emptyMessage="No matching bills found."
                 />
             </div>
 
-            <div className="space-y-4 md:hidden">
-                {loading ? (
-                    <div className="dashboard-surface rounded-[1.5rem] px-4 py-10 text-center text-sm text-slate-500 dark:text-slate-400">
-                        Loading invoices...
-                    </div>
-                ) : invoices.length > 0 ? (
-                    invoices.map((invoice) => (
-                        <MobileInvoiceCard
-                            key={invoice.id}
-                            invoice={invoice}
-                            onView={(inv) => void handleViewInvoice(inv)}
-                        />
-                    ))
-                ) : (
-                    <div className="dashboard-surface rounded-[1.5rem] px-4 py-10 text-center text-sm text-slate-500 dark:text-slate-400">
-                        No invoices found.
-                    </div>
-                )}
-
-                {totalItems > 0 && (
-                    <div className="flex items-center justify-between pt-4">
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={page <= 1 || loading}
-                            onClick={() => setPage(page - 1)}
-                        >
-                            <ChevronLeft className="mr-1 h-4 w-4" /> Previous
-                        </Button>
-                        <span className="text-sm text-slate-500 dark:text-slate-400">
-                            Page {page} of {totalPages}
-                        </span>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={page >= totalPages || loading}
-                            onClick={() => setPage(page + 1)}
-                        >
-                            Next <ChevronRight className="ml-1 h-4 w-4" />
-                        </Button>
-                    </div>
-                )}
-            </div>
-
-            {selectedInvoice && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
-                    <div className="w-full max-w-2xl overflow-y-auto rounded-[1.75rem] border border-slate-200 bg-white shadow-[0_30px_80px_-32px_rgba(15,23,42,0.45)] dark:border-slate-800 dark:bg-slate-950">
-                        <div className="p-6">
-                            <div className="mb-6 flex items-center justify-between">
-                                <div className="flex items-center gap-3">
-                                    <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
-                                        <Receipt className="h-[18px] w-[18px] stroke-[1.9]" />
-                                    </div>
-                                    <div>
-                                        <h2 className="text-2xl font-semibold">Invoice #{selectedInvoice.billNo}</h2>
-                                        <p className="text-sm text-slate-500 dark:text-slate-400">
-                                            {new Date(selectedInvoice.createdAt).toLocaleString('en-IN')}
-                                        </p>
-                                    </div>
+            <Dialog open={!!selectedInvoice} onOpenChange={(open) => !open && setSelectedInvoice(null)}>
+                <DialogContent className="sm:max-w-xl">
+                    {selectedInvoice && (
+                        <>
+                            <DialogHeader>
+                                <div className="flex justify-between items-start mb-2">
+                                     <div className="h-10 w-10 justify-center rounded-md border bg-muted flex items-center text-muted-foreground">
+                                         <Receipt className="h-5 w-5" />
+                                     </div>
+                                     <Badge variant="default" className="bg-emerald-500 hover:bg-emerald-600">Paid</Badge>
                                 </div>
-                                <button
-                                    onClick={() => { setSelectedInvoice(null); setModalLoading(false); }}
-                                    className="rounded-full p-2 hover:bg-slate-100 dark:hover:bg-slate-900"
-                                >
-                                    <X className="h-5 w-5" />
-                                </button>
-                            </div>
+                                <DialogTitle>Bill #{selectedInvoice.billNo}</DialogTitle>
+                                <DialogDescription>
+                                    Billed on {new Date(selectedInvoice.createdAt).toLocaleString('en-IN')}
+                                </DialogDescription>
+                            </DialogHeader>
 
-                            <div className="space-y-6">
-                                <div className="grid grid-cols-2 gap-6">
-                                    <div>
-                                        <p className="mb-1 text-sm text-slate-500 dark:text-slate-400">Customer</p>
-                                        <p className="text-lg font-medium">{selectedInvoice.customer.name}</p>
-                                        <p className="text-slate-600 dark:text-slate-300">{selectedInvoice.customer.phone}</p>
+                            <div className="py-4 space-y-6">
+                                <div className="flex justify-between">
+                                    <div className="space-y-1">
+                                        <p className="text-sm font-medium text-muted-foreground">Customer Details</p>
+                                        <p className="font-semibold">{selectedInvoice.customer.name}</p>
+                                        <p className="text-sm text-muted-foreground">{selectedInvoice.customer.phone}</p>
                                     </div>
-                                    <div className="text-right">
-                                        <p className="mb-1 text-sm text-slate-500 dark:text-slate-400">Total</p>
-                                        <p className="text-lg font-semibold">{formatCurrency(selectedInvoice.total)}</p>
+                                    <div className="text-right space-y-1">
+                                        <p className="text-sm font-medium text-muted-foreground">Total Amount</p>
+                                        <p className="text-2xl font-bold">{formatCurrency(selectedInvoice.total)}</p>
                                     </div>
                                 </div>
 
-                                <div className="border-t border-slate-200 pt-4 dark:border-slate-800">
+                                <div className="rounded-md border p-4 space-y-4 max-h-[40vh] overflow-y-auto">
                                     {modalLoading ? (
-                                        <div className="py-6 text-center text-slate-400">Loading items...</div>
+                                        <div className="text-center text-muted-foreground py-8">Loading bill details...</div>
                                     ) : (
-                                        <table className="w-full">
-                                            <thead>
-                                                <tr className="text-left text-sm text-slate-500 dark:text-slate-400">
-                                                    <th className="pb-2">Item</th>
-                                                    <th className="pb-2 text-right">Qty</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {selectedInvoice.items.map((item, idx) => (
-                                                    <tr key={idx} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
-                                                        <td className="py-2">{item.product.name}</td>
-                                                        <td className="py-2 text-right">{item.quantity}</td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
+                                        <>
+                                            {selectedInvoice.items?.map((item, idx) => (
+                                                <div key={idx} className="flex justify-between items-center pb-2 border-b last:border-0 last:pb-0">
+                                                     <div>
+                                                         <p className="font-medium text-sm">{item.product.name}</p>
+                                                         <p className="text-xs text-muted-foreground mt-0.5">Quantity: {item.quantity}</p>
+                                                     </div>
+                                                     <div className="font-medium text-sm">
+                                                         {formatCurrency(item.sellingPrice * item.quantity)}
+                                                     </div>
+                                                </div>
+                                            ))}
+                                            {(!selectedInvoice.items || selectedInvoice.items.length === 0) && (
+                                                <p className="text-center text-muted-foreground text-sm py-4">Custom Item</p>
+                                            )}
+                                        </>
                                     )}
                                 </div>
                             </div>
 
-                            <div className="mt-8 flex justify-end gap-3">
-                                <Button variant="outline" onClick={() => { setSelectedInvoice(null); setModalLoading(false); }}>Close</Button>
-                                <Button onClick={() => window.print()}>Print Invoice</Button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
+                            <DialogFooter className="flex-col sm:flex-row gap-2">
+                                <Button variant="outline" className="w-full sm:w-auto" onClick={() => setSelectedInvoice(null)}>
+                                    Close
+                                </Button>
+                                <Button className="w-full sm:w-auto">
+                                    <Printer className="mr-2 h-4 w-4" />
+                                    Print Bill
+                                </Button>
+                            </DialogFooter>
+                        </>
+                    )}
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }
