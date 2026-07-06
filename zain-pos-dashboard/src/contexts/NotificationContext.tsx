@@ -129,7 +129,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
         try {
             const registration = await navigator.serviceWorker.ready;
-            const VAPID_PUBLIC_KEY = 'BFA13J-YDOluaD0tWBD6bTXPWmuMWCXcki4yDRbFCKjoTo_YOaI1MmJJQjKBZ4KKh-aqeOvzOLboU8Hke0_3FeA';
+            const VAPID_PUBLIC_KEY = 'BDJxTZeB4JeyjNGNYEVBzMcOL2GbbeqK_zT86JaoH23gqrxVtOJMeVUuroZ_yiL8Ay2t8y1KM6Fm273kNC34XPY';
 
             const subscription = await registration.pushManager.subscribe({
                 userVisibleOnly: true,
