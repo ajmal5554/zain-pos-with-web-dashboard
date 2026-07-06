@@ -445,7 +445,7 @@ export default function Reports() {
 
     if (loading || !report) {
         return (
-            <div className="flex-1 space-y-4 pt-4">
+            <div className="flex-1 space-y-4 pt-4 w-full max-w-full overflow-hidden">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between">
                     <div>
                         <h2 className="text-xl sm:text-2xl font-bold tracking-tight">GST Reports</h2>
@@ -476,80 +476,88 @@ export default function Reports() {
     }));
 
     return (
-        <div className="flex-1 space-y-4 pt-4 pb-6">
-            {/* Header */}
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between">
+        <div className="flex-1 space-y-4 w-full max-w-full overflow-hidden pb-6">
+            {/* Header & Controls */}
+            <div className="flex flex-col gap-4 w-full">
                 <div>
                     <h2 className="text-xl sm:text-2xl font-bold tracking-tight">GST Reports</h2>
                     <p className="text-muted-foreground text-xs">
                         Generate GST-compliant sales reports.
                     </p>
                 </div>
-                {/* PDF and Excel buttons + Type selectors */}
-                <div className="flex flex-wrap items-center gap-2">
-                    <div className="flex rounded-lg border border-slate-200 p-0.5 bg-slate-100 dark:border-slate-800 dark:bg-slate-950/40">
-                        <Button 
-                            variant="ghost" 
-                            size="sm" 
-                            className={cn("h-7 text-xs px-2.5 rounded-md", reportType === 'summary' ? "bg-white dark:bg-slate-900 shadow-sm font-semibold" : "text-muted-foreground")}
-                            onClick={() => setReportType('summary')}
-                        >
-                            Summary
-                        </Button>
-                        <Button 
-                            variant="ghost" 
-                            size="sm" 
-                            className={cn("h-7 text-xs px-2.5 rounded-md", reportType === 'detailed' ? "bg-white dark:bg-slate-900 shadow-sm font-semibold" : "text-muted-foreground")}
-                            onClick={() => setReportType('detailed')}
-                        >
-                            Detailed
-                        </Button>
+
+                {/* Controls Container */}
+                <div className="flex flex-col gap-3 w-full sm:flex-row sm:items-center sm:justify-between sm:flex-wrap">
+                    {/* Toggles (Row 1 on Mobile) */}
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center w-full sm:w-auto">
+                        <div className="grid grid-cols-2 gap-2 sm:flex sm:rounded-lg border border-slate-200 p-0.5 bg-slate-100 dark:border-slate-800 dark:bg-slate-950/40 w-full sm:w-auto">
+                            <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                className={cn("h-9 sm:h-7 text-xs rounded-md", reportType === 'summary' ? "bg-white dark:bg-slate-900 shadow-sm font-semibold" : "text-muted-foreground")}
+                                onClick={() => setReportType('summary')}
+                            >
+                                Summary
+                            </Button>
+                            <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                className={cn("h-9 sm:h-7 text-xs rounded-md", reportType === 'detailed' ? "bg-white dark:bg-slate-900 shadow-sm font-semibold" : "text-muted-foreground")}
+                                onClick={() => setReportType('detailed')}
+                            >
+                                Detailed
+                            </Button>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 sm:flex sm:rounded-lg border border-slate-200 p-0.5 bg-slate-100 dark:border-slate-800 dark:bg-slate-950/40 w-full sm:w-auto">
+                            <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                className={cn("h-9 sm:h-7 text-xs rounded-md", sortBy === 'date' ? "bg-white dark:bg-slate-900 shadow-sm font-semibold" : "text-muted-foreground")}
+                                onClick={() => setSortBy('date')}
+                            >
+                                By Date
+                            </Button>
+                            <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                className={cn("h-9 sm:h-7 text-xs rounded-md", sortBy === 'billNo' ? "bg-white dark:bg-slate-900 shadow-sm font-semibold" : "text-muted-foreground")}
+                                onClick={() => setSortBy('billNo')}
+                            >
+                                By Bill No
+                            </Button>
+                        </div>
                     </div>
 
-                    <div className="flex rounded-lg border border-slate-200 p-0.5 bg-slate-100 dark:border-slate-800 dark:bg-slate-950/40">
-                        <Button 
-                            variant="ghost" 
-                            size="sm" 
-                            className={cn("h-7 text-xs px-2.5 rounded-md", sortBy === 'date' ? "bg-white dark:bg-slate-900 shadow-sm font-semibold" : "text-muted-foreground")}
-                            onClick={() => setSortBy('date')}
-                        >
-                            By Date
-                        </Button>
-                        <Button 
-                            variant="ghost" 
-                            size="sm" 
-                            className={cn("h-7 text-xs px-2.5 rounded-md", sortBy === 'billNo' ? "bg-white dark:bg-slate-900 shadow-sm font-semibold" : "text-muted-foreground")}
-                            onClick={() => setSortBy('billNo')}
-                        >
-                            By Bill No
-                        </Button>
-                    </div>
-
-                    <DateRangePicker />
-
-                    <div className="flex items-center gap-1.5">
-                        <Button 
-                            onClick={exportToPDF}
-                            className="h-9 px-3 bg-red-600 hover:bg-red-700 text-white font-semibold text-xs rounded-xl shadow-sm"
-                        >
-                            <FileText className="mr-1.5 h-3.5 w-3.5" />
-                            PDF
-                        </Button>
-                        <Button 
-                            onClick={exportToExcel}
-                            className="h-9 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-sm"
-                        >
-                            <FileSpreadsheet className="mr-1.5 h-3.5 w-3.5" />
-                            Excel
-                        </Button>
+                    {/* Date Picker + Export buttons (Row 2 & 3 on Mobile) */}
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center w-full sm:w-auto">
+                        <div className="w-full sm:w-auto">
+                            <DateRangePicker />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 w-full sm:flex sm:w-auto">
+                            <Button 
+                                onClick={exportToPDF}
+                                className="h-9 px-3 bg-red-600 hover:bg-red-700 text-white font-semibold text-xs rounded-xl shadow-sm w-full sm:w-auto"
+                            >
+                                <FileText className="mr-1.5 h-3.5 w-3.5" />
+                                PDF
+                            </Button>
+                            <Button 
+                                onClick={exportToExcel}
+                                className="h-9 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-sm w-full sm:w-auto"
+                            >
+                                <FileSpreadsheet className="mr-1.5 h-3.5 w-3.5" />
+                                Excel
+                            </Button>
+                        </div>
                     </div>
                 </div>
             </div>
 
             {/* Stat Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 w-full max-w-full">
                 {/* Total Bills */}
-                <Card className="border-t-4 border-t-blue-500 shadow-sm">
+                <Card className="border-t-4 border-t-blue-500 shadow-sm overflow-hidden w-full max-w-full">
                     <CardHeader className="pb-2">
                         <CardDescription className="text-xs font-medium text-muted-foreground">Total Bills</CardDescription>
                         <CardTitle className="text-2xl font-bold">{report.summary.count}</CardTitle>
@@ -557,7 +565,7 @@ export default function Reports() {
                 </Card>
 
                 {/* Taxable Value */}
-                <Card className="border-t-4 border-t-emerald-500 shadow-sm">
+                <Card className="border-t-4 border-t-emerald-500 shadow-sm overflow-hidden w-full max-w-full">
                     <CardHeader className="pb-2">
                         <CardDescription className="text-xs font-medium text-muted-foreground">Taxable Value</CardDescription>
                         <CardTitle className="text-2xl font-bold">{formatCurrency(report.summary.taxableValue)}</CardTitle>
@@ -565,7 +573,7 @@ export default function Reports() {
                 </Card>
 
                 {/* Total GST */}
-                <Card className="border-t-4 border-t-purple-500 shadow-sm">
+                <Card className="border-t-4 border-t-purple-500 shadow-sm overflow-hidden w-full max-w-full">
                     <CardHeader className="pb-2">
                         <CardDescription className="text-xs font-medium text-muted-foreground">Total GST</CardDescription>
                         <CardTitle className="text-2xl font-bold">{formatCurrency(report.summary.totalTax)}</CardTitle>
@@ -573,7 +581,7 @@ export default function Reports() {
                 </Card>
 
                 {/* Grand Total */}
-                <Card className="border-t-4 border-t-orange-500 shadow-sm">
+                <Card className="border-t-4 border-t-orange-500 shadow-sm overflow-hidden w-full max-w-full">
                     <CardHeader className="pb-2">
                         <CardDescription className="text-xs font-medium text-muted-foreground">Grand Total</CardDescription>
                         <CardTitle className="text-2xl font-bold">{formatCurrency(report.summary.grandTotal)}</CardTitle>
@@ -582,7 +590,7 @@ export default function Reports() {
             </div>
 
             {/* Daily Sales Summary */}
-            <Card>
+            <Card className="overflow-hidden w-full max-w-full">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                     <div className="space-y-1">
                         <CardTitle className="text-base font-semibold">Daily Sales Summary</CardTitle>
@@ -590,9 +598,9 @@ export default function Reports() {
                     </div>
                     <Calendar className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
-                <CardContent className="pt-4 p-0">
-                    <div className="overflow-x-auto">
-                        <Table className="min-w-[900px]">
+                <CardContent className="pt-4 p-0 w-full max-w-full">
+                    <div className="overflow-x-auto w-full max-w-full">
+                        <Table className="min-w-[900px] w-full">
                             <TableHeader>
                                 <TableRow>
                                     <TableHead className="pl-6">Date</TableHead>
@@ -638,9 +646,9 @@ export default function Reports() {
                 </CardContent>
             </Card>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-full">
                 {/* Slab Partitioning */}
-                <Card>
+                <Card className="overflow-hidden w-full max-w-full">
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                         <div className="space-y-1">
                             <CardTitle className="text-base font-semibold">Tax by Slabs</CardTitle>
@@ -648,9 +656,9 @@ export default function Reports() {
                         </div>
                         <Layers className="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
-                    <CardContent className="pt-4 p-0">
-                        <div className="overflow-x-auto">
-                            <Table>
+                    <CardContent className="pt-4 p-0 w-full">
+                        <div className="overflow-x-auto w-full">
+                            <Table className="w-full">
                                 <TableHeader>
                                     <TableRow>
                                         <TableHead className="pl-6">Tax Rate</TableHead>
@@ -687,16 +695,16 @@ export default function Reports() {
                 </Card>
 
                 {/* Cancelled Invoices */}
-                <Card>
+                <Card className="overflow-hidden w-full max-w-full">
                     <CardHeader className="flex flex-row items-center justify-between pb-2">
                         <div className="space-y-1">
                             <CardTitle className="text-base font-semibold">Cancelled Invoices</CardTitle>
                             <CardDescription className="text-xs">Voided bills listed for reference only.</CardDescription>
                         </div>
                     </CardHeader>
-                    <CardContent className="pt-4 p-0">
-                        <div className="overflow-x-auto">
-                            <Table>
+                    <CardContent className="pt-4 p-0 w-full">
+                        <div className="overflow-x-auto w-full">
+                            <Table className="w-full">
                                 <TableHeader>
                                     <TableRow>
                                         <TableHead className="pl-6">Bill No</TableHead>
@@ -734,16 +742,16 @@ export default function Reports() {
             </div>
 
             {/* Transaction Matrix */}
-            <Card>
+            <Card className="overflow-hidden w-full max-w-full">
                 <CardHeader className="flex flex-row items-center justify-between pb-2">
                     <div className="space-y-1">
                         <CardTitle className="text-base font-semibold">Transactions</CardTitle>
                         <CardDescription className="text-xs">Recent sales list with tax details.</CardDescription>
                     </div>
                 </CardHeader>
-                <CardContent className="p-0">
-                    <div className="overflow-x-auto">
-                        <Table className="min-w-[700px]">
+                <CardContent className="p-0 w-full">
+                    <div className="overflow-x-auto w-full">
+                        <Table className="min-w-[700px] w-full">
                             <TableHeader>
                                 <TableRow>
                                     <TableHead className="pl-6">Bill No</TableHead>
