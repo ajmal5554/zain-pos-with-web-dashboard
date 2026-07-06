@@ -20,20 +20,20 @@ import { Sparkles } from 'lucide-react';
 
 function AppBootScreen() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.18),_transparent_30%),linear-gradient(180deg,_#f8fbff_0%,_#edf3fb_100%)] px-6 text-slate-900 dark:bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.14),_transparent_30%),linear-gradient(180deg,_#020617_0%,_#0f172a_100%)] dark:text-slate-100">
+    <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,_rgba(245,158,11,0.15),_transparent_30%),linear-gradient(180deg,_#fcfdfa_0%,_#f3f4f0_100%)] px-6 text-slate-900 dark:bg-[radial-gradient(circle_at_top,_rgba(245,158,11,0.1),_transparent_30%),linear-gradient(180deg,_#020617_0%,_#0b0f19_100%)] dark:text-slate-100">
       <div className="w-full max-w-sm rounded-[2rem] border border-slate-200/80 bg-white/[0.88] p-8 text-center shadow-[0_30px_80px_-36px_rgba(15,23,42,0.45)] backdrop-blur-xl dark:border-slate-800 dark:bg-slate-950/[0.84]">
-        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-[1.5rem] bg-slate-950 text-white shadow-[0_20px_40px_-20px_rgba(15,23,42,0.9)] dark:bg-sky-400 dark:text-slate-950">
-          <Sparkles className="h-7 w-7" />
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-[1.5rem] bg-slate-950 p-3 shadow-[0_20px_40px_-20px_rgba(15,23,42,0.9)] dark:bg-slate-900 border border-slate-800">
+          <img src="/icon.ico" className="h-full w-full object-contain rounded-lg animate-pulse" alt="Zain POS Logo" />
         </div>
-        <p className="mt-5 text-[11px] font-semibold uppercase tracking-[0.3em] text-sky-700 dark:text-sky-300">
+        <p className="mt-5 text-[11px] font-semibold uppercase tracking-[0.3em] text-amber-600 dark:text-amber-400">
           Zain Gents Palace
         </p>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Commerce Console</h1>
+        <h1 className="mt-2 text-2xl font-bold tracking-tight">Zain POS</h1>
         <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
           Preparing session, permissions, and live store data.
         </p>
         <div className="mt-6 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-900">
-          <div className="h-full w-1/2 animate-pulse rounded-full bg-sky-500" />
+          <div className="h-full w-1/2 animate-pulse rounded-full bg-amber-500" />
         </div>
       </div>
     </div>
