@@ -24,7 +24,12 @@ export const Login: React.FC = () => {
                 const res = await window.electronAPI.users.listForLogin();
                 if (res.success) {
                     setUsers(res.data);
-                    if (res.data.length > 0) setUsername(res.data[0].username);
+                    const adminUser = res.data.find((user: any) => user.username === 'admin');
+                    if (adminUser) {
+                        setUsername(adminUser.username);
+                    } else if (res.data.length > 0) {
+                        setUsername(res.data[0].username);
+                    }
                 } else {
                     console.error("Failed to load users:", res.error);
                     setError("Failed to load users. Please check the database connection.");

@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+const roundCurrency = (value: number) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+
 interface CartItem {
     variantId: string;
     productName: string;
@@ -97,19 +99,21 @@ export const useCartStore = create<CartState>()(
 
             getSubtotal: () => {
                 const items = get().items;
-                return items.reduce((sum, item) => {
+                const subtotal = items.reduce((sum, item) => {
                     const itemTotal = (item.sellingPrice * item.quantity) - item.discount;
                     return sum + itemTotal;
                 }, 0);
+                return roundCurrency(subtotal);
             },
 
             getTaxAmount: () => {
                 const items = get().items;
-                return items.reduce((sum, item) => {
+                const taxAmount = items.reduce((sum, item) => {
                     const itemTotal = (item.sellingPrice * item.quantity) - item.discount;
                     const taxAmount = (itemTotal * item.taxRate) / (100 + item.taxRate);
                     return sum + taxAmount;
                 }, 0);
+                return roundCurrency(taxAmount);
             },
 
             getGrandTotal: () => {
@@ -118,7 +122,7 @@ export const useCartStore = create<CartState>()(
                 const globalDiscount = discountPercent > 0
                     ? (subtotal * discountPercent) / 100
                     : discount;
-                return subtotal - globalDiscount;
+                return roundCurrency(subtotal - globalDiscount);
             },
         }),
         {

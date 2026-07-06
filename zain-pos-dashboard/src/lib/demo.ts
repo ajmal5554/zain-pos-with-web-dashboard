@@ -250,7 +250,21 @@ export const demoReports = {
         },
         totalQuantity: item.totalQuantity,
         totalRevenue: item.totalRevenue
-    }))
+    })),
+    gst: {
+        cancelledInvoices: [
+            {
+                id: 'void-1',
+                billNo: 'A-1018',
+                createdAt: new Date(Date.now() - 7200_000).toISOString(),
+                grossAmount: 9500,
+                discount: 500,
+                amount: 9000,
+                status: 'VOIDED',
+                paymentMethod: 'UPI'
+            }
+        ]
+    }
 };
 
 export const demoSettings = [

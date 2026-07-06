@@ -10,6 +10,10 @@ import { auditService } from '../services/audit.service';
 
 import { useLocation } from 'react-router-dom';
 
+const GST_RATE = 5;
+const GST_INCLUSIVE_FACTOR = 1 + GST_RATE / 100;
+const roundCurrency = (value: number) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+
 export const POS: React.FC = () => {
     const location = useLocation();
     const leaveWarningMessage = 'Navigating away will close the update option for this saved sale. You can still use refund/exchange later, but you will lose the direct update option now. Continue?';
@@ -61,7 +65,6 @@ export const POS: React.FC = () => {
         updateQuantity,
         clearCart,
         getSubtotal,
-        getTaxAmount,
         getGrandTotal,
         setPaymentMethod,
     } = useCartStore();
@@ -526,26 +529,20 @@ export const POS: React.FC = () => {
 
     // Calculate Totals helper
     const calculateTotals = () => {
-        const subtotal = getSubtotal();
-        const tax = getTaxAmount();
-        const discount = parseFloat(discountAmount) || 0;
-        const total = getGrandTotal();
-        const finalTotal = Math.max(0, total - discount); // Ensure no negative total
-
-        // When a global discount reduces the taxable value, GST must be adjusted
-        // proportionally (tax-inclusive pricing: tax lives inside the price).
-        const adjustedTax = (subtotal > 0 && discount > 0)
-            ? tax * (finalTotal / subtotal)
-            : tax;
+        const subtotal = roundCurrency(getSubtotal());
+        const discount = roundCurrency(parseFloat(discountAmount) || 0);
+        const finalTotal = roundCurrency(Math.max(0, subtotal - discount));
+        const taxable = roundCurrency(finalTotal / GST_INCLUSIVE_FACTOR);
+        const tax = roundCurrency(finalTotal - taxable);
 
         const paid = paymentMethod === 'SPLIT'
-            ? Object.values(splitAmounts).reduce((a, b) => a + b, 0)
-            : (parseFloat(paidAmount) || 0);
+            ? roundCurrency(Object.values(splitAmounts).reduce((a, b) => a + b, 0))
+            : roundCurrency(parseFloat(paidAmount) || 0);
 
-        const change = paid - finalTotal;
-        const balanceDue = finalTotal - originalPaidAmount;
+        const change = roundCurrency(paid - finalTotal);
+        const balanceDue = roundCurrency(finalTotal - originalPaidAmount);
 
-        return { subtotal, tax: adjustedTax, discount, finalTotal, paid, change, balanceDue };
+        return { subtotal, taxable, tax, discount, finalTotal, paid, change, balanceDue };
     };
 
 
@@ -643,10 +640,9 @@ export const POS: React.FC = () => {
         setProcessing(true);
 
         try {
-            const subtotal = getSubtotal();
-            // Use adjusted tax (after discount) for CGST/SGST split
-            const cgst = tax / 2;
-            const sgst = tax / 2;
+            const subtotal = roundCurrency(getSubtotal());
+            const cgst = roundCurrency(tax / 2);
+            const sgst = roundCurrency(tax / 2);
 
             if (currentSaleId) {
                 // If Sale ID is present, we are in UPDATE mode
@@ -680,8 +676,8 @@ export const POS: React.FC = () => {
                         sellingPrice: item.sellingPrice,
                         discount: item.discount,
                         taxRate: item.taxRate,
-                        taxAmount: ((item.sellingPrice * item.quantity - item.discount) * item.taxRate) / (100 + item.taxRate),
-                        total: item.sellingPrice * item.quantity - item.discount,
+                        taxAmount: roundCurrency(((item.sellingPrice * item.quantity - item.discount) * item.taxRate) / (100 + item.taxRate)),
+                        total: roundCurrency(item.sellingPrice * item.quantity - item.discount),
                     })),
                     payments: paymentMethod === 'SPLIT'
                         ? Object.entries(splitAmounts)
@@ -746,8 +742,8 @@ export const POS: React.FC = () => {
                     sellingPrice: item.sellingPrice,
                     discount: item.discount,
                     taxRate: item.taxRate,
-                    taxAmount: ((item.sellingPrice * item.quantity - item.discount) * item.taxRate) / (100 + item.taxRate),
-                    total: item.sellingPrice * item.quantity - item.discount,
+                    taxAmount: roundCurrency(((item.sellingPrice * item.quantity - item.discount) * item.taxRate) / (100 + item.taxRate)),
+                    total: roundCurrency(item.sellingPrice * item.quantity - item.discount),
                 })),
                 payments: paymentMethod === 'SPLIT'
                     ? Object.entries(splitAmounts)

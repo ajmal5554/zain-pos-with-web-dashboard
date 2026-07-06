@@ -920,15 +920,24 @@ async function ensureUserSchemaReady() {
     await ensureSchemaUpdated();
 }
 
+function isBcryptHash(value: unknown) {
+    return typeof value === 'string' && /^\$2[aby]\$\d{2}\$/.test(value);
+}
+
 async function ensureDefaultAdmin() {
     await ensureUserSchemaReady();
     const existing = await prisma.user.findFirst({ where: { username: 'admin' } });
 
     // If admin exists, update to ensure all permissions are set
     if (existing) {
+        const passwordRepair = isBcryptHash(existing.password)
+            ? {}
+            : { password: await bcrypt.hash('admin123', 10) };
+
         return await prisma.user.update({
             where: { id: existing.id },
             data: {
+                ...passwordRepair,
                 isActive: true,
                 role: 'ADMIN',
                 // Set ALL permissions to true for admin
@@ -991,9 +1000,14 @@ async function ensureDefaultAdmin() {
         if (e?.code === 'P2002') {
             const admin = await prisma.user.findFirst({ where: { username: 'admin' } });
             if (admin) {
+                const passwordRepair = isBcryptHash(admin.password)
+                    ? {}
+                    : { password: await bcrypt.hash('admin123', 10) };
+
                 return await prisma.user.update({
                     where: { id: admin.id },
                     data: {
+                        ...passwordRepair,
                         isActive: true,
                         role: 'ADMIN',
                         permPrintSticker: true,
@@ -1169,6 +1183,7 @@ function createWindow() {
             preload: path.join(__dirname, 'preload.js'),
             nodeIntegration: false,
             sandbox: false,
+            backgroundThrottling: false,
         },
         autoHideMenuBar: true,
         icon: appIcon,
@@ -1206,7 +1221,9 @@ function createWindow() {
 
         if (isDev) {
             mainWindow.loadURL('http://localhost:5173');
-            mainWindow.webContents.openDevTools();
+            if (process.env.ELECTRON_OPEN_DEVTOOLS === '1') {
+                mainWindow.webContents.openDevTools({ mode: 'detach' });
+            }
         } else {
             const indexPath = path.join(__dirname, '../dist/index.html');
 
@@ -1723,6 +1740,11 @@ ipcMain.handle('sales:checkout', async (_event, saleData) => {
       result = await prisma.$transaction(async (tx: any) => {
         try {
             const createdAt = new Date();  // Always use current timestamp for invoice
+            const net = roundCurrency(Number(saleData.subtotal || 0) - Number(saleData.discount || 0));
+            const taxable = roundCurrency(net / 1.05);
+            const taxAmount = roundCurrency(net - taxable);
+            const cgst = roundCurrency(taxAmount / 2);
+            const sgst = roundCurrency(taxAmount / 2);
 
             // Atomically assign next sequential bill number
             const billNo = await getNextBillNoForDate(createdAt, tx);
@@ -1737,9 +1759,9 @@ ipcMain.handle('sales:checkout', async (_event, saleData) => {
                     subtotal: saleData.subtotal,
                     discount: saleData.discount,
                     discountPercent: saleData.discountPercent || 0,
-                    taxAmount: saleData.taxAmount,
-                    cgst: saleData.cgst,
-                    sgst: saleData.sgst,
+                    taxAmount,
+                    cgst,
+                    sgst,
                     grandTotal: saleData.grandTotal,
                     paymentMethod: saleData.paymentMethod, // Main method for display
                     paidAmount: saleData.paidAmount,
@@ -3841,7 +3863,22 @@ ipcMain.handle('auth:login', async (_event, { username, password }) => {
             return { success: false, error: 'User account is disabled' };
         }
 
-        const isValidPassword = await bcrypt.compare(password, user.password);
+        const storedPassword = String(user.password || '');
+        let isValidPassword = false;
+
+        if (isBcryptHash(storedPassword)) {
+            isValidPassword = await bcrypt.compare(password, storedPassword);
+        } else {
+            // v1 shop backups may contain plain-text passwords. If the legacy
+            // password is correct, upgrade it immediately to the v2 hash format.
+            isValidPassword = password === storedPassword;
+            if (isValidPassword) {
+                await prisma.user.update({
+                    where: { id: user.id },
+                    data: { password: await bcrypt.hash(password, 10) }
+                });
+            }
+        }
 
         if (!isValidPassword) {
             return { success: false, error: 'Invalid username or password' };

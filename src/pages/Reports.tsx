@@ -144,6 +144,7 @@ interface ReportData {
     endDate: Date;
     taxInvoices: SaleRow[];
     allSales: SaleRow[];
+    cancelledSales: SaleRow[];
     exchangeReplacementSales: SaleRow[];
     taxInvoiceTotals: ReportTotals;
     allSalesTotals: ReportTotals;
@@ -285,26 +286,32 @@ function getNetSaleForReport(sale: SaleRow): SaleRow {
     return netSale;
 }
 
-function buildTaxSlabs(items: SaleItemRow[]): TaxSlabSummary[] {
+function buildTaxSlabs(salesList: SaleRow[]): TaxSlabSummary[] {
     const slabMap = new Map<number, TaxSlabSummary>();
 
-    for (const item of items) {
-        const rate = item.taxRate;
-        // Tax-inclusive pricing: Extract tax from the after-discount amount
-        const amountWithTax = item.sellingPrice * item.quantity - item.discount;
-        const taxAmount = (amountWithTax * rate) / (100 + rate);
-        const taxableValue = amountWithTax - taxAmount;
-        const cgst = taxAmount / 2;
-        const sgst = taxAmount / 2;
+    for (const sale of salesList) {
+        const saleSubtotal = Number(sale.subtotal || 0);
+        const saleDiscount = Number(sale.discount || 0);
 
-        const existing = slabMap.get(rate);
-        if (existing) {
-            existing.taxableValue += taxableValue;
-            existing.cgst += cgst;
-            existing.sgst += sgst;
-            existing.totalTax += taxAmount;
-        } else {
-            slabMap.set(rate, { rate, taxableValue, cgst, sgst, totalTax: taxAmount });
+        for (const item of sale.items || []) {
+            const rate = item.taxRate;
+            const lineGross = Number(item.total ?? ((Number(item.sellingPrice || 0) * Number(item.quantity || 0)) - Number(item.discount || 0)));
+            const discountShare = saleSubtotal > 0 ? (lineGross / saleSubtotal) : 0;
+            const lineNet = Math.max(0, lineGross - (saleDiscount * discountShare));
+            const taxableValue = parseFloat((lineNet / (1 + rate / 100)).toFixed(2));
+            const taxAmount = parseFloat((lineNet - taxableValue).toFixed(2));
+            const cgst = parseFloat((taxAmount / 2).toFixed(2));
+            const sgst = parseFloat((taxAmount / 2).toFixed(2));
+
+            const existing = slabMap.get(rate);
+            if (existing) {
+                existing.taxableValue += taxableValue;
+                existing.cgst += cgst;
+                existing.sgst += sgst;
+                existing.totalTax += taxAmount;
+            } else {
+                slabMap.set(rate, { rate, taxableValue, cgst, sgst, totalTax: taxAmount });
+            }
         }
     }
 
@@ -378,7 +385,7 @@ function calculateTotals(salesList: SaleRow[]): ReportTotals {
         totalTax,
         grandTotal,
         payment,
-        taxSlabs: buildTaxSlabs(allItems),
+        taxSlabs: buildTaxSlabs(salesList),
         hsnSummary: buildHsnSummary(allItems),
     };
 }
@@ -538,7 +545,7 @@ export const Reports: React.FC = () => {
             const sales: SaleRow[] = await db.sales.findMany({
                 where: {
                     createdAt: { gte: start, lte: end },
-                    status: 'COMPLETED',
+                    status: { in: ['COMPLETED', 'VOIDED'] },
                 },
                 include: {
                     items: {
@@ -559,7 +566,9 @@ export const Reports: React.FC = () => {
                 orderBy: { createdAt: 'asc' },
             });
 
-            const nettedSales = sales.map((sale) => getNetSaleForReport(sale));
+            const cancelledSales = sales.filter((sale) => sale.status === 'VOIDED');
+            const activeSales = sales.filter((sale) => sale.status !== 'VOIDED');
+            const nettedSales = activeSales.map((sale) => getNetSaleForReport(sale));
 
             const exchangeReplacementSales = nettedSales.filter(isReplacementSale);
             const regularSales = nettedSales.filter((s) => !isReplacementSale(s));
@@ -570,6 +579,7 @@ export const Reports: React.FC = () => {
                 endDate: end,
                 taxInvoices,
                 allSales: nettedSales,
+                cancelledSales,
                 exchangeReplacementSales,
                 taxInvoiceTotals: calculateTotals(taxInvoices),
                 allSalesTotals: calculateTotals(regularSales),
@@ -711,7 +721,10 @@ export const Reports: React.FC = () => {
                 if (pb.card > 0) payModes.push('Card');
 
                 const netAmount = sale.subtotal - sale.discount;
-                const taxableAmount = netAmount - sale.taxAmount; // Tax-exclusive base
+                const taxableAmount = parseFloat((netAmount / 1.05).toFixed(2));
+                const totalGst = parseFloat((netAmount - taxableAmount).toFixed(2));
+                const cgst = parseFloat((totalGst / 2).toFixed(2));
+                const sgst = parseFloat((totalGst / 2).toFixed(2));
 
                 return [
                     format(new Date(sale.createdAt), 'dd/MMM/yy'),
@@ -720,9 +733,9 @@ export const Reports: React.FC = () => {
                     sale.discount.toFixed(2),
                     netAmount.toFixed(2),
                     taxableAmount.toFixed(2),
-                    (sale.cgst || 0).toFixed(2),
-                    (sale.sgst || 0).toFixed(2),
-                    sale.taxAmount.toFixed(2),
+                    cgst.toFixed(2),
+                    sgst.toFixed(2),
+                    totalGst.toFixed(2),
                     sale.grandTotal.toFixed(2),
                     payModes.join('+') || sale.paymentMethod,
                 ];
@@ -771,6 +784,54 @@ export const Reports: React.FC = () => {
                     }
                 }
             });
+
+            if (reportData.cancelledSales.length > 0) {
+                const cancelledStartY = ((doc as any).lastAutoTable?.finalY || currentY) + 8;
+                doc.setFontSize(11);
+                doc.setFont('helvetica', 'bold');
+                doc.text('CANCELLED INVOICES', 14, cancelledStartY);
+
+                const cancelledColumns = ['Bill No', 'Date', 'Gross Amount', 'Discount', 'Amount', 'Status', 'Payment'];
+                const cancelledBody = reportData.cancelledSales
+                    .slice()
+                    .sort((a, b) =>
+                        sortBy === 'billNo'
+                            ? compareBillNos(String(a.billNo), String(b.billNo))
+                            : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+                    )
+                    .map((sale) => {
+                        const pb = getPaymentBreakdown(sale);
+                        const payModes: string[] = [];
+                        if (pb.cash > 0) payModes.push('Cash');
+                        if (pb.upi > 0) payModes.push('UPI');
+                        if (pb.card > 0) payModes.push('Card');
+
+                        return [
+                            formatGstBillLabel(sale),
+                            format(new Date(sale.createdAt), 'dd/MMM/yy'),
+                            sale.subtotal.toFixed(2),
+                            sale.discount.toFixed(2),
+                            sale.grandTotal.toFixed(2),
+                            sale.status,
+                            payModes.join('+') || sale.paymentMethod,
+                        ];
+                    });
+
+                autoTable(doc, {
+                    startY: cancelledStartY + 4,
+                    head: [cancelledColumns],
+                    body: cancelledBody,
+                    theme: 'grid',
+                    styles: { fontSize: 8, cellPadding: 1 },
+                    headStyles: { fillColor: [255, 255, 255], textColor: [0, 0, 0], fontStyle: 'bold' },
+                    bodyStyles: { fillColor: [255, 255, 255] },
+                });
+
+                const noteY = ((doc as any).lastAutoTable?.finalY || cancelledStartY) + 6;
+                doc.setFontSize(9);
+                doc.setFont('helvetica', 'italic');
+                doc.text('Note: Cancelled invoices are excluded from GST calculations', 14, noteY);
+            }
         }
 
         doc.save(`GST-${reportType === 'summary' ? 'Summary' : 'Detailed'}-${format(reportData.startDate, 'dd-MM-yyyy')}-to-${format(reportData.endDate, 'dd-MM-yyyy')}.pdf`);
@@ -833,7 +894,10 @@ export const Reports: React.FC = () => {
                 if (pb.card > 0) payModes.push('Card');
 
                 const netAmount = sale.subtotal - sale.discount;
-                const taxableAmount = netAmount - sale.taxAmount; // Tax-exclusive base
+                const taxableAmount = parseFloat((netAmount / 1.05).toFixed(2));
+                const totalGst = parseFloat((netAmount - taxableAmount).toFixed(2));
+                const cgst = parseFloat((totalGst / 2).toFixed(2));
+                const sgst = parseFloat((totalGst / 2).toFixed(2));
 
                 return [
                     format(new Date(sale.createdAt), 'dd/MMM/yy HH:mm'),
@@ -843,9 +907,9 @@ export const Reports: React.FC = () => {
                     sale.discount,
                     netAmount,
                     taxableAmount,
-                    sale.cgst || 0,
-                    sale.sgst || 0,
-                    sale.taxAmount,
+                    cgst,
+                    sgst,
+                    totalGst,
                     sale.grandTotal,
                     payModes.join('+') || sale.paymentMethod,
                 ];
@@ -1226,6 +1290,62 @@ export const Reports: React.FC = () => {
                         </div>
                     )}
 
+                    {reportType === 'summary' && reportData.cancelledSales.length > 0 && (
+                        <div className="card">
+                            <h4 className="font-bold mb-3">Cancelled Invoices</h4>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                    <thead>
+                                        <tr className="border-b dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
+                                            <th className="text-left py-2 px-3">Bill No</th>
+                                            <th className="text-left py-2 px-3">Date</th>
+                                            <th className="text-right py-2 px-3">Gross Amount</th>
+                                            <th className="text-right py-2 px-3">Discount</th>
+                                            <th className="text-right py-2 px-3">Amount</th>
+                                            <th className="text-center py-2 px-3">Status</th>
+                                            <th className="text-center py-2 px-3">Payment</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {reportData.cancelledSales
+                                            .slice()
+                                            .sort((a, b) =>
+                                                sortBy === 'billNo'
+                                                    ? compareBillNos(String(a.billNo), String(b.billNo))
+                                                    : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+                                            )
+                                            .map((sale) => {
+                                                const pb = getPaymentBreakdown(sale);
+                                                const payModes: string[] = [];
+                                                if (pb.cash > 0) payModes.push('Cash');
+                                                if (pb.upi > 0) payModes.push('UPI');
+                                                if (pb.card > 0) payModes.push('Card');
+
+                                                return (
+                                                    <tr key={sale.id} className="border-b dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                                                        <td className="py-2 px-3 font-mono">{formatGstBillLabel(sale)}</td>
+                                                        <td className="py-2 px-3">{format(new Date(sale.createdAt), 'dd/MMM/yy')}</td>
+                                                        <td className="py-2 px-3 text-right">{formatIndianCurrency(sale.subtotal)}</td>
+                                                        <td className="py-2 px-3 text-right text-red-500">{sale.discount > 0 ? `-${formatIndianCurrency(sale.discount)}` : '-'}</td>
+                                                        <td className="py-2 px-3 text-right font-semibold">{formatIndianCurrency(sale.grandTotal)}</td>
+                                                        <td className="py-2 px-3 text-center">
+                                                            <span className="badge py-1 px-3 bg-red-100 text-red-800">
+                                                                {sale.status}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-2 px-3 text-center text-xs">{payModes.join('+') || sale.paymentMethod}</td>
+                                                    </tr>
+                                                );
+                                            })}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                                Note: Cancelled invoices are excluded from GST calculations
+                            </p>
+                        </div>
+                    )}
+
                     {/* Detailed View */}
                     {reportType === 'detailed' && (
                         <>
@@ -1358,6 +1478,62 @@ export const Reports: React.FC = () => {
                                     </div>
                                 </div>
                             </div>
+
+                            {reportData.cancelledSales.length > 0 && (
+                                <div className="card">
+                                    <h4 className="font-bold mb-3">Cancelled Invoices</h4>
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-sm">
+                                            <thead>
+                                                <tr className="border-b dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
+                                                    <th className="text-left py-2 px-3">Bill No</th>
+                                                    <th className="text-left py-2 px-3">Date</th>
+                                                    <th className="text-right py-2 px-3">Gross Amount</th>
+                                                    <th className="text-right py-2 px-3">Discount</th>
+                                                    <th className="text-right py-2 px-3">Amount</th>
+                                                    <th className="text-center py-2 px-3">Status</th>
+                                                    <th className="text-center py-2 px-3">Payment</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {reportData.cancelledSales
+                                                    .slice()
+                                                    .sort((a, b) =>
+                                                        sortBy === 'billNo'
+                                                            ? compareBillNos(String(a.billNo), String(b.billNo))
+                                                            : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+                                                    )
+                                                    .map((sale) => {
+                                                        const pb = getPaymentBreakdown(sale);
+                                                        const payModes: string[] = [];
+                                                        if (pb.cash > 0) payModes.push('Cash');
+                                                        if (pb.upi > 0) payModes.push('UPI');
+                                                        if (pb.card > 0) payModes.push('Card');
+
+                                                        return (
+                                                            <tr key={sale.id} className="border-b dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                                                                <td className="py-2 px-3 font-mono">{formatGstBillLabel(sale)}</td>
+                                                                <td className="py-2 px-3">{format(new Date(sale.createdAt), 'dd/MMM/yy')}</td>
+                                                                <td className="py-2 px-3 text-right">{formatIndianCurrency(sale.subtotal)}</td>
+                                                                <td className="py-2 px-3 text-right text-red-500">{sale.discount > 0 ? `-${formatIndianCurrency(sale.discount)}` : '-'}</td>
+                                                                <td className="py-2 px-3 text-right font-semibold">{formatIndianCurrency(sale.grandTotal)}</td>
+                                                                <td className="py-2 px-3 text-center">
+                                                                    <span className="badge py-1 px-3 bg-red-100 text-red-800">
+                                                                        {sale.status}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="py-2 px-3 text-center text-xs">{payModes.join('+') || sale.paymentMethod}</td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                                        Note: Cancelled invoices are excluded from GST calculations
+                                    </p>
+                                </div>
+                            )}
                         </>
                     )}
 

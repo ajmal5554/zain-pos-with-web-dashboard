@@ -34,6 +34,18 @@ interface GstSummary {
     grandTotal: number;
 }
 
+interface GstInvoiceRow {
+    id: string;
+    billNo: string;
+    createdAt: string;
+    paymentMethod: string;
+    status?: string;
+    grossAmount?: number;
+    discount?: number;
+    amount?: number;
+    grandTotal?: number;
+}
+
 interface GstResponse {
     summary: GstSummary;
     daily: Array<{
@@ -50,18 +62,16 @@ interface GstResponse {
         sgst: number;
         totalTax: number;
     }>;
-    sales: Array<{
-        id: string;
-        billNo: string;
-        createdAt: string;
-        customerName?: string;
-        taxableValue: number;
-        cgst: number;
-        sgst: number;
-        totalTax: number;
-        grandTotal: number;
-        paymentMethod: string;
-    }>;
+    sales: Array<
+        GstInvoiceRow & {
+            customerName?: string;
+            taxableValue: number;
+            cgst: number;
+            sgst: number;
+            totalTax: number;
+        }
+    >;
+    cancelledInvoices?: GstInvoiceRow[];
 }
 
 const demoReport: GstResponse = {
@@ -86,8 +96,32 @@ const demoReport: GstResponse = {
     ],
     sales: [
         { id: '1', billNo: 'A-1020', createdAt: new Date().toISOString(), customerName: 'Walk-in', taxableValue: 32000, cgst: 800, sgst: 800, totalTax: 1600, grandTotal: 33600, paymentMethod: 'CASH' }
+    ],
+    cancelledInvoices: [
+        {
+            id: 'void-1',
+            billNo: 'A-1018',
+            createdAt: new Date(Date.now() - 86400_000).toISOString(),
+            grossAmount: 9500,
+            discount: 500,
+            amount: 9000,
+            status: 'VOIDED',
+            paymentMethod: 'UPI'
+        }
     ]
 };
+
+function isCancelledStatus(status?: string) {
+    return Boolean(status && ['VOIDED', 'CANCELLED', 'CANCELED'].includes(status.toUpperCase()));
+}
+
+function formatDate(value: string) {
+    return new Date(value).toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
+    });
+}
 
 export default function Reports() {
     const [report, setReport] = useState<GstResponse | null>(null);
@@ -118,6 +152,17 @@ export default function Reports() {
             </div>
         );
     }
+
+    const cancelledInvoices = report.cancelledInvoices ?? report.sales.filter((sale) => isCancelledStatus(sale.status)).map((sale) => ({
+        id: sale.id,
+        billNo: sale.billNo,
+        createdAt: sale.createdAt,
+        grossAmount: sale.grossAmount ?? sale.grandTotal ?? sale.amount ?? 0,
+        discount: sale.discount ?? 0,
+        amount: sale.amount ?? sale.grandTotal ?? 0,
+        status: sale.status ?? 'VOIDED',
+        paymentMethod: sale.paymentMethod
+    }));
 
     return (
         <div className="flex-1 space-y-4 pt-4">
@@ -261,7 +306,7 @@ export default function Reports() {
                                             {formatCurrency(sale.cgst)} / {formatCurrency(sale.sgst)}
                                         </TableCell>
                                         <TableCell className="pr-6 text-right font-medium">
-                                            {formatCurrency(sale.grandTotal)}
+                                            {formatCurrency(sale.grandTotal ?? 0)}
                                         </TableCell>
                                     </TableRow>
                                 ))}
@@ -269,6 +314,63 @@ export default function Reports() {
                         </Table>
                     </CardContent>
                 </Card>
+
+                <Card className="col-span-1 md:col-span-2">
+                    <CardHeader className="flex flex-row items-center justify-between pb-2 border-b">
+                        <div className="space-y-1">
+                            <CardTitle className="text-base font-semibold">Cancelled Invoices</CardTitle>
+                            <CardDescription className="text-xs">Voided bills listed for reference only.</CardDescription>
+                        </div>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead className="pl-6">Bill No</TableHead>
+                                    <TableHead>Date</TableHead>
+                                    <TableHead className="text-right">Gross Amount</TableHead>
+                                    <TableHead className="text-right">Discount</TableHead>
+                                    <TableHead className="text-right">Amount</TableHead>
+                                    <TableHead>Status</TableHead>
+                                    <TableHead className="pr-6">Payment</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {cancelledInvoices.length === 0 ? (
+                                    <TableRow>
+                                        <TableCell className="pl-6 py-8 text-center text-muted-foreground" colSpan={7}>
+                                            No cancelled invoices found for this period.
+                                        </TableCell>
+                                    </TableRow>
+                                ) : (
+                                    cancelledInvoices.map((invoice) => (
+                                        <TableRow key={invoice.id}>
+                                            <TableCell className="pl-6">
+                                                <span className="font-medium text-sm">#{invoice.billNo}</span>
+                                            </TableCell>
+                                            <TableCell>
+                                                <span className="text-sm text-muted-foreground">{formatDate(invoice.createdAt)}</span>
+                                            </TableCell>
+                                            <TableCell className="text-right text-sm">{formatCurrency(invoice.grossAmount ?? 0)}</TableCell>
+                                            <TableCell className="text-right text-sm">{formatCurrency(invoice.discount ?? 0)}</TableCell>
+                                            <TableCell className="text-right font-medium text-sm">{formatCurrency(invoice.amount ?? 0)}</TableCell>
+                                            <TableCell>
+                                                <Badge variant="destructive" className="font-normal text-xs">
+                                                    {invoice.status ?? 'VOIDED'}
+                                                </Badge>
+                                            </TableCell>
+                                            <TableCell className="pr-6 text-sm text-muted-foreground">{invoice.paymentMethod}</TableCell>
+                                        </TableRow>
+                                    ))
+                                )}
+                            </TableBody>
+                        </Table>
+                    </CardContent>
+                </Card>
+
+                <p className="text-xs text-muted-foreground">
+                    Note: Cancelled invoices are excluded from GST calculations
+                </p>
             </div>
         </div>
     );
