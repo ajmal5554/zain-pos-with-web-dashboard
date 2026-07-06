@@ -1,6 +1,6 @@
 import * as React from 'react';
-import { useEffect, useState } from 'react';
-import { FileSpreadsheet, FileText, Calendar, Layers } from 'lucide-react';
+import { useEffect, useState, useMemo } from 'react';
+import { FileSpreadsheet, FileText, Calendar, Layers, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
 import { formatCurrency } from '@/lib/format';
 import { 
   Table, 
@@ -20,11 +20,9 @@ import {
 import { Badge } from '@/components/ui/badge';
 import api from '@/lib/api';
 import { isDemoModeEnabled } from '@/lib/demo';
-import { DateRangePicker } from '@/components/shared/DateRangePicker';
-import { useDateFilter } from '@/contexts/DateFilterContext';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { format } from 'date-fns';
+import { format, subMonths, addMonths, startOfMonth, endOfMonth } from 'date-fns';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
@@ -138,7 +136,18 @@ function formatDate(value: string) {
 }
 
 export default function Reports() {
-    const { dateRange } = useDateFilter();
+    const [selectedMonth, setSelectedMonth] = useState<Date>(() => startOfMonth(new Date()));
+    const dateRange = useMemo(() => {
+        return {
+            startDate: startOfMonth(selectedMonth),
+            endDate: endOfMonth(selectedMonth),
+            label: format(selectedMonth, 'MMMM yyyy')
+        };
+    }, [selectedMonth]);
+
+    const handlePrevMonth = () => setSelectedMonth(prev => subMonths(prev, 1));
+    const handleNextMonth = () => setSelectedMonth(prev => addMonths(prev, 1));
+
     const [report, setReport] = useState<GstResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [reportType, setReportType] = useState<'detailed' | 'summary'>('summary');
@@ -446,15 +455,51 @@ export default function Reports() {
     if (loading || !report) {
         return (
             <div className="flex-1 space-y-4 pt-4 w-full max-w-full min-w-0">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between">
+                <div className="flex items-center justify-between gap-4 w-full">
                     <div>
                         <h2 className="text-xl sm:text-2xl font-bold tracking-tight">GST Reports</h2>
-                        <p className="text-muted-foreground text-xs">
+                        <p className="text-muted-foreground text-xs hidden sm:block">
                             Generate GST-compliant sales reports.
                         </p>
                     </div>
-                    <div className="shrink-0 flex items-center gap-2">
-                        <DateRangePicker />
+                    {/* Custom Month Picker */}
+                    <div className="flex items-center gap-1 shrink-0 relative z-20">
+                        <button
+                            onClick={handlePrevMonth}
+                            title="Previous Month"
+                            className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 shrink-0"
+                        >
+                            <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        <div className="relative">
+                            <button
+                                className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 select-none"
+                            >
+                                <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                <span className="truncate max-w-[100px] sm:max-w-none">
+                                    {format(selectedMonth, 'MMMM yyyy')}
+                                </span>
+                                <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            </button>
+                            <input
+                                type="month"
+                                value={format(selectedMonth, 'yyyy-MM')}
+                                onChange={(e) => {
+                                    if (e.target.value) {
+                                        const [yr, mo] = e.target.value.split('-').map(Number);
+                                        setSelectedMonth(new Date(yr, mo - 1, 1));
+                                    }
+                                }}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            />
+                        </div>
+                        <button
+                            onClick={handleNextMonth}
+                            title="Next Month"
+                            className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 shrink-0"
+                        >
+                            <ChevronRight className="w-4 h-4" />
+                        </button>
                     </div>
                 </div>
                 <div className="flex items-center justify-center p-24 text-muted-foreground animate-pulse text-sm">
@@ -486,8 +531,44 @@ export default function Reports() {
                             Generate GST-compliant sales reports.
                         </p>
                     </div>
-                    <div className="shrink-0 relative z-20">
-                        <DateRangePicker />
+                    {/* Custom Month Picker */}
+                    <div className="flex items-center gap-1 shrink-0 relative z-20">
+                        <button
+                            onClick={handlePrevMonth}
+                            title="Previous Month"
+                            className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 shrink-0"
+                        >
+                            <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        <div className="relative">
+                            <button
+                                className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 select-none"
+                            >
+                                <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                <span className="truncate max-w-[100px] sm:max-w-none">
+                                    {format(selectedMonth, 'MMMM yyyy')}
+                                </span>
+                                <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            </button>
+                            <input
+                                type="month"
+                                value={format(selectedMonth, 'yyyy-MM')}
+                                onChange={(e) => {
+                                    if (e.target.value) {
+                                        const [yr, mo] = e.target.value.split('-').map(Number);
+                                        setSelectedMonth(new Date(yr, mo - 1, 1));
+                                    }
+                                }}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            />
+                        </div>
+                        <button
+                            onClick={handleNextMonth}
+                            title="Next Month"
+                            className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 shrink-0"
+                        >
+                            <ChevronRight className="w-4 h-4" />
+                        </button>
                     </div>
                 </div>
 
