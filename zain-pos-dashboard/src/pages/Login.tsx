@@ -51,8 +51,8 @@ export default function LoginPage() {
         <div className="min-h-screen flex items-center justify-center bg-muted/30 p-4">
             <Card className="w-full max-w-sm">
                 <CardHeader className="space-y-2 text-center flex flex-col items-center">
-                    <div className="h-12 w-12 rounded-lg bg-primary flex items-center justify-center mb-2">
-                        <img src="/icon.ico" className="h-6 w-6 brightness-0 invert" alt="Logo" />
+                    <div className="h-12 w-12 rounded-xl bg-slate-950 flex items-center justify-center mb-2 p-2 border border-slate-200/80 dark:border-slate-800 shadow-sm">
+                        <img src="/icon.ico" className="h-full w-full object-contain rounded" alt="Logo" />
                     </div>
                     <CardTitle className="text-2xl font-bold">Sign In</CardTitle>
                     <CardDescription>
