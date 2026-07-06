@@ -555,7 +555,7 @@ export default function Reports() {
             </div>
 
             {/* Stat Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 w-full max-w-full">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 w-full max-w-full">
                 {/* Total Bills */}
                 <Card className="border-t-4 border-t-blue-500 shadow-sm overflow-hidden w-full max-w-full">
                     <CardHeader className="pb-2">
