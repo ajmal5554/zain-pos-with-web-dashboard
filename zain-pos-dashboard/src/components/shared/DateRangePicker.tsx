@@ -63,7 +63,7 @@ export function DateRangePicker() {
                 {/* Dropdown Menu */}
                 {isOpen && (
                     <>
-                        <div className="absolute right-0 z-50 mt-2 w-64 rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_24px_60px_-32px_rgba(15,23,42,0.45)] animate-in fade-in zoom-in-95 duration-100 dark:border-slate-700 dark:bg-slate-900">
+                        <div className="absolute left-0 sm:right-0 sm:left-auto z-50 mt-2 w-64 rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_24px_60px_-32px_rgba(15,23,42,0.45)] animate-in fade-in zoom-in-95 duration-100 dark:border-slate-700 dark:bg-slate-900">
                             <div className="space-y-1">
                                 {presets.map((preset) => (
                                     <button

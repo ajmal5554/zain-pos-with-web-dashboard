@@ -445,7 +445,7 @@ export default function Reports() {
 
     if (loading || !report) {
         return (
-            <div className="flex-1 space-y-4 pt-4 w-full max-w-full overflow-hidden">
+            <div className="flex-1 space-y-4 pt-4 w-full max-w-full">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between">
                     <div>
                         <h2 className="text-xl sm:text-2xl font-bold tracking-tight">GST Reports</h2>
@@ -476,7 +476,7 @@ export default function Reports() {
     }));
 
     return (
-        <div className="flex-1 space-y-4 w-full max-w-full overflow-hidden pb-6">
+        <div className="flex-1 space-y-4 w-full max-w-full pb-6">
             {/* Header & Controls */}
             <div className="flex flex-col gap-4 w-full">
                 <div>
