@@ -4,14 +4,12 @@ import { getIO } from '../socket';
 
 const prisma = new PrismaClient();
 
-// Setup Web Push
-const publicVapidKey = process.env.VAPID_PUBLIC_KEY!;
-const privateVapidKey = process.env.VAPID_PRIVATE_KEY!;
+// Setup Web Push — keys must match the public key baked into the frontend PWA
+const publicVapidKey = process.env.VAPID_PUBLIC_KEY || 'BDJxTZeB4JeyjNGNYEVBzMcOL2GbbeqK_zT86JaoH23gqrxVtOJMeVUuroZ_yiL8Ay2t8y1KM6Fm273kNC34XPY';
+const privateVapidKey = process.env.VAPID_PRIVATE_KEY || 'hTqqfDXf4-8JjWFlsc84QXsa_QHh1exzE-iPbZQcDbo';
 const vapidSubject = process.env.VAPID_SUBJECT || 'mailto:admin@zainpos.com';
 
-if (publicVapidKey && privateVapidKey) {
-    webPush.setVapidDetails(vapidSubject, publicVapidKey, privateVapidKey);
-}
+webPush.setVapidDetails(vapidSubject, publicVapidKey, privateVapidKey);
 
 interface NotificationPayload {
     shopId: string;

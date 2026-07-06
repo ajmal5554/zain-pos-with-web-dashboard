@@ -3,16 +3,12 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-// Configure VAPID keys
-// In production, these should be environment variables
-const publicVapidKey = process.env.VAPID_PUBLIC_KEY || 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U';
-const privateVapidKey = process.env.VAPID_PRIVATE_KEY || 'your-private-key-should-be-in-env';
+// Configure VAPID keys — must match the key pair used by the frontend
+const publicVapidKey = process.env.VAPID_PUBLIC_KEY || 'BDJxTZeB4JeyjNGNYEVBzMcOL2GbbeqK_zT86JaoH23gqrxVtOJMeVUuroZ_yiL8Ay2t8y1KM6Fm273kNC34XPY';
+const privateVapidKey = process.env.VAPID_PRIVATE_KEY || 'hTqqfDXf4-8JjWFlsc84QXsa_QHh1exzE-iPbZQcDbo';
+const vapidSubject = process.env.VAPID_SUBJECT || 'mailto:admin@zainpos.com';
 
-webpush.setVapidDetails(
-    'mailto:zain@example.com',
-    publicVapidKey,
-    privateVapidKey
-);
+webpush.setVapidDetails(vapidSubject, publicVapidKey, privateVapidKey);
 
 export interface PushPayload {
     title: string;
