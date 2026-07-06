@@ -32,16 +32,16 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
     };
 
     return (
-        <div className="flex min-h-screen w-full flex-col bg-background">
+        <div className="flex h-screen w-full flex-col bg-background overflow-hidden">
             <Sidebar isOpen={sidebarOpen} />
 
-            <div className="flex flex-col sm:pl-52 flex-1 min-w-0">
+            <div className="flex flex-col sm:pl-52 flex-1 min-w-0 h-full overflow-hidden">
                 <MobileHeader darkMode={darkMode} setDarkMode={setDarkMode} />
-                <div className="hidden sm:block sticky top-0 z-30 bg-background">
+                <div className="hidden sm:block">
                     <Header title={getTitle()} darkMode={darkMode} setDarkMode={setDarkMode} />
                 </div>
 
-                <main className="grid flex-1 items-start gap-4 p-4 pb-24 sm:p-6 sm:pb-8 md:gap-8 min-w-0 w-full max-w-full overflow-x-hidden">
+                <main className="grid flex-1 items-start gap-4 p-4 pb-24 sm:p-6 sm:pb-8 md:gap-8 min-w-0 w-full max-w-full overflow-y-auto overflow-x-hidden">
                     {children}
                 </main>
             </div>
