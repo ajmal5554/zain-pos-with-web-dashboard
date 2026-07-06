@@ -28,6 +28,7 @@ import {
 import { useDashboardStats } from '@/features/dashboard/hooks/useDashboardStats';
 import { StatCard } from '@/components/shared/StatCard';
 import { cn } from '@/lib/utils';
+import { useDateFilter } from '@/contexts/DateFilterContext';
 
 const METHOD_META: Record<string, { label: string; icon: React.ElementType; color: string; bg: string; badge: string }> = {
     CASH: { label: 'Cash',  icon: Banknote,    color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-50 dark:bg-emerald-900/20', badge: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' },
@@ -37,6 +38,14 @@ const METHOD_META: Record<string, { label: string; icon: React.ElementType; colo
 
 export default function DashboardPage() {
     const { stats, loading } = useDashboardStats();
+    const { dateRange } = useDateFilter();
+
+    const effectiveGstRate = React.useMemo(() => {
+        if (!stats?.summary?.totalSales || !stats?.summary?.totalTax) return 5;
+        const netSales = stats.summary.totalSales - stats.summary.totalTax;
+        if (netSales <= 0) return 5;
+        return Math.round((stats.summary.totalTax / netSales) * 100);
+    }, [stats]);
 
     // Flatten all payment audit transactions into one sorted list
     const allTransactions = React.useMemo(() => {
@@ -89,8 +98,8 @@ export default function DashboardPage() {
                 />
                 <StatCard
                     title="Tax Collected (Today)"
-                    value={`₹${((stats?.summary.totalSales || 0) * 0.18).toFixed(2)}`}
-                    subtitle="GST @ 18%"
+                    value={`₹${stats?.summary?.totalTax?.toLocaleString('en-IN') || '0'}`}
+                    subtitle={`GST @ ${effectiveGstRate}% (Effective)`}
                     icon={<Banknote className="h-4 w-4" />}
                     loading={loading}
                 />
@@ -107,8 +116,12 @@ export default function DashboardPage() {
             {/* Sales Chart */}
             <Card>
                 <CardHeader className="pb-2">
-                    <CardTitle className="text-base">Sales This Week</CardTitle>
-                    <CardDescription>Total revenue over the last 7 days</CardDescription>
+                    <CardTitle className="text-base">
+                        {dateRange.label === 'Today' ? 'Sales Today' : `Sales: ${dateRange.label}`}
+                    </CardTitle>
+                    <CardDescription>
+                        {dateRange.label === 'Today' ? 'Hourly sales breakdown' : `Total revenue over ${dateRange.label}`}
+                    </CardDescription>
                 </CardHeader>
                 <CardContent className="h-[220px] pl-0">
                     <ResponsiveContainer width="100%" height="100%">
@@ -233,11 +246,11 @@ export default function DashboardPage() {
                                         {i + 1}
                                     </div>
                                     <div className="flex-1 min-w-0">
-                                        <p className="text-sm font-medium truncate">{p.name ?? p.product_name ?? 'Item'}</p>
-                                        <p className="text-xs text-muted-foreground">{p.total_quantity ?? p.qty ?? '—'} sold</p>
+                                        <p className="text-sm font-medium truncate">{p.product?.name ?? p.name ?? p.product_name ?? 'Item'}</p>
+                                        <p className="text-xs text-muted-foreground">{p.totalQuantity ?? p.total_quantity ?? p.qty ?? '—'} sold</p>
                                     </div>
                                     <div className="text-sm font-semibold shrink-0">
-                                        ₹{Number(p.total_revenue ?? p.revenue ?? 0).toLocaleString('en-IN')}
+                                        ₹{Number(p.totalRevenue ?? p.total_revenue ?? p.revenue ?? 0).toLocaleString('en-IN')}
                                     </div>
                                 </div>
                             ))}
@@ -252,27 +265,47 @@ export default function DashboardPage() {
             <Card>
                 <CardHeader className="pb-3">
                     <CardTitle className="text-base">Recent Bills</CardTitle>
-                    <CardDescription>Latest bills in the last hour</CardDescription>
+                    <CardDescription>Latest bills in this period</CardDescription>
                 </CardHeader>
                 <CardContent>
                     <div className="divide-y">
-                        {[1, 2, 3].map((i) => (
-                            <div key={i} className="flex items-center gap-3 py-2.5">
-                                <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center shrink-0">
-                                    <ShoppingBag className="h-4 w-4 text-muted-foreground" />
+                        {loading ? (
+                            [1, 2, 3].map((i) => (
+                                <div key={i} className="flex items-center gap-3 py-2.5 animate-pulse">
+                                    <div className="h-8 w-8 rounded-full bg-muted shrink-0" />
+                                    <div className="flex-1 min-w-0 space-y-2">
+                                        <div className="h-4 bg-muted rounded w-1/4" />
+                                        <div className="h-3 bg-muted rounded w-1/3" />
+                                    </div>
+                                    <div className="h-4 bg-muted rounded w-16 shrink-0" />
                                 </div>
-                                <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-medium">Bill #100{i}</p>
-                                    <p className="text-xs text-muted-foreground">Sold {i * 10} mins ago</p>
-                                </div>
-                                <div className="flex items-center gap-2 shrink-0">
-                                    <span className="text-sm font-semibold text-emerald-600">+₹{(450 + i * 125).toLocaleString()}</span>
-                                    <Badge variant="outline" className="text-[10px] py-0 px-1.5 text-emerald-700 border-emerald-200 bg-emerald-50 dark:bg-emerald-900/20">
-                                        PAID
-                                    </Badge>
-                                </div>
-                            </div>
-                        ))}
+                            ))
+                        ) : allTransactions.length === 0 ? (
+                            <p className="text-sm text-muted-foreground py-4 text-center">No recent bills found</p>
+                        ) : (
+                            allTransactions.slice(0, 5).map((tx: any) => {
+                                const time = new Date(tx.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+                                return (
+                                    <div key={tx.id} className="flex items-center gap-3 py-2.5">
+                                        <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center shrink-0">
+                                            <ShoppingBag className="h-4 w-4 text-muted-foreground" />
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-sm font-medium">Bill #{tx.billNo ?? tx.id}</p>
+                                            <p className="text-xs text-muted-foreground">Sold at {time} ({tx.method})</p>
+                                        </div>
+                                        <div className="flex items-center gap-2 shrink-0">
+                                            <span className="text-sm font-semibold text-emerald-600">
+                                                +₹{Number(tx.grandTotal ?? 0).toLocaleString('en-IN')}
+                                            </span>
+                                            <Badge variant="outline" className="text-[10px] py-0 px-1.5 text-emerald-700 border-emerald-200 bg-emerald-50 dark:bg-emerald-900/20">
+                                                PAID
+                                            </Badge>
+                                        </div>
+                                    </div>
+                                );
+                            })
+                        )}
                     </div>
                 </CardContent>
             </Card>

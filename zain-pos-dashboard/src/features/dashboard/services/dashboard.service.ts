@@ -39,7 +39,11 @@ export const dashboardService = {
 
         const chartEndpoint = isSingleDay ? '/sales/hourly' : '/sales/daily';
         const chartParams = isSingleDay
-            ? { date: startStr }
+            ? { 
+                startDate: startStr, 
+                endDate: endStr,
+                timezoneOffset: typeof window !== 'undefined' ? new Date().getTimezoneOffset() : -330
+              }
             : { startDate: startStr, endDate: endStr };
 
         // Use allSettled so ONE failed request doesn't break the entire dashboard

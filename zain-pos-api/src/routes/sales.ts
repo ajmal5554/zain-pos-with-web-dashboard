@@ -101,15 +101,17 @@ router.get('/summary', async (req, res) => {
                 status: 'COMPLETED',
                 ...(buildEffectiveSaleDateWhere(startDate, endDate) || {})
             },
-            _sum: { grandTotal: true },
+            _sum: { grandTotal: true, taxAmount: true },
             _count: { id: true }
         });
 
         const totalSales = agg._sum.grandTotal ?? 0;
+        const totalTax = agg._sum.taxAmount ?? 0;
         const totalOrders = agg._count.id ?? 0;
 
         res.json({
             totalSales,
+            totalTax,
             totalOrders,
             averageOrderValue: totalOrders > 0 ? totalSales / totalOrders : 0,
             range: { start: startDate, end: endDate }
@@ -156,17 +158,27 @@ router.get('/daily', async (req, res) => {
     }
 });
 
-// Get hourly sales (single day)
+// Get hourly sales (single day or date range)
 router.get('/hourly', async (req, res) => {
     try {
-        const date = req.query.date ? new Date(req.query.date as string) : new Date();
-        const startOfDay = new Date(date); startOfDay.setHours(0, 0, 0, 0);
-        const endOfDay = new Date(date); endOfDay.setHours(23, 59, 59, 999);
+        let startDate: Date;
+        let endDate: Date;
+
+        if (req.query.startDate && req.query.endDate) {
+            startDate = new Date(req.query.startDate as string);
+            endDate = new Date(req.query.endDate as string);
+        } else {
+            const date = req.query.date ? new Date(req.query.date as string) : new Date();
+            startDate = new Date(date); startDate.setHours(0, 0, 0, 0);
+            endDate = new Date(date); endDate.setHours(23, 59, 59, 999);
+        }
+
+        const timezoneOffset = req.query.timezoneOffset ? parseInt(req.query.timezoneOffset as string) : -330; // Default to IST (-330 minutes)
 
         const sales = await prisma.sale.findMany({
             where: {
                 status: 'COMPLETED',
-                ...(buildEffectiveSaleDateWhere(startOfDay, endOfDay) || {})
+                ...(buildEffectiveSaleDateWhere(startDate, endDate) || {})
             },
             select: { grandTotal: true, createdAt: true, actualSaleDate: true }
         });
@@ -179,9 +191,13 @@ router.get('/hourly', async (req, res) => {
 
         sales.forEach(sale => {
             const effectiveDate = sale.actualSaleDate ?? sale.createdAt;
-            const hour = effectiveDate.getHours();
-            hourlySales[hour].sales += sale.grandTotal;
-            hourlySales[hour].orders += 1;
+            // Shift UTC date by client timezone offset to get local time represented as UTC
+            const localTime = new Date(effectiveDate.getTime() - (timezoneOffset * 60 * 1000));
+            const hour = localTime.getUTCHours();
+            if (hour >= 0 && hour < 24) {
+                hourlySales[hour].sales += sale.grandTotal;
+                hourlySales[hour].orders += 1;
+            }
         });
 
         res.json(Object.values(hourlySales));
