@@ -54,8 +54,8 @@ export default function Sales() {
             setSelectedInvoice(full);
         } catch {
             toast.error('Could not load sale details');
+            setSelectedInvoice(prev => prev ? { ...prev, items: [] } : null);
         } finally {
-            setSelectedInvoice(prev => prev ? { ...prev, items: [] } : null); // Fallback
             setModalLoading(false);
         }
     };

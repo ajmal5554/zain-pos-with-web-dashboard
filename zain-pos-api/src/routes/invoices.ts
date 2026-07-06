@@ -209,6 +209,7 @@ router.get('/:id', async (req, res) => {
             },
             items: sale.items.map(i => ({
                 quantity: i.quantity,
+                sellingPrice: i.sellingPrice,
                 product: {
                     name: i.productName + (i.variantInfo ? ` (${i.variantInfo})` : '')
                 }
