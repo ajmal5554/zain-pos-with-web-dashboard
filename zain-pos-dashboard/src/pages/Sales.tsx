@@ -5,6 +5,7 @@ import { toast } from 'react-hot-toast';
 import { invoiceService, type Invoice, type InvoiceParams } from '@/features/invoices/services/invoice.service';
 import { PaginatedTable } from '@/components/shared/PaginatedTable';
 import { Button } from '@/components/ui/button';
+import { DateRangePicker } from '@/components/shared/DateRangePicker';
 import { 
   Card, 
   CardContent 
@@ -239,12 +240,13 @@ export default function Sales() {
                         View and manage all sales records for {dateRange.label}.
                     </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+                    <DateRangePicker />
                     <Button 
                         variant="outline" 
                         onClick={() => void handleExport()} 
                         disabled={exporting} 
-                        className="w-full sm:w-auto h-9"
+                        className="h-9 px-3 w-full sm:w-auto"
                     >
                         <Download className="mr-2 h-4 w-4" />
                         {exporting ? 'Exporting...' : 'Export to Excel'}

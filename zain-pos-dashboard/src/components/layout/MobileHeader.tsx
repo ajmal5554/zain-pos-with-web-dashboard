@@ -13,7 +13,7 @@ export function MobileHeader({ darkMode, setDarkMode }: MobileHeaderProps) {
     const { logout, user } = useAuth();
 
     return (
-        <div className="flex flex-col sm:hidden sticky top-0 z-30 border-b bg-background px-4 py-3 gap-2">
+        <div className="flex flex-col sm:hidden sticky top-0 z-30 border-b bg-background px-4 py-3">
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                     <img src="/icon.ico" className="h-6 w-6 rounded-md object-contain" alt="Zain POS Logo" />
@@ -38,9 +38,6 @@ export function MobileHeader({ darkMode, setDarkMode }: MobileHeaderProps) {
                         <LogOut className="h-4 w-4" />
                     </Button>
                 </div>
-            </div>
-            <div className="w-full flex justify-end">
-                <DateRangePicker />
             </div>
         </div>
     );

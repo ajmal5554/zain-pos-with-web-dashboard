@@ -29,6 +29,7 @@ import { useDashboardStats } from '@/features/dashboard/hooks/useDashboardStats'
 import { StatCard } from '@/components/shared/StatCard';
 import { cn } from '@/lib/utils';
 import { useDateFilter } from '@/contexts/DateFilterContext';
+import { DateRangePicker } from '@/components/shared/DateRangePicker';
 
 const METHOD_META: Record<string, { label: string; icon: React.ElementType; color: string; bg: string; badge: string }> = {
     CASH: { label: 'Cash',  icon: Banknote,    color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-50 dark:bg-emerald-900/20', badge: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' },
@@ -74,9 +75,14 @@ export default function DashboardPage() {
     return (
         <div className="flex-1 space-y-4 pt-4 pb-6">
             {/* Page Header */}
-            <div>
-                <h2 className="text-2xl font-bold tracking-tight">Dashboard ✨ UPDATED</h2>
-                <p className="text-muted-foreground text-sm">Your daily shop overview - New version loaded!</p>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between">
+                <div>
+                    <h2 className="text-2xl font-bold tracking-tight">Dashboard</h2>
+                    <p className="text-muted-foreground text-sm">Your daily shop overview</p>
+                </div>
+                <div className="flex items-center gap-2">
+                    <DateRangePicker />
+                </div>
             </div>
 
             {/* Stat Cards — 2 col on mobile, 4 col on desktop */}

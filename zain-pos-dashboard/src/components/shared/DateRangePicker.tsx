@@ -14,8 +14,7 @@ export function DateRangePicker() {
     const [customEnd, setCustomEnd] = useState('');
 
     const presets: DateRangeLabel[] = [
-        'Today', 'Yesterday', 'This Week', 'Last 7 Days',
-        'This Month', 'Last 30 Days', 'This Year', 'All Time'
+        'Today', 'Week', 'Month', 'Year', 'All Time'
     ];
 
     const handlePresetSelect = (label: DateRangeLabel) => {

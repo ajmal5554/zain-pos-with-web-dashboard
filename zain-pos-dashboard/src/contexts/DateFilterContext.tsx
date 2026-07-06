@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, type ReactNode } from 'react';
 import { startOfDay, endOfDay, subDays, startOfWeek, startOfMonth, startOfYear } from 'date-fns';
 
-export type DateRangeLabel = 'Today' | 'Yesterday' | 'This Week' | 'Last 7 Days' | 'This Month' | 'Last 30 Days' | 'This Year' | 'All Time' | 'Custom';
+export type DateRangeLabel = 'Today' | 'Week' | 'Month' | 'Year' | 'All Time' | 'Custom';
 
 export interface DateRange {
     startDate: Date | null;
@@ -37,23 +37,13 @@ export function DateFilterProvider({ children }: { children: ReactNode }) {
             case 'Today':
                 start = startOfDay(today);
                 break;
-            case 'Yesterday':
-                start = startOfDay(subDays(today, 1));
-                end = endOfDay(subDays(today, 1));
-                break;
-            case 'This Week':
+            case 'Week':
                 start = startOfWeek(today, { weekStartsOn: 1 }); // Monday start
                 break;
-            case 'Last 7 Days':
-                start = startOfDay(subDays(today, 6));
-                break;
-            case 'This Month':
+            case 'Month':
                 start = startOfMonth(today);
                 break;
-            case 'Last 30 Days':
-                start = startOfDay(subDays(today, 29));
-                break;
-            case 'This Year':
+            case 'Year':
                 start = startOfYear(today);
                 break;
             case 'All Time':
