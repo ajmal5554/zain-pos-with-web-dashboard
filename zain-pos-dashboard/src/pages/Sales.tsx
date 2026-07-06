@@ -232,7 +232,7 @@ export default function Sales() {
     ];
 
     return (
-        <div className="flex-1 space-y-4 pt-4 pb-6">
+        <div className="flex-1 space-y-4 pt-4 pb-6 min-w-0">
             <div className="flex items-center justify-between gap-4 w-full">
                 <div>
                     <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Sales</h2>

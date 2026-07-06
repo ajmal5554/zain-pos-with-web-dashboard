@@ -73,7 +73,7 @@ export default function DashboardPage() {
         ];
 
     return (
-        <div className="flex-1 space-y-4 pt-4 pb-6">
+        <div className="flex-1 space-y-4 pt-4 pb-6 min-w-0">
             {/* Page Header */}
             <div className="flex items-center justify-between gap-4 w-full">
                 <div>

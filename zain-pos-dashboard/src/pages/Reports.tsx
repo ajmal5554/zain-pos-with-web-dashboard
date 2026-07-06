@@ -445,7 +445,7 @@ export default function Reports() {
 
     if (loading || !report) {
         return (
-            <div className="flex-1 space-y-4 pt-4 w-full max-w-full">
+            <div className="flex-1 space-y-4 pt-4 w-full max-w-full min-w-0">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between">
                     <div>
                         <h2 className="text-xl sm:text-2xl font-bold tracking-tight">GST Reports</h2>
@@ -476,7 +476,7 @@ export default function Reports() {
     }));
 
     return (
-        <div className="flex-1 space-y-4 w-full max-w-full pb-6">
+        <div className="flex-1 space-y-4 w-full max-w-full pb-6 min-w-0">
             {/* Header & Controls */}
             <div className="flex flex-col gap-4 w-full">
                 <div>
@@ -531,7 +531,7 @@ export default function Reports() {
 
                     {/* Date Picker + Export buttons (Row 2 & 3 on Mobile) */}
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center w-full sm:w-auto">
-                        <div className="w-full sm:w-auto">
+                        <div className="w-full sm:w-auto relative z-20">
                             <DateRangePicker />
                         </div>
                         <div className="grid grid-cols-2 gap-2 w-full sm:flex sm:w-auto">
