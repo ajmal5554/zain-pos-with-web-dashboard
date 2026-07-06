@@ -7,7 +7,6 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Sales from './pages/Sales';
 import Inventory from './pages/Inventory';
-import Invoices from './pages/Invoices';
 import Reports from './pages/Reports';
 import ActivityPage from './pages/Activity';
 import ProductsPage from './pages/Products';
@@ -115,7 +114,7 @@ function AppRoutes() {
         element={
           <PrivateRoute>
             <DashboardLayout>
-              <Invoices />
+              <Sales />
             </DashboardLayout>
           </PrivateRoute>
         }

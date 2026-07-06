@@ -34,6 +34,7 @@ export function Header({ title, darkMode, setDarkMode }: HeaderProps) {
                 </div>
 
                 <div className="flex items-center gap-4">
+                    <DateRangePicker />
                     <NotificationBell />
 
                     <Button

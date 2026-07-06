@@ -19,7 +19,6 @@ export const navigation = [
     { name: 'Stock', href: '/inventory', icon: Boxes, shortLabel: 'Stock' },
     { name: 'Products', href: '/products', icon: PackageSearch, shortLabel: 'Products' },
     { name: 'Customers', href: '/customers', icon: UserRoundSearch, shortLabel: 'Customers' },
-    { name: 'Bills', href: '/invoices', icon: Receipt, shortLabel: 'Bills' },
     { name: 'Reports', href: '/reports', icon: BarChart3, shortLabel: 'Reports' },
     { name: 'Future Sales', href: '/forecasting', icon: HandCoins, shortLabel: 'Forecast' },
     { name: 'Users', href: '/users', icon: Users, shortLabel: 'Users' },
