@@ -16,8 +16,10 @@ export function MobileNav() {
     const [open, setOpen] = useState(false);
     
     // Pick the most important 4 tabs for standard mobile navigation bottom bar
-    const primaryNavHrefs = ['/', '/sales', '/inventory', '/invoices'];
-    const primaryNav = primaryNavHrefs.map(href => navigation.find(n => n.href === href)!);
+    const primaryNavHrefs = ['/', '/sales', '/inventory', '/reports'];
+    const primaryNav = primaryNavHrefs
+        .map(href => navigation.find(n => n.href === href))
+        .filter((item): item is typeof navigation[number] => !!item);
 
     return (
         <div className="sm:hidden fixed bottom-0 inset-x-0 z-40 border-t border-slate-200/70 bg-white/[0.95] px-2 pb-safe backdrop-blur-xl dark:border-slate-800/80 dark:bg-slate-950/[0.95]">
