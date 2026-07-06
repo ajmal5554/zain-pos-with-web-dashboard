@@ -9,7 +9,12 @@ export const initSocket = (httpServer: HttpServer) => {
         cors: {
             origin: process.env.CORS_ORIGIN || "*",
             methods: ["GET", "POST"]
-        }
+        },
+        // Keep connections alive through Render's 60s idle timeout
+        pingInterval: 25000,   // send ping every 25s
+        pingTimeout: 10000,    // wait 10s for pong before disconnecting
+        // Prefer WebSocket transport for lower latency
+        transports: ['websocket', 'polling']
     });
 
     // Middleware for Auth
