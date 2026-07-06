@@ -310,7 +310,32 @@ router.post('/sales', async (req, res) => {
             }
         }
 
-        // BROADCAST TO DASHBOARD
+        // First, load existing statuses from DB to detect what actually changed
+        const saleIds = sales.map((s: any) => s.id);
+        const existingSales = await prisma.sale.findMany({
+            where: { id: { in: saleIds } },
+            select: { id: true, status: true }
+        });
+        const existingStatusMap = new Map(existingSales.map(s => [s.id, s.status]));
+
+        // Separate into new sales and status-changed voids
+        const newSales: any[] = [];
+        const newlyVoided: any[] = [];
+        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+
+        for (const sale of sales) {
+            const prevStatus = existingStatusMap.get(sale.id);
+            const isNew = !prevStatus; // not in DB yet
+            const isNowVoided = sale.status === 'VOIDED' && prevStatus === 'COMPLETED'; // status changed
+
+            if (isNew && sale.status === 'COMPLETED' && !sale.isHistorical && new Date(sale.createdAt) > oneHourAgo) {
+                newSales.push(sale);
+            }
+            if (isNowVoided) {
+                newlyVoided.push(sale);
+            }
+        }
+
         try {
             const { getIO } = require('../socket');
             const { notificationService } = require('../services/notificationService');
@@ -318,40 +343,51 @@ router.post('/sales', async (req, res) => {
             const shopId = getShopId();
 
             // Emit batch update for realtime charts/stats
-            // Match default room used by socket server/client.
             io.to(`shop_${shopId}`).emit('sale:batch', { count: sales.length, sales, timestamp: new Date() });
 
-            // Send Notifications for RECENT sales (not historical data)
-            const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-
-            for (const sale of sales) {
-                const saleDate = new Date(sale.createdAt);
-                const isRecentSale = saleDate > oneHourAgo;
-                const isNotHistorical = !sale.isHistorical;
-
-                // Send notification for recent, non-historical sales (real-time sales)
-                if (isRecentSale && isNotHistorical && sale.status === 'COMPLETED') {
-                    await notificationService.send({
-                        shopId,
-                        type: 'sale',
-                        title: '🛍️ New Sale',
-                        message: `Bill #${sale.billNo} - ₹${sale.grandTotal.toFixed(2)}`,
-                        referenceId: sale.id,
-                        metadata: {
-                            billNo: sale.billNo,
-                            amount: sale.grandTotal,
-                            paymentMode: sale.paymentMethod,
-                            items: sale.items?.length || 0,
-                            cashier: sale.user?.name || 'Staff'
-                        }
-                    });
-                    console.log(`📱 Notification sent for sale ${sale.billNo}`);
-                }
+            // Notify for genuinely NEW completed sales only
+            for (const sale of newSales) {
+                await notificationService.send({
+                    shopId,
+                    type: 'sale',
+                    title: '🛍️ New Sale',
+                    message: `Bill #${sale.billNo} - ₹${sale.grandTotal.toFixed(2)}`,
+                    referenceId: sale.id,
+                    metadata: {
+                        billNo: sale.billNo,
+                        amount: sale.grandTotal,
+                        paymentMode: sale.paymentMethod,
+                        items: sale.items?.length || 0,
+                        cashier: sale.user?.name || 'Staff'
+                    }
+                });
+                console.log(`📱 New sale notification: Bill #${sale.billNo}`);
             }
 
-            console.log(`ðŸ“¢ Realtime processed for ${sales.length} sales.`);
+            // Notify for sales that JUST changed to VOIDED
+            for (const sale of newlyVoided) {
+                io.to(`shop_${shopId}`).emit('sale:voided', {
+                    id: sale.id,
+                    billNo: sale.billNo,
+                    timestamp: new Date()
+                });
+                await notificationService.send({
+                    shopId,
+                    type: 'invoice_deleted',
+                    title: '🚫 Invoice Voided',
+                    message: `Bill #${sale.billNo} was voided.`,
+                    referenceId: sale.id,
+                    metadata: {
+                        billNo: sale.billNo,
+                        reason: sale.remarks || 'No reason provided'
+                    }
+                });
+                console.log(`🚫 Void notification: Bill #${sale.billNo}`);
+            }
+
+            console.log(`📢 Realtime: ${newSales.length} new sales, ${newlyVoided.length} voids processed.`);
         } catch (e) {
-            console.error("Socket/Push warning:", e);
+            console.error("Socket/Push error:", e);
         }
 
         // Log the sync
@@ -362,46 +398,6 @@ router.post('/sales', async (req, res) => {
                 userId: null // System action
             }
         });
-
-        // Check for Voided Sales in this batch (Invoice Deleted/Voided)
-        try {
-            const { notificationService } = require('../services/notificationService');
-            const { getIO } = require('../socket');
-            const shopId = getShopId();
-            const io = getIO();
-            // Use 24h window — sync may happen long after the void action
-            const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-
-            for (const sale of sales) {
-                const isRecentlyVoided =
-                    sale.status === 'VOIDED' &&
-                    (new Date(sale.updatedAt) > oneDayAgo || new Date(sale.createdAt) > oneDayAgo);
-
-                if (isRecentlyVoided) {
-                    // Emit socket so dashboard pages refresh instantly
-                    io.to(`shop_${shopId}`).emit('sale:voided', {
-                        id: sale.id,
-                        billNo: sale.billNo,
-                        timestamp: new Date()
-                    });
-
-                    await notificationService.send({
-                        shopId,
-                        type: 'invoice_deleted',
-                        title: '🚫 Invoice Voided',
-                        message: `Bill #${sale.billNo} was voided.`,
-                        referenceId: sale.id,
-                        metadata: {
-                            billNo: sale.billNo,
-                            reason: sale.remarks || 'No reason provided'
-                        }
-                    });
-                    console.log(`🚫 Void notification sent for Bill #${sale.billNo}`);
-                }
-            }
-        } catch (e) {
-            console.error("Void notification trigger error:", e);
-        }
 
         res.json({ success: true, count: sales.length });
     } catch (error: any) {
