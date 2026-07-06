@@ -131,7 +131,7 @@ router.get('/gst', async (req, res) => {
 
         const sales = await prisma.sale.findMany({
             where: {
-                status: 'COMPLETED',
+                status: { in: ['COMPLETED', 'VOIDED'] },
                 ...(buildEffectiveSaleDateWhere(startDate, endDate) || {})
             },
             include: {
@@ -185,6 +185,8 @@ router.get('/gst', async (req, res) => {
         }>();
 
         for (const sale of sales) {
+            if (sale.status === 'VOIDED') continue;
+
             const effectiveDate = sale.actualSaleDate ?? sale.createdAt;
             const dateKey = effectiveDate.toISOString().split('T')[0];
             const taxableValue = sale.subtotal - sale.discount;
@@ -261,11 +263,14 @@ router.get('/gst', async (req, res) => {
             }
         }
 
+        const completedSales = sales.filter(s => s.status !== 'VOIDED');
+        const voidedSales = sales.filter(s => s.status === 'VOIDED');
+
         res.json({
             summary,
             daily: Array.from(dailyMap.values()),
             slabs: Array.from(slabMap.values()).sort((a, b) => a.rate - b.rate),
-            sales: sales.map((sale) => ({
+            sales: completedSales.map((sale) => ({
                 id: sale.id,
                 billNo: sale.billNo,
                 createdAt: sale.actualSaleDate ?? sale.createdAt,
@@ -277,6 +282,16 @@ router.get('/gst', async (req, res) => {
                 sgst: sale.sgst,
                 totalTax: sale.taxAmount,
                 grandTotal: sale.grandTotal,
+                paymentMethod: sale.paymentMethod
+            })),
+            cancelledInvoices: voidedSales.map((sale) => ({
+                id: sale.id,
+                billNo: sale.billNo,
+                createdAt: sale.createdAt,
+                grossAmount: sale.subtotal,
+                discount: sale.discount,
+                amount: sale.grandTotal,
+                status: sale.status,
                 paymentMethod: sale.paymentMethod
             }))
         });
