@@ -479,16 +479,21 @@ export default function Reports() {
         <div className="flex-1 space-y-4 w-full max-w-full pb-6 min-w-0">
             {/* Header & Controls */}
             <div className="flex flex-col gap-4 w-full">
-                <div>
-                    <h2 className="text-xl sm:text-2xl font-bold tracking-tight">GST Reports</h2>
-                    <p className="text-muted-foreground text-xs">
-                        Generate GST-compliant sales reports.
-                    </p>
+                <div className="flex items-center justify-between gap-4 w-full">
+                    <div>
+                        <h2 className="text-xl sm:text-2xl font-bold tracking-tight">GST Reports</h2>
+                        <p className="text-muted-foreground text-xs hidden sm:block">
+                            Generate GST-compliant sales reports.
+                        </p>
+                    </div>
+                    <div className="shrink-0 relative z-20">
+                        <DateRangePicker />
+                    </div>
                 </div>
 
                 {/* Controls Container */}
                 <div className="flex flex-col gap-3 w-full sm:flex-row sm:items-center sm:justify-between sm:flex-wrap">
-                    {/* Toggles (Row 1 on Mobile) */}
+                    {/* Toggles */}
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center w-full sm:w-auto">
                         <div className="grid grid-cols-2 gap-2 sm:flex sm:rounded-lg border border-slate-200 p-0.5 bg-slate-100 dark:border-slate-800 dark:bg-slate-950/40 w-full sm:w-auto">
                             <Button 
@@ -529,27 +534,22 @@ export default function Reports() {
                         </div>
                     </div>
 
-                    {/* Date Picker + Export buttons (Row 2 & 3 on Mobile) */}
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center w-full sm:w-auto">
-                        <div className="w-full sm:w-auto relative z-20">
-                            <DateRangePicker />
-                        </div>
-                        <div className="grid grid-cols-2 gap-2 w-full sm:flex sm:w-auto">
-                            <Button 
-                                onClick={exportToPDF}
-                                className="h-9 px-3 bg-red-600 hover:bg-red-700 text-white font-semibold text-xs rounded-xl shadow-sm w-full sm:w-auto"
-                            >
-                                <FileText className="mr-1.5 h-3.5 w-3.5" />
-                                PDF
-                            </Button>
-                            <Button 
-                                onClick={exportToExcel}
-                                className="h-9 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-sm w-full sm:w-auto"
-                            >
-                                <FileSpreadsheet className="mr-1.5 h-3.5 w-3.5" />
-                                Excel
-                            </Button>
-                        </div>
+                    {/* Export Buttons */}
+                    <div className="grid grid-cols-2 gap-2 w-full sm:flex sm:w-auto">
+                        <Button 
+                            onClick={exportToPDF}
+                            className="h-9 px-3 bg-red-600 hover:bg-red-700 text-white font-semibold text-xs rounded-xl shadow-sm w-full sm:w-auto"
+                        >
+                            <FileText className="mr-1.5 h-3.5 w-3.5" />
+                            PDF
+                        </Button>
+                        <Button 
+                            onClick={exportToExcel}
+                            className="h-9 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-sm w-full sm:w-auto"
+                        >
+                            <FileSpreadsheet className="mr-1.5 h-3.5 w-3.5" />
+                            Excel
+                        </Button>
                     </div>
                 </div>
             </div>
@@ -557,7 +557,7 @@ export default function Reports() {
             {/* Stat Cards */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 w-full max-w-full">
                 {/* Total Bills */}
-                <Card className="border-t-4 border-t-blue-500 shadow-sm overflow-hidden w-full max-w-full">
+                <Card className="shadow-sm overflow-hidden w-full max-w-full">
                     <CardHeader className="pb-2">
                         <CardDescription className="text-xs font-medium text-muted-foreground">Total Bills</CardDescription>
                         <CardTitle className="text-2xl font-bold">{report.summary.count}</CardTitle>
@@ -565,7 +565,7 @@ export default function Reports() {
                 </Card>
 
                 {/* Taxable Value */}
-                <Card className="border-t-4 border-t-emerald-500 shadow-sm overflow-hidden w-full max-w-full">
+                <Card className="shadow-sm overflow-hidden w-full max-w-full">
                     <CardHeader className="pb-2">
                         <CardDescription className="text-xs font-medium text-muted-foreground">Taxable Value</CardDescription>
                         <CardTitle className="text-2xl font-bold">{formatCurrency(report.summary.taxableValue)}</CardTitle>
@@ -573,7 +573,7 @@ export default function Reports() {
                 </Card>
 
                 {/* Total GST */}
-                <Card className="border-t-4 border-t-purple-500 shadow-sm overflow-hidden w-full max-w-full">
+                <Card className="shadow-sm overflow-hidden w-full max-w-full">
                     <CardHeader className="pb-2">
                         <CardDescription className="text-xs font-medium text-muted-foreground">Total GST</CardDescription>
                         <CardTitle className="text-2xl font-bold">{formatCurrency(report.summary.totalTax)}</CardTitle>
@@ -581,7 +581,7 @@ export default function Reports() {
                 </Card>
 
                 {/* Grand Total */}
-                <Card className="border-t-4 border-t-orange-500 shadow-sm overflow-hidden w-full max-w-full">
+                <Card className="shadow-sm overflow-hidden w-full max-w-full">
                     <CardHeader className="pb-2">
                         <CardDescription className="text-xs font-medium text-muted-foreground">Grand Total</CardDescription>
                         <CardTitle className="text-2xl font-bold">{formatCurrency(report.summary.grandTotal)}</CardTitle>
