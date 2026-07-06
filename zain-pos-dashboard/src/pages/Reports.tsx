@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
+import { io } from 'socket.io-client';
 import { FileSpreadsheet, FileText, Calendar, Layers, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
 import { formatCurrency } from '@/lib/format';
 import { 
@@ -26,6 +27,8 @@ import { format, subMonths, addMonths, startOfMonth, endOfMonth } from 'date-fns
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
+import { useAuth } from '@/contexts/AuthContext';
+import { API_URL } from '@/lib/config';
 
 interface GstSummary {
     count: number;
@@ -136,6 +139,7 @@ function formatDate(value: string) {
 }
 
 export default function Reports() {
+    const { token } = useAuth();
     const [selectedMonth, setSelectedMonth] = useState<Date>(() => startOfMonth(new Date()));
     const dateRange = useMemo(() => {
         return {
@@ -153,11 +157,7 @@ export default function Reports() {
     const [reportType, setReportType] = useState<'detailed' | 'summary'>('summary');
     const [sortBy, setSortBy] = useState<'date' | 'billNo'>('date');
 
-    useEffect(() => {
-        void loadReport();
-    }, [dateRange.startDate, dateRange.endDate]);
-
-    async function loadReport() {
+    const loadReport = useCallback(async () => {
         try {
             setLoading(true);
             if (isDemoModeEnabled()) {
@@ -176,7 +176,29 @@ export default function Reports() {
         } finally {
             setLoading(false);
         }
-    }
+    }, [dateRange.startDate, dateRange.endDate]);
+
+    useEffect(() => {
+        void loadReport();
+    }, [loadReport]);
+
+    // Auto-refresh when POS syncs new sales or voids an invoice
+    useEffect(() => {
+        if (!token) return;
+        const socket = io(API_URL, {
+            auth: { token },
+            transports: ['websocket', 'polling'],
+            reconnection: true,
+            reconnectionAttempts: Infinity,
+        });
+        const refresh = () => { void loadReport(); };
+        socket.on('sale:batch', refresh);
+        socket.on('sale:voided', refresh);
+        socket.on('notification', (n: any) => {
+            if (n.type === 'invoice_deleted' || n.type === 'invoice_updated') refresh();
+        });
+        return () => { socket.disconnect(); };
+    }, [token, loadReport]);
 
     const totals = React.useMemo(() => {
         if (!report) return null;
