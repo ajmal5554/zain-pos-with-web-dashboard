@@ -31,7 +31,8 @@ export const notificationService = {
                     title,
                     message,
                     referenceId,
-                    metadata: metadata || {},
+                    // metadata column is String? in schema — must stringify the object
+                    metadata: metadata ? JSON.stringify(metadata) : null,
                     read: false
                 }
             });
@@ -72,9 +73,11 @@ export const notificationService = {
             });
 
             const sendPromises = subscriptions.map(async (sub) => {
+                // keys is stored as a JSON string in the DB — parse it back to an object
+                const keysObj = typeof sub.keys === 'string' ? JSON.parse(sub.keys) : sub.keys;
                 const pushConfig = {
                     endpoint: sub.endpoint,
-                    keys: sub.keys as any
+                    keys: keysObj
                 };
 
                 try {
@@ -99,17 +102,22 @@ export const notificationService = {
     },
 
     async subscribe(userId: string, subscription: any) {
+        // keys must be stored as a JSON string since the DB column is String
+        const keysJson = typeof subscription.keys === 'string'
+            ? subscription.keys
+            : JSON.stringify(subscription.keys);
+
         return prisma.pushSubscription.upsert({
             where: { endpoint: subscription.endpoint },
             update: {
                 userId,
-                keys: subscription.keys,
+                keys: keysJson,
                 updatedAt: new Date()
             },
             create: {
                 userId,
                 endpoint: subscription.endpoint,
-                keys: subscription.keys
+                keys: keysJson
             }
         });
     }
