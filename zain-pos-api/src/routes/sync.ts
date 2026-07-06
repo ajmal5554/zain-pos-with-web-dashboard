@@ -366,13 +366,29 @@ router.post('/sales', async (req, res) => {
         // Check for Voided Sales in this batch (Invoice Deleted/Voided)
         try {
             const { notificationService } = require('../services/notificationService');
+            const { getIO } = require('../socket');
             const shopId = getShopId();
+            const io = getIO();
+            // Use 24h window — sync may happen long after the void action
+            const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
             for (const sale of sales) {
-                if (sale.status === 'VOIDED' && new Date(sale.updatedAt) > new Date(Date.now() - 10 * 60 * 1000)) {
+                const isRecentlyVoided =
+                    sale.status === 'VOIDED' &&
+                    (new Date(sale.updatedAt) > oneDayAgo || new Date(sale.createdAt) > oneDayAgo);
+
+                if (isRecentlyVoided) {
+                    // Emit socket so dashboard pages refresh instantly
+                    io.to(`shop_${shopId}`).emit('sale:voided', {
+                        id: sale.id,
+                        billNo: sale.billNo,
+                        timestamp: new Date()
+                    });
+
                     await notificationService.send({
                         shopId,
                         type: 'invoice_deleted',
-                        title: 'Invoice Voided',
+                        title: '🚫 Invoice Voided',
                         message: `Bill #${sale.billNo} was voided.`,
                         referenceId: sale.id,
                         metadata: {
@@ -380,10 +396,11 @@ router.post('/sales', async (req, res) => {
                             reason: sale.remarks || 'No reason provided'
                         }
                     });
+                    console.log(`🚫 Void notification sent for Bill #${sale.billNo}`);
                 }
             }
         } catch (e) {
-            console.error("Notification trigger error:", e);
+            console.error("Void notification trigger error:", e);
         }
 
         res.json({ success: true, count: sales.length });
