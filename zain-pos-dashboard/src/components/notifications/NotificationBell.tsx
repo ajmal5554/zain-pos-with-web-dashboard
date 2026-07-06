@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Bell, Check, ExternalLink } from 'lucide-react';
+import { Bell, Check, BellOff, BellRing } from 'lucide-react';
 import { useNotifications } from '@/contexts/NotificationContext';
 import type { Notification } from '@/contexts/NotificationContext';
 import { Button } from '@/components/ui/button';
@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 
 export function NotificationBell() {
-    const { notifications, unreadCount, markAsRead, markAllAsRead, subscribePush, isPushEnabled } = useNotifications();
+    const { notifications, unreadCount, markAsRead, markAllAsRead, subscribePush, pushStatus } = useNotifications();
 
     const [isOpen, setIsOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
@@ -31,6 +31,18 @@ export function NotificationBell() {
         }
     };
 
+    const pushLabel = () => {
+        switch (pushStatus) {
+            case 'subscribed': return { text: '✓ Push On', color: 'text-green-500', show: false };
+            case 'denied': return { text: '🚫 Push Blocked', color: 'text-destructive', show: true };
+            case 'unsupported': return { text: 'Push N/A', color: 'text-muted-foreground', show: false };
+            case 'unsubscribed': return { text: 'Enable Push', color: 'text-primary', show: true };
+            default: return { text: 'Enable Push', color: 'text-primary', show: true };
+        }
+    };
+
+    const label = pushLabel();
+
     return (
         <div className="relative" ref={dropdownRef}>
             <Button
@@ -39,7 +51,13 @@ export function NotificationBell() {
                 className="relative text-muted-foreground"
                 onClick={() => setIsOpen(!isOpen)}
             >
-                <Bell className="w-5 h-5" />
+                {pushStatus === 'subscribed' ? (
+                    <BellRing className="w-5 h-5 text-primary" />
+                ) : pushStatus === 'denied' ? (
+                    <BellOff className="w-5 h-5 text-destructive" />
+                ) : (
+                    <Bell className="w-5 h-5" />
+                )}
                 {unreadCount > 0 && (
                     <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-medium text-destructive-foreground">
                         {unreadCount > 9 ? '9+' : unreadCount}
@@ -56,29 +74,46 @@ export function NotificationBell() {
                                 {unreadCount > 0 ? `${unreadCount} unread` : 'All caught up'}
                             </CardDescription>
                         </div>
-                        <div className="flex gap-2">
-                            {!isPushEnabled && (
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={subscribePush}
-                                    className="h-8 text-xs text-primary"
-                                >
-                                    Enable Push
-                                </Button>
-                            )}
+                        <div className="flex gap-2 items-center">
+                            {/* Push status badge */}
+                            {label.show ? (
+                                pushStatus === 'denied' ? (
+                                    <span className={cn('text-xs font-medium', label.color)}>
+                                        {label.text}
+                                    </span>
+                                ) : (
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={subscribePush}
+                                        className="h-7 text-xs border-primary text-primary hover:bg-primary hover:text-primary-foreground"
+                                    >
+                                        🔔 Enable Push
+                                    </Button>
+                                )
+                            ) : pushStatus === 'subscribed' ? (
+                                <span className="text-xs text-green-500 font-medium">✓ Push On</span>
+                            ) : null}
+
                             {unreadCount > 0 && (
                                 <Button
                                     variant="ghost"
                                     size="sm"
                                     onClick={markAllAsRead}
-                                    className="h-8 text-xs"
+                                    className="h-7 text-xs"
                                 >
                                     Mark all read
                                 </Button>
                             )}
                         </div>
                     </CardHeader>
+
+                    {/* Banner if push is denied */}
+                    {pushStatus === 'denied' && (
+                        <div className="px-4 py-2 bg-destructive/10 border-b border-destructive/20 text-xs text-destructive">
+                            ⚠️ Notifications blocked. Go to browser Settings → Site permissions → Notifications → Reset for this site.
+                        </div>
+                    )}
 
                     <CardContent className="p-0 max-h-[60vh] overflow-y-auto">
                         {notifications.length === 0 ? (
@@ -129,9 +164,7 @@ export function NotificationBell() {
                                                         View record
                                                     </Link>
                                                 ) : (
-                                                    <span className="text-xs text-muted-foreground">
-                                                        Activity
-                                                    </span>
+                                                    <span className="text-xs text-muted-foreground">Activity</span>
                                                 )}
                                                 {!notification.read && (
                                                     <Button

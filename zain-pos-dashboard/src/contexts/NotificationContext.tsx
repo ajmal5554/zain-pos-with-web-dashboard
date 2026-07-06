@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './AuthContext';
 import { toast } from 'react-hot-toast';
@@ -16,15 +16,20 @@ export interface Notification {
     metadata?: any;
 }
 
+export type PushStatus = 'unknown' | 'unsupported' | 'denied' | 'subscribed' | 'unsubscribed';
+
 interface NotificationContextType {
     notifications: Notification[];
     unreadCount: number;
     loading: boolean;
+    pushStatus: PushStatus;
     markAsRead: (id: string) => Promise<void>;
     markAllAsRead: () => Promise<void>;
     subscribePush: () => Promise<void>;
     isPushEnabled: boolean;
 }
+
+const VAPID_PUBLIC_KEY = 'BDJxTZeB4JeyjNGNYEVBzMcOL2GbbeqK_zT86JaoH23gqrxVtOJMeVUuroZ_yiL8Ay2t8y1KM6Fm273kNC34XPY';
 
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
 
@@ -33,15 +38,84 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [unreadCount, setUnreadCount] = useState(0);
     const [loading, setLoading] = useState(false);
-    const [isPushEnabled, setIsPushEnabled] = useState(false);
+    const [pushStatus, setPushStatus] = useState<PushStatus>('unknown');
+    const subscribeAttempted = useRef(false);
 
-    // 1. Setup Socket & Initial Fetch
+    const isPushEnabled = pushStatus === 'subscribed';
+
+    // ── Register push subscription with backend ──────────────────────────────
+    const saveSubscriptionToBackend = useCallback(async (sub: PushSubscription, authToken: string) => {
+        const res = await fetch(`${API_URL}/api/notifications/subscribe`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${authToken}`
+            },
+            body: JSON.stringify(sub.toJSON())
+        });
+        if (!res.ok) throw new Error(`Backend subscribe failed: ${res.status}`);
+    }, []);
+
+    // ── Core subscribe function ───────────────────────────────────────────────
+    const subscribePush = useCallback(async () => {
+        if (!user || !token) return;
+
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+            console.warn('[Push] Not supported in this browser');
+            setPushStatus('unsupported');
+            return;
+        }
+
+        try {
+            const registration = await navigator.serviceWorker.ready;
+
+            // Request permission if not already granted
+            let permission = Notification.permission;
+            if (permission === 'default') {
+                permission = await Notification.requestPermission();
+            }
+
+            if (permission !== 'granted') {
+                console.warn('[Push] Permission denied or dismissed:', permission);
+                setPushStatus('denied');
+                return;
+            }
+
+            // Check if a subscription already exists
+            let sub = await registration.pushManager.getSubscription();
+
+            if (!sub) {
+                // Create new subscription
+                sub = await registration.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+                });
+                console.log('[Push] New subscription created:', sub.endpoint.slice(0, 60) + '...');
+            } else {
+                console.log('[Push] Existing subscription found, re-registering with backend');
+            }
+
+            // Always save/re-save to backend to ensure DB is in sync
+            await saveSubscriptionToBackend(sub, token);
+
+            setPushStatus('subscribed');
+            toast.success('🔔 Push notifications enabled!');
+        } catch (error: any) {
+            console.error('[Push] Subscribe failed:', error);
+            // Don't show error toast for dismissed permission dialogs
+            if (error?.name !== 'NotAllowedError') {
+                toast.error('Push setup failed — check console');
+            }
+            setPushStatus('unsubscribed');
+        }
+    }, [user, token, saveSubscriptionToBackend]);
+
+    // ── Socket + initial fetch ────────────────────────────────────────────────
     useEffect(() => {
         if (!user || !token) return;
 
         setLoading(true);
 
-        // Fetch Notifications
         fetch(`${API_URL}/api/notifications`, {
             headers: { Authorization: `Bearer ${token}` }
         })
@@ -52,83 +126,94 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
                     setUnreadCount(data.filter((n: Notification) => !n.read).length);
                 }
             })
-            .catch(err => console.error('Failed to fetch notifications', err))
+            .catch(err => console.error('[Notifications] Fetch failed:', err))
             .finally(() => setLoading(false));
 
-        // Connect Socket — prefer WebSocket, reconnect forever
-        const newSocket = io(API_URL, {
+        // WebSocket — prefer WS transport, reconnect forever
+        const socket = io(API_URL, {
             auth: { token },
             transports: ['websocket', 'polling'],
             reconnection: true,
-            reconnectionAttempts: Infinity,   // never give up
+            reconnectionAttempts: Infinity,
             reconnectionDelay: 1000,
             reconnectionDelayMax: 10000,
         });
 
-        newSocket.on('connect', () => {
-            console.log('🔌 Socket connected');
-        });
+        socket.on('connect', () => console.log('[Socket] Connected:', socket.id));
+        socket.on('disconnect', reason => console.warn('[Socket] Disconnected:', reason));
 
-        newSocket.on('disconnect', (reason) => {
-            console.warn('🔌 Socket disconnected:', reason);
-        });
-
-        newSocket.on('notification', (notification: Notification) => {
+        socket.on('notification', (notification: Notification) => {
             const audio = new Audio('/sounds/notification.mp3');
             audio.play().catch(() => { });
-
-            toast(`${notification.title}: ${notification.message}`, {
-                icon: '🔔',
-                duration: 5000
-            });
-
+            toast(`${notification.title}: ${notification.message}`, { icon: '🔔', duration: 5000 });
             setNotifications(prev => [notification, ...prev]);
             setUnreadCount(prev => prev + 1);
         });
 
-        // Auto-subscribe to Web Push if browser permission is already granted
-        // or check existing subscription state
-        if ('serviceWorker' in navigator && 'PushManager' in window) {
-            navigator.serviceWorker.ready.then(registration => {
-                registration.pushManager.getSubscription().then(sub => {
-                    setIsPushEnabled(!!sub);
-                });
-            });
-        }
+        return () => { socket.disconnect(); };
+    }, [user, token]);
 
-        return () => {
-            newSocket.disconnect();
-        };
-    }, [user, token, API_URL]);
-
-    // 2. Auto-prompt for push after login (only once, only if permission not denied)
+    // ── Check current push state on login ─────────────────────────────────────
     useEffect(() => {
         if (!user || !token) return;
-        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
-        if (isPushEnabled) return;
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+            setPushStatus('unsupported');
+            return;
+        }
 
-        // Only prompt if user hasn't explicitly denied
-        if (Notification.permission === 'denied') return;
+        navigator.serviceWorker.ready.then(async reg => {
+            const sub = await reg.pushManager.getSubscription();
+            const permission = Notification.permission;
 
-        // Small delay so the UI settles first
-        const timer = setTimeout(() => {
-            if (Notification.permission === 'default') {
-                // Auto-request permission and subscribe
-                subscribePush();
+            if (permission === 'denied') {
+                setPushStatus('denied');
+                return;
             }
-        }, 3000);
+
+            if (sub) {
+                // Has subscription — re-register with backend silently
+                try {
+                    await saveSubscriptionToBackend(sub, token);
+                    setPushStatus('subscribed');
+                    console.log('[Push] Subscription re-confirmed with backend');
+                } catch (e) {
+                    console.warn('[Push] Backend re-registration failed:', e);
+                    setPushStatus('subscribed'); // still subscribed in browser
+                }
+            } else {
+                setPushStatus('unsubscribed');
+            }
+        }).catch(e => {
+            console.warn('[Push] SW ready failed:', e);
+            setPushStatus('unsupported');
+        });
+    }, [user, token, saveSubscriptionToBackend]);
+
+    // ── Auto-subscribe 3s after login if push not enabled ────────────────────
+    useEffect(() => {
+        if (!user || !token) return;
+        if (pushStatus === 'subscribed' || pushStatus === 'denied' || pushStatus === 'unsupported') return;
+        if (subscribeAttempted.current) return;
+
+        const timer = setTimeout(async () => {
+            subscribeAttempted.current = true;
+            console.log('[Push] Auto-subscribing...');
+            await subscribePush();
+        }, 3500);
 
         return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [user, token, pushStatus, subscribePush]);
+
+    // Reset attempt flag on logout
+    useEffect(() => {
+        if (!user) subscribeAttempted.current = false;
     }, [user]);
 
-    // 2. Actions
+    // ── Actions ───────────────────────────────────────────────────────────────
     const markAsRead = async (id: string) => {
         try {
-            // Optimistic update
             setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
             setUnreadCount(prev => Math.max(0, prev - 1));
-
             await fetch(`${API_URL}/api/notifications/${id}/read`, {
                 method: 'PATCH',
                 headers: { Authorization: `Bearer ${token}` }
@@ -142,7 +227,6 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         try {
             setNotifications(prev => prev.map(n => ({ ...n, read: true })));
             setUnreadCount(0);
-
             await fetch(`${API_URL}/api/notifications/read-all`, {
                 method: 'PATCH',
                 headers: { Authorization: `Bearer ${token}` }
@@ -152,40 +236,12 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         }
     };
 
-    const subscribePush = async () => {
-        if (!user || !token) return;
-
-        try {
-            const registration = await navigator.serviceWorker.ready;
-            const VAPID_PUBLIC_KEY = 'BDJxTZeB4JeyjNGNYEVBzMcOL2GbbeqK_zT86JaoH23gqrxVtOJMeVUuroZ_yiL8Ay2t8y1KM6Fm273kNC34XPY';
-
-            const subscription = await registration.pushManager.subscribe({
-                userVisibleOnly: true,
-                applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
-            });
-
-            await fetch(`${API_URL}/api/notifications/subscribe`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`
-                },
-                body: JSON.stringify(subscription)
-            });
-
-            setIsPushEnabled(true);
-            toast.success('Push notifications enabled!');
-        } catch (error) {
-            console.error('Push subscription failed:', error);
-            toast.error('Failed to enable push notifications');
-        }
-    };
-
     return (
         <NotificationContext.Provider value={{
             notifications,
             unreadCount,
             loading,
+            pushStatus,
             markAsRead,
             markAllAsRead,
             subscribePush,
@@ -198,24 +254,16 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
 export const useNotifications = () => {
     const context = useContext(NotificationContext);
-    if (!context) {
-        throw new Error('useNotifications must be used within a NotificationProvider');
-    }
+    if (!context) throw new Error('useNotifications must be used within a NotificationProvider');
     return context;
 };
 
 // Utility
 function urlBase64ToUint8Array(base64String: string) {
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
-    const base64 = (base64String + padding)
-        .replace(/\-/g, '+')
-        .replace(/_/g, '/');
-
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
     const rawData = window.atob(base64);
     const outputArray = new Uint8Array(rawData.length);
-
-    for (let i = 0; i < rawData.length; ++i) {
-        outputArray[i] = rawData.charCodeAt(i);
-    }
+    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
     return outputArray;
 }
