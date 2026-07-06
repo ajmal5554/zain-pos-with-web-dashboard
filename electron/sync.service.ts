@@ -344,7 +344,6 @@ class CloudSyncService {
                             user: { select: { username: true, name: true } }
                         },
                         take: batchSize,
-                        skip
                     });
 
                     if (sales.length === 0) break;
@@ -360,7 +359,6 @@ class CloudSyncService {
                     });
 
                     syncedRecords += sales.length;
-                    skip += batchSize;
                     updateProgress(`Syncing sales... ${syncedRecords}/${totalRecords}`);
                 }
             }

@@ -15,6 +15,7 @@ import activityRoutes from './routes/activity';
 import notificationRoutes from './routes/notifications';
 import adminRoutes from './routes/admin';
 import customersRoutes from './routes/customers';
+import { ensureLocalDefaults } from './bootstrap';
 
 dotenv.config();
 
@@ -63,6 +64,10 @@ app.get('/health', (req, res) => {
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
     console.error('SERVER ERROR:', err);
     res.status(500).json({ error: 'Something went wrong!', message: err.message });
+});
+
+ensureLocalDefaults().catch((error) => {
+    console.error('Failed to initialize API defaults:', error);
 });
 
 httpServer.listen(PORT, () => {

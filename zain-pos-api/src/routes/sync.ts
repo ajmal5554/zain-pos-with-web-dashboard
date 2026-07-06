@@ -36,6 +36,41 @@ const asDate = (value: any) => {
     return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 };
 
+async function ensureVariantExists(variantId: string, itemInfo: any = {}) {
+    const existing = await prisma.productVariant.findUnique({ where: { id: variantId } });
+    if (existing) return existing;
+
+    const fallbackCategory = await prisma.category.upsert({
+        where: { name: 'Unsynced Inventory' },
+        update: {},
+        create: { name: 'Unsynced Inventory' }
+    });
+
+    const product = await prisma.product.create({
+        data: {
+            name: `${itemInfo.productName || itemInfo.name || 'Unknown Product'} (Sync Placeholder)`,
+            categoryId: fallbackCategory.id,
+            taxRate: itemInfo.taxRate || 0,
+            description: 'Created automatically during sync'
+        }
+    });
+
+    return prisma.productVariant.create({
+        data: {
+            id: variantId,
+            productId: product.id,
+            sku: itemInfo.sku || `SYNC-${variantId.substring(0, 8)}`,
+            barcode: itemInfo.barcode || `SYNC-${variantId.substring(0, 8)}`,
+            mrp: itemInfo.mrp || 0,
+            sellingPrice: itemInfo.sellingPrice || 0,
+            costPrice: itemInfo.costPrice || 0,
+            stock: itemInfo.stock || 0,
+            minStock: itemInfo.minStock ?? 5,
+            isActive: itemInfo.isActive ?? true
+        }
+    });
+}
+
 // Sync Sales from Desktop
 router.post('/sales', async (req, res) => {
     try {
@@ -426,6 +461,57 @@ router.post('/users', async (req, res) => {
     }
 });
 
+// Sync Customers from Desktop
+router.post('/customers', async (req, res) => {
+    try {
+        const { customers } = req.body;
+        if (!Array.isArray(customers)) return res.status(400).json({ error: 'Invalid data' });
+
+        let synced = 0;
+        for (const customer of customers) {
+            const data = {
+                name: customer.name || 'Walk-in Customer',
+                phone: customer.phone || null,
+                email: customer.email || null,
+                address: customer.address || null,
+                gstin: customer.gstin || null,
+                createdAt: asDate(customer.createdAt) ?? new Date(),
+                updatedAt: asDate(customer.updatedAt) ?? new Date()
+            };
+
+            if (customer.id) {
+                await prisma.customer.upsert({
+                    where: { id: customer.id },
+                    update: data,
+                    create: { id: customer.id, ...data }
+                });
+            } else if (customer.phone) {
+                await prisma.customer.upsert({
+                    where: { phone: customer.phone },
+                    update: data,
+                    create: data
+                });
+            } else {
+                await prisma.customer.create({ data });
+            }
+            synced++;
+        }
+
+        await prisma.auditLog.create({
+            data: {
+                action: 'SYNC_CUSTOMERS',
+                details: `Synced ${synced}/${customers.length} customers from desktop`,
+                userId: null
+            }
+        });
+
+        res.json({ success: true, synced, total: customers.length });
+    } catch (error: any) {
+        console.error('Customer sync error:', error);
+        res.status(500).json({ error: error?.message || 'Customer sync failed' });
+    }
+});
+
 // Set/reset one dedicated dashboard login from POS
 router.post('/dashboard-user', async (req, res) => {
     try {
@@ -591,6 +677,218 @@ router.post('/inventory', async (req, res) => {
     } catch (error: any) {
         console.error('Inventory sync error:', error);
         res.status(500).json({ error: error.message });
+    }
+});
+
+// Sync Inventory Movements from Desktop
+router.post('/inventory-movements', async (req, res) => {
+    try {
+        const { movements } = req.body;
+        if (!Array.isArray(movements)) return res.status(400).json({ error: 'Invalid data' });
+
+        let synced = 0;
+        const skipped: string[] = [];
+        for (const movement of movements) {
+            if (!movement.id || !movement.variantId) {
+                skipped.push(movement.id || 'missing_variant');
+                continue;
+            }
+
+            await ensureVariantExists(movement.variantId, movement);
+            await prisma.inventoryMovement.upsert({
+                where: { id: movement.id },
+                update: {
+                    variantId: movement.variantId,
+                    type: movement.type || 'ADJUSTMENT',
+                    quantity: movement.quantity ?? 0,
+                    reason: movement.reason ?? null,
+                    reference: movement.reference ?? null,
+                    createdBy: movement.createdBy || 'sync',
+                    createdAt: asDate(movement.createdAt) ?? new Date()
+                },
+                create: {
+                    id: movement.id,
+                    variantId: movement.variantId,
+                    type: movement.type || 'ADJUSTMENT',
+                    quantity: movement.quantity ?? 0,
+                    reason: movement.reason ?? null,
+                    reference: movement.reference ?? null,
+                    createdBy: movement.createdBy || 'sync',
+                    createdAt: asDate(movement.createdAt) ?? new Date()
+                }
+            });
+            synced++;
+        }
+
+        await prisma.auditLog.create({
+            data: {
+                action: 'SYNC_INVENTORY_MOVEMENTS',
+                details: `Synced ${synced}/${movements.length} inventory movements from desktop${skipped.length ? `, skipped: ${skipped.join(', ')}` : ''}`,
+                userId: null
+            }
+        });
+
+        res.json({ success: true, synced, total: movements.length, skipped });
+    } catch (error: any) {
+        console.error('Inventory movement sync error:', error);
+        res.status(500).json({ error: error?.message || 'Inventory movement sync failed' });
+    }
+});
+
+// Sync Exchanges from Desktop
+router.post('/exchanges', async (req, res) => {
+    try {
+        const { exchanges } = req.body;
+        if (!Array.isArray(exchanges)) return res.status(400).json({ error: 'Invalid data' });
+
+        let synced = 0;
+        const skipped: string[] = [];
+        for (const exchange of exchanges) {
+            const originalInvoiceId = exchange.originalInvoiceId || exchange.saleId || exchange.invoiceId;
+            if (!exchange.id || !originalInvoiceId) {
+                skipped.push(exchange.id || 'missing_invoice');
+                continue;
+            }
+
+            const sale = await prisma.sale.findUnique({ where: { id: originalInvoiceId } });
+            if (!sale) {
+                skipped.push(exchange.id);
+                continue;
+            }
+
+            await prisma.exchangeItem.deleteMany({ where: { exchangeId: exchange.id } });
+            await prisma.exchangePayment.deleteMany({ where: { exchangeId: exchange.id } });
+            await prisma.exchange.upsert({
+                where: { id: exchange.id },
+                update: {
+                    originalInvoiceId,
+                    exchangeDate: asDate(exchange.exchangeDate || exchange.createdAt) ?? new Date(),
+                    differenceAmount: exchange.differenceAmount ?? 0,
+                    notes: exchange.notes ?? null,
+                    createdBy: exchange.createdBy || 'sync'
+                },
+                create: {
+                    id: exchange.id,
+                    originalInvoiceId,
+                    exchangeDate: asDate(exchange.exchangeDate || exchange.createdAt) ?? new Date(),
+                    differenceAmount: exchange.differenceAmount ?? 0,
+                    notes: exchange.notes ?? null,
+                    createdBy: exchange.createdBy || 'sync'
+                }
+            });
+
+            if (Array.isArray(exchange.items) && exchange.items.length > 0) {
+                await prisma.exchangeItem.createMany({
+                    data: exchange.items.map((item: any) => ({
+                        id: item.id,
+                        exchangeId: exchange.id,
+                        returnedItemId: item.returnedItemId ?? null,
+                        returnedQty: item.returnedQty ?? 0,
+                        newItemId: item.newItemId ?? null,
+                        newQty: item.newQty ?? 0,
+                        priceDiff: item.priceDiff ?? 0
+                    }))
+                });
+            }
+
+            if (Array.isArray(exchange.payments) && exchange.payments.length > 0) {
+                await prisma.exchangePayment.createMany({
+                    data: exchange.payments.map((payment: any) => ({
+                        id: payment.id,
+                        exchangeId: exchange.id,
+                        paymentMode: payment.paymentMode || 'CASH',
+                        amount: payment.amount ?? 0,
+                        createdAt: asDate(payment.createdAt) ?? new Date()
+                    }))
+                });
+            }
+            synced++;
+        }
+
+        res.json({ success: true, synced, total: exchanges.length, skipped });
+    } catch (error: any) {
+        console.error('Exchange sync error:', error);
+        res.status(500).json({ error: error?.message || 'Exchange sync failed' });
+    }
+});
+
+// Sync Refunds from Desktop
+router.post('/refunds', async (req, res) => {
+    try {
+        const { refunds } = req.body;
+        if (!Array.isArray(refunds)) return res.status(400).json({ error: 'Invalid data' });
+
+        let synced = 0;
+        const skipped: string[] = [];
+        for (const refund of refunds) {
+            const originalInvoiceId = refund.originalInvoiceId || refund.saleId || refund.invoiceId;
+            if (!refund.id || !originalInvoiceId) {
+                skipped.push(refund.id || 'missing_invoice');
+                continue;
+            }
+
+            const sale = await prisma.sale.findUnique({ where: { id: originalInvoiceId } });
+            if (!sale) {
+                skipped.push(refund.id);
+                continue;
+            }
+
+            await prisma.refundItem.deleteMany({ where: { refundId: refund.id } });
+            await prisma.refundPayment.deleteMany({ where: { refundId: refund.id } });
+            await prisma.refund.upsert({
+                where: { id: refund.id },
+                update: {
+                    originalInvoiceId,
+                    refundDate: asDate(refund.refundDate || refund.createdAt) ?? new Date(),
+                    totalRefundAmount: refund.totalRefundAmount ?? refund.amount ?? 0,
+                    reason: refund.reason || 'Synced refund',
+                    createdBy: refund.createdBy || 'sync'
+                },
+                create: {
+                    id: refund.id,
+                    originalInvoiceId,
+                    refundDate: asDate(refund.refundDate || refund.createdAt) ?? new Date(),
+                    totalRefundAmount: refund.totalRefundAmount ?? refund.amount ?? 0,
+                    reason: refund.reason || 'Synced refund',
+                    createdBy: refund.createdBy || 'sync'
+                }
+            });
+
+            if (Array.isArray(refund.items) && refund.items.length > 0) {
+                for (const item of refund.items) {
+                    if (item.variantId) await ensureVariantExists(item.variantId, item);
+                }
+                await prisma.refundItem.createMany({
+                    data: refund.items
+                        .filter((item: any) => item.variantId)
+                        .map((item: any) => ({
+                            id: item.id,
+                            refundId: refund.id,
+                            variantId: item.variantId,
+                            quantity: item.quantity ?? 0,
+                            amount: item.amount ?? 0
+                        }))
+                });
+            }
+
+            if (Array.isArray(refund.payments) && refund.payments.length > 0) {
+                await prisma.refundPayment.createMany({
+                    data: refund.payments.map((payment: any) => ({
+                        id: payment.id,
+                        refundId: refund.id,
+                        paymentMode: payment.paymentMode || 'CASH',
+                        amount: payment.amount ?? 0,
+                        createdAt: asDate(payment.createdAt) ?? new Date()
+                    }))
+                });
+            }
+            synced++;
+        }
+
+        res.json({ success: true, synced, total: refunds.length, skipped });
+    } catch (error: any) {
+        console.error('Refund sync error:', error);
+        res.status(500).json({ error: error?.message || 'Refund sync failed' });
     }
 });
 

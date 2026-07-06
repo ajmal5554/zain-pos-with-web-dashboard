@@ -22,7 +22,7 @@ export default function LoginPage() {
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const navigate = useNavigate();
-    const { login } = useAuth();
+    const { login, enterDemoMode } = useAuth();
 
     const handleSubmit = async (e: FormEvent) => {
         e.preventDefault();
@@ -110,8 +110,8 @@ export default function LoginPage() {
                     <Button 
                         variant="outline" 
                         onClick={() => {
+                            enterDemoMode();
                             navigate('/');
-                            window.location.reload(); 
                         }}
                         className="w-full"
                     >
