@@ -75,12 +75,12 @@ export default function DashboardPage() {
     return (
         <div className="flex-1 space-y-4 pt-4 pb-6">
             {/* Page Header */}
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between">
+            <div className="flex items-center justify-between gap-4 w-full">
                 <div>
-                    <h2 className="text-2xl font-bold tracking-tight">Dashboard</h2>
-                    <p className="text-muted-foreground text-sm">Your daily shop overview</p>
+                    <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Dashboard</h2>
+                    <p className="text-muted-foreground text-xs hidden sm:block">Your daily shop overview</p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="shrink-0">
                     <DateRangePicker />
                 </div>
             </div>

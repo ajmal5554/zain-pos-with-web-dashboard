@@ -233,23 +233,23 @@ export default function Sales() {
 
     return (
         <div className="flex-1 space-y-4 pt-4 pb-6">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between">
+            <div className="flex items-center justify-between gap-4 w-full">
                 <div>
-                    <h2 className="text-2xl font-bold tracking-tight">Sales</h2>
-                    <p className="text-muted-foreground text-sm">
-                        View and manage all sales records for {dateRange.label}.
+                    <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Sales</h2>
+                    <p className="text-muted-foreground text-xs hidden sm:block">
+                        View and manage all sales records.
                     </p>
                 </div>
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+                <div className="flex items-center gap-2 shrink-0">
                     <DateRangePicker />
                     <Button 
                         variant="outline" 
                         onClick={() => void handleExport()} 
                         disabled={exporting} 
-                        className="h-9 px-3 w-full sm:w-auto"
+                        className="h-9 px-3 hidden sm:flex"
                     >
                         <Download className="mr-2 h-4 w-4" />
-                        {exporting ? 'Exporting...' : 'Export to Excel'}
+                        Export
                     </Button>
                 </div>
             </div>
