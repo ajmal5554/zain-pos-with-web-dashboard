@@ -162,6 +162,8 @@ router.get('/gst', async (req, res) => {
         const dailyMap = new Map<string, {
             date: string;
             bills: number;
+            billFrom: string;
+            billTo: string;
             subtotal: number;
             discount: number;
             taxableValue: number;
@@ -169,6 +171,9 @@ router.get('/gst', async (req, res) => {
             sgst: number;
             totalTax: number;
             grandTotal: number;
+            cash: number;
+            upi: number;
+            card: number;
         }>();
 
         const slabMap = new Map<number, {
@@ -197,13 +202,18 @@ router.get('/gst', async (req, res) => {
                 dailyMap.set(dateKey, {
                     date: dateKey,
                     bills: 0,
+                    billFrom: sale.billNo,
+                    billTo: sale.billNo,
                     subtotal: 0,
                     discount: 0,
                     taxableValue: 0,
                     cgst: 0,
                     sgst: 0,
                     totalTax: 0,
-                    grandTotal: 0
+                    grandTotal: 0,
+                    cash: 0,
+                    upi: 0,
+                    card: 0
                 });
             }
 
@@ -216,6 +226,19 @@ router.get('/gst', async (req, res) => {
             daily.sgst += sale.sgst;
             daily.totalTax += sale.taxAmount;
             daily.grandTotal += sale.grandTotal;
+
+            if (sale.billNo) {
+                if (!daily.billFrom || sale.billNo < daily.billFrom) daily.billFrom = sale.billNo;
+                if (!daily.billTo || sale.billNo > daily.billTo) daily.billTo = sale.billNo;
+            }
+
+            if (sale.paymentMethod === 'CASH') {
+                daily.cash += sale.grandTotal;
+            } else if (sale.paymentMethod === 'UPI') {
+                daily.upi += sale.grandTotal;
+            } else if (sale.paymentMethod === 'CARD') {
+                daily.card += sale.grandTotal;
+            }
 
             for (const item of sale.items) {
                 const rate = item.taxRate || 0;
