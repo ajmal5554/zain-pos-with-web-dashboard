@@ -55,19 +55,25 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
             .catch(err => console.error('Failed to fetch notifications', err))
             .finally(() => setLoading(false));
 
-        // Connect Socket
+        // Connect Socket — prefer WebSocket, reconnect forever
         const newSocket = io(API_URL, {
             auth: { token },
+            transports: ['websocket', 'polling'],
             reconnection: true,
-            reconnectionAttempts: 5
+            reconnectionAttempts: Infinity,   // never give up
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 10000,
         });
 
         newSocket.on('connect', () => {
-            // Connected to notification socket
+            console.log('🔌 Socket connected');
+        });
+
+        newSocket.on('disconnect', (reason) => {
+            console.warn('🔌 Socket disconnected:', reason);
         });
 
         newSocket.on('notification', (notification: Notification) => {
-            // Play sound?
             const audio = new Audio('/sounds/notification.mp3');
             audio.play().catch(() => { });
 
@@ -80,7 +86,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
             setUnreadCount(prev => prev + 1);
         });
 
-        // Check Push Permission
+        // Auto-subscribe to Web Push if browser permission is already granted
+        // or check existing subscription state
         if ('serviceWorker' in navigator && 'PushManager' in window) {
             navigator.serviceWorker.ready.then(registration => {
                 registration.pushManager.getSubscription().then(sub => {
@@ -93,6 +100,27 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
             newSocket.disconnect();
         };
     }, [user, token, API_URL]);
+
+    // 2. Auto-prompt for push after login (only once, only if permission not denied)
+    useEffect(() => {
+        if (!user || !token) return;
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+        if (isPushEnabled) return;
+
+        // Only prompt if user hasn't explicitly denied
+        if (Notification.permission === 'denied') return;
+
+        // Small delay so the UI settles first
+        const timer = setTimeout(() => {
+            if (Notification.permission === 'default') {
+                // Auto-request permission and subscribe
+                subscribePush();
+            }
+        }, 3000);
+
+        return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [user]);
 
     // 2. Actions
     const markAsRead = async (id: string) => {
