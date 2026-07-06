@@ -962,22 +962,45 @@ router.post('/audit', async (req, res) => {
         console.log(`ðŸ“¡ Cloud receiving ${logs.length} audit logs...`);
 
         for (const log of logs) {
-            // Ensure User exists (if linked)
-            if (log.user) {
-                const existingAuditUser = await prisma.user.findUnique({
-                    where: { username: log.user.username }
+            let finalUserId: string | null = null;
+
+            if (log.userId) {
+                const existingById = await prisma.user.findUnique({
+                    where: { id: log.userId }
                 });
-                if (!existingAuditUser) {
-                    await prisma.user.create({
-                        data: {
-                            id: log.user.id,
-                            username: log.user.username,
-                            name: log.user.name,
-                            role: log.user.role || 'CASHIER', // Fallback
-                            password: log.user.password || 'cloud_synced', // Fallback
-                            isActive: true
-                        }
+                if (existingById) {
+                    finalUserId = existingById.id;
+                }
+            }
+
+            // Ensure User exists (if linked), then use the cloud user's ID.
+            if (log.user) {
+                const username = (log.user.username || '').toString().trim();
+                if (username) {
+                    const existingAuditUser = await prisma.user.findUnique({
+                        where: { username }
                     });
+                    const auditUser = existingAuditUser
+                        ? await prisma.user.update({
+                            where: { username },
+                            data: {
+                                name: log.user.name || username,
+                                role: log.user.role || existingAuditUser.role || 'CASHIER',
+                                isActive: log.user.isActive !== false
+                            }
+                        })
+                        : await prisma.user.create({
+                            data: {
+                                id: log.user.id || undefined,
+                                username,
+                                name: log.user.name || username,
+                                role: log.user.role || 'CASHIER', // Fallback
+                                password: log.user.password || 'cloud_synced', // Fallback
+                                isActive: true
+                            }
+                        });
+
+                    finalUserId = auditUser.id;
                 }
             }
 
@@ -988,7 +1011,7 @@ router.post('/audit', async (req, res) => {
                     id: log.id,
                     action: log.action,
                     details: log.details,
-                    userId: log.userId,
+                    userId: finalUserId,
                     createdAt: new Date(log.createdAt)
                 }
             });
