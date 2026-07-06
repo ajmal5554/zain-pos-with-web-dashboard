@@ -4,6 +4,7 @@ import { differenceInDays } from 'date-fns';
 export interface DashboardStats {
     summary: {
         totalSales: number;
+        totalTax?: number;
         totalOrders: number;
         averageOrderValue: number;
         range?: { start: string; end: string };
