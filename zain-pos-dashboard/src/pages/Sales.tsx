@@ -23,6 +23,7 @@ import { useDateFilter } from '@/contexts/DateFilterContext';
 import api from '@/lib/api';
 import { demoInvoices, getDemoInvoicesPage, isDemoModeEnabled } from '@/lib/demo';
 import { formatCurrency } from '@/lib/format';
+import { socket } from '@/lib/socket';
 import { StatCard } from '@/components/shared/StatCard';
 
 export default function Sales() {
@@ -130,6 +131,19 @@ export default function Sales() {
     useEffect(() => {
         setPage(1);
     }, [debouncedSearch, dateRange, limit]);
+
+    useEffect(() => {
+        if (inDemoMode) return;
+        const refresh = () => { void fetchInvoices(); };
+        socket.on('sale:batch', refresh);
+        socket.on('sale:voided', refresh);
+        socket.on('sale:updated', refresh);
+        return () => {
+            socket.off('sale:batch', refresh);
+            socket.off('sale:voided', refresh);
+            socket.off('sale:updated', refresh);
+        };
+    }, [fetchInvoices, inDemoMode]);
 
     const handleExport = async () => {
         setExporting(true);

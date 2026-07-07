@@ -157,9 +157,9 @@ router.post('/sales', async (req, res) => {
         const saleIds = sales.map((s: any) => s.id);
         const existingSales = await prisma.sale.findMany({
             where: { id: { in: saleIds } },
-            select: { id: true, status: true }
+            select: { id: true, status: true, grandTotal: true, paymentMethod: true }
         });
-        const existingStatusMap = new Map(existingSales.map(s => [s.id, s.status]));
+        const existingSalesMap = new Map(existingSales.map(s => [s.id, s]));
 
         for (const sale of sales) {
             // 1. Sync User first (to satisfy FK)
@@ -318,22 +318,35 @@ router.post('/sales', async (req, res) => {
             }
         }
 
-        // Separate into new sales and status-changed voids
+        // Separate into new sales, status-changed voids, and updated completed sales
         const newSales: any[] = [];
         const newlyVoided: any[] = [];
+        const newlyUpdated: any[] = [];
         // 24 hour window to prevent timezone/clock-drift issues from blocking real-time notifications
         const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
         for (const sale of sales) {
-            const prevStatus = existingStatusMap.get(sale.id);
-            const isNew = !prevStatus; // not in DB yet
-            const isNowVoided = sale.status === 'VOIDED' && prevStatus === 'COMPLETED'; // status changed
+            const prevSale = existingSalesMap.get(sale.id);
+            const isNew = !prevSale;
+            
+            // Voided check: either it's voided in this sync and wasn't voided before, OR it is a brand-new voided invoice synced for the first time
+            const isNowVoided = sale.status === 'VOIDED' && 
+                                (!prevSale || prevSale.status !== 'VOIDED') && 
+                                new Date(sale.updatedAt || sale.createdAt) > twentyFourHoursAgo;
+
+            // Updated check: was COMPLETED, is still COMPLETED, but grandTotal, paymentMethod, or other key fields changed
+            const isUpdated = prevSale && 
+                              prevSale.status === 'COMPLETED' && 
+                              sale.status === 'COMPLETED' && 
+                              (prevSale.grandTotal !== sale.grandTotal || prevSale.paymentMethod !== sale.paymentMethod) &&
+                              new Date(sale.updatedAt || sale.createdAt) > twentyFourHoursAgo;
 
             if (isNew && sale.status === 'COMPLETED' && !sale.isHistorical && new Date(sale.createdAt) > twentyFourHoursAgo) {
                 newSales.push(sale);
-            }
-            if (isNowVoided) {
+            } else if (isNowVoided) {
                 newlyVoided.push(sale);
+            } else if (isUpdated) {
+                newlyUpdated.push(sale);
             }
         }
 
@@ -386,7 +399,29 @@ router.post('/sales', async (req, res) => {
                 console.log(`🚫 Void notification: Bill #${sale.billNo}`);
             }
 
-            console.log(`📢 Realtime: ${newSales.length} new sales, ${newlyVoided.length} voids processed.`);
+            // Notify for sales that were UPDATED
+            for (const sale of newlyUpdated) {
+                io.to(`shop_${shopId}`).emit('sale:updated', {
+                    id: sale.id,
+                    billNo: sale.billNo,
+                    timestamp: new Date()
+                });
+                await notificationService.send({
+                    shopId,
+                    type: 'invoice_updated',
+                    title: '✏️ Invoice Updated',
+                    message: `Bill #${sale.billNo} was updated. New Total: ₹${sale.grandTotal.toFixed(2)} (${sale.paymentMethod})`,
+                    referenceId: sale.id,
+                    metadata: {
+                        billNo: sale.billNo,
+                        amount: sale.grandTotal,
+                        paymentMode: sale.paymentMethod
+                    }
+                });
+                console.log(`✏️ Update notification: Bill #${sale.billNo}`);
+            }
+
+            console.log(`📢 Realtime: ${newSales.length} new, ${newlyVoided.length} voids, ${newlyUpdated.length} updates processed.`);
         } catch (e) {
             console.error("Socket/Push error:", e);
         }
@@ -755,6 +790,14 @@ router.post('/exchanges', async (req, res) => {
         const { exchanges } = req.body;
         if (!Array.isArray(exchanges)) return res.status(400).json({ error: 'Invalid data' });
 
+        // Load existing exchanges to avoid duplicate notifications on re-syncs
+        const exchangeIds = exchanges.map((e: any) => e.id).filter(Boolean);
+        const existingExchanges = await prisma.exchange.findMany({
+            where: { id: { in: exchangeIds } },
+            select: { id: true }
+        });
+        const existingExchangeIds = new Set(existingExchanges.map(e => e.id));
+
         let synced = 0;
         const skipped: string[] = [];
         for (const exchange of exchanges) {
@@ -769,6 +812,8 @@ router.post('/exchanges', async (req, res) => {
                 skipped.push(exchange.id);
                 continue;
             }
+
+            const isNewExchange = !existingExchangeIds.has(exchange.id);
 
             await prisma.exchangeItem.deleteMany({ where: { exchangeId: exchange.id } });
             await prisma.exchangePayment.deleteMany({ where: { exchangeId: exchange.id } });
@@ -816,6 +861,39 @@ router.post('/exchanges', async (req, res) => {
                     }))
                 });
             }
+
+            if (isNewExchange) {
+                try {
+                    const { getIO } = require('../socket');
+                    const { notificationService } = require('../services/notificationService');
+                    const io = getIO();
+                    const shopId = getShopId();
+
+                    // Emit live socket to refresh dashboard pages
+                    io.to(`shop_${shopId}`).emit('sale:updated', {
+                        id: sale.id,
+                        billNo: sale.billNo,
+                        timestamp: new Date()
+                    });
+
+                    // Send OS-level push notification
+                    await notificationService.send({
+                        shopId,
+                        type: 'invoice_updated',
+                        title: '🔄 Invoice Exchanged',
+                        message: `Bill #${sale.billNo} - Exchanged. Difference: ₹${exchange.differenceAmount.toFixed(2)}`,
+                        referenceId: sale.id,
+                        metadata: {
+                            billNo: sale.billNo,
+                            differenceAmount: exchange.differenceAmount,
+                            notes: exchange.notes
+                        }
+                    });
+                } catch (e) {
+                    console.error("Exchange notification trigger error:", e);
+                }
+            }
+
             synced++;
         }
 
@@ -832,6 +910,14 @@ router.post('/refunds', async (req, res) => {
         const { refunds } = req.body;
         if (!Array.isArray(refunds)) return res.status(400).json({ error: 'Invalid data' });
 
+        // Load existing refunds to avoid duplicate notifications on re-syncs
+        const refundIds = refunds.map((r: any) => r.id).filter(Boolean);
+        const existingRefunds = await prisma.refund.findMany({
+            where: { id: { in: refundIds } },
+            select: { id: true }
+        });
+        const existingRefundIds = new Set(existingRefunds.map(r => r.id));
+
         let synced = 0;
         const skipped: string[] = [];
         for (const refund of refunds) {
@@ -846,6 +932,8 @@ router.post('/refunds', async (req, res) => {
                 skipped.push(refund.id);
                 continue;
             }
+
+            const isNewRefund = !existingRefundIds.has(refund.id);
 
             await prisma.refundItem.deleteMany({ where: { refundId: refund.id } });
             await prisma.refundPayment.deleteMany({ where: { refundId: refund.id } });
@@ -896,6 +984,39 @@ router.post('/refunds', async (req, res) => {
                     }))
                 });
             }
+
+            if (isNewRefund) {
+                try {
+                    const { getIO } = require('../socket');
+                    const { notificationService } = require('../services/notificationService');
+                    const io = getIO();
+                    const shopId = getShopId();
+
+                    // Emit live socket to refresh dashboard pages
+                    io.to(`shop_${shopId}`).emit('sale:updated', {
+                        id: sale.id,
+                        billNo: sale.billNo,
+                        timestamp: new Date()
+                    });
+
+                    // Send OS-level push notification
+                    await notificationService.send({
+                        shopId,
+                        type: 'invoice_updated',
+                        title: '↩️ Invoice Refunded',
+                        message: `Bill #${sale.billNo} - Refunded ₹${refund.totalRefundAmount.toFixed(2)}`,
+                        referenceId: sale.id,
+                        metadata: {
+                            billNo: sale.billNo,
+                            refundAmount: refund.totalRefundAmount,
+                            reason: refund.reason
+                        }
+                    });
+                } catch (e) {
+                    console.error("Refund notification trigger error:", e);
+                }
+            }
+
             synced++;
         }
 

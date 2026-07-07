@@ -71,9 +71,13 @@ export function useDashboardStats() {
         }
 
         socket.on('sale:batch', onSaleEvent);
+        socket.on('sale:voided', onSaleEvent);
+        socket.on('sale:updated', onSaleEvent);
 
         return () => {
             socket.off('sale:batch', onSaleEvent);
+            socket.off('sale:voided', onSaleEvent);
+            socket.off('sale:updated', onSaleEvent);
         };
     }, [isConnected]);
 

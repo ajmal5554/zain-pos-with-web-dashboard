@@ -194,6 +194,7 @@ export default function Reports() {
         const refresh = () => { void loadReport(); };
         socket.on('sale:batch', refresh);
         socket.on('sale:voided', refresh);
+        socket.on('sale:updated', refresh);
         socket.on('notification', (n: any) => {
             if (n.type === 'invoice_deleted' || n.type === 'invoice_updated') refresh();
         });
