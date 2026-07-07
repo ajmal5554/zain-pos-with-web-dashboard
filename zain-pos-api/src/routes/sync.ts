@@ -153,6 +153,14 @@ router.post('/sales', async (req, res) => {
         }
         // ---------------------------------------------------------
 
+        // First, load existing statuses from DB to detect what actually changed BEFORE the upsert loop
+        const saleIds = sales.map((s: any) => s.id);
+        const existingSales = await prisma.sale.findMany({
+            where: { id: { in: saleIds } },
+            select: { id: true, status: true }
+        });
+        const existingStatusMap = new Map(existingSales.map(s => [s.id, s.status]));
+
         for (const sale of sales) {
             // 1. Sync User first (to satisfy FK)
             let finalUserId = sale.userId;
@@ -310,25 +318,18 @@ router.post('/sales', async (req, res) => {
             }
         }
 
-        // First, load existing statuses from DB to detect what actually changed
-        const saleIds = sales.map((s: any) => s.id);
-        const existingSales = await prisma.sale.findMany({
-            where: { id: { in: saleIds } },
-            select: { id: true, status: true }
-        });
-        const existingStatusMap = new Map(existingSales.map(s => [s.id, s.status]));
-
         // Separate into new sales and status-changed voids
         const newSales: any[] = [];
         const newlyVoided: any[] = [];
-        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+        // 24 hour window to prevent timezone/clock-drift issues from blocking real-time notifications
+        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
         for (const sale of sales) {
             const prevStatus = existingStatusMap.get(sale.id);
             const isNew = !prevStatus; // not in DB yet
             const isNowVoided = sale.status === 'VOIDED' && prevStatus === 'COMPLETED'; // status changed
 
-            if (isNew && sale.status === 'COMPLETED' && !sale.isHistorical && new Date(sale.createdAt) > oneHourAgo) {
+            if (isNew && sale.status === 'COMPLETED' && !sale.isHistorical && new Date(sale.createdAt) > twentyFourHoursAgo) {
                 newSales.push(sale);
             }
             if (isNowVoided) {
