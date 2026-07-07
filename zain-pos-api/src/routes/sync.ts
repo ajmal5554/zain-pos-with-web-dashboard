@@ -332,16 +332,16 @@ router.post('/sales', async (req, res) => {
             // Voided check: either it's voided in this sync and wasn't voided before, OR it is a brand-new voided invoice synced for the first time
             const isNowVoided = sale.status === 'VOIDED' && 
                                 (!prevSale || prevSale.status !== 'VOIDED') && 
-                                new Date(sale.updatedAt || sale.createdAt) > twentyFourHoursAgo;
+                                (sales.length === 1 || new Date(sale.updatedAt || sale.createdAt) > twentyFourHoursAgo);
 
             // Updated check: was COMPLETED, is still COMPLETED, but grandTotal, paymentMethod, or other key fields changed
             const isUpdated = prevSale && 
                               prevSale.status === 'COMPLETED' && 
                               sale.status === 'COMPLETED' && 
                               (prevSale.grandTotal !== sale.grandTotal || prevSale.paymentMethod !== sale.paymentMethod) &&
-                              new Date(sale.updatedAt || sale.createdAt) > twentyFourHoursAgo;
+                              (sales.length === 1 || new Date(sale.updatedAt || sale.createdAt) > twentyFourHoursAgo);
 
-            if (isNew && sale.status === 'COMPLETED' && !sale.isHistorical && new Date(sale.createdAt) > twentyFourHoursAgo) {
+            if (isNew && sale.status === 'COMPLETED' && !sale.isHistorical && (sales.length === 1 || new Date(sale.createdAt) > twentyFourHoursAgo)) {
                 newSales.push(sale);
             } else if (isNowVoided) {
                 newlyVoided.push(sale);

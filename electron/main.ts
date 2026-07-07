@@ -1905,12 +1905,24 @@ ipcMain.handle('sales:updatePayment', async (_event, { saleId, paymentData, user
             });
 
             // 4. Log Activity only when the persisted payment state changed
+            let createdAuditLog = null;
             if (paymentChanged) {
-                await tx.auditLog.create({
+                createdAuditLog = await tx.auditLog.create({
                     data: {
                         action: 'PAYMENT_UPDATE',
                         details: `Payment updated for Sale #${originalSale.billNo}. Old Method: ${originalSale.paymentMethod}, New Method: ${paymentData.paymentMethod}`,
                         userId: userId
+                    },
+                    include: {
+                        user: {
+                            select: {
+                                id: true,
+                                username: true,
+                                name: true,
+                                role: true,
+                                isActive: true
+                            }
+                        }
                     }
                 });
             }
@@ -1921,7 +1933,8 @@ ipcMain.handle('sales:updatePayment', async (_event, { saleId, paymentData, user
                 data: await tx.sale.findUnique({
                     where: { id: saleId },
                     include: { items: true, payments: true }
-                })
+                }),
+                auditLog: createdAuditLog
             };
         } catch (error: any) {
             console.error('Update Payment failed:', error);
@@ -1935,6 +1948,9 @@ ipcMain.handle('sales:updatePayment', async (_event, { saleId, paymentData, user
 
     if (result?.success && result?.data) {
         cloudSync.queueSale(result.data).catch(err => console.error('Queue Error:', err));
+        if (result.auditLog) {
+            cloudSync.syncAuditLogs([result.auditLog]).catch(err => console.error('Audit Sync Error:', err));
+        }
     }
     return result;
 });
@@ -2201,12 +2217,24 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
                 JSON.stringify(normalizePayments(originalSale.payments || [])) !== JSON.stringify(normalizePayments(normalizedSaleData.payments || []))
             );
 
+            let createdAuditLog = null;
             if (hasChanges) {
-                await tx.auditLog.create({
+                createdAuditLog = await tx.auditLog.create({
                     data: {
                         action: 'SALE_UPDATE',
                         details: `Sale #${originalSale.billNo} updated from POS. Old Total: Rs.${originalSale.grandTotal.toFixed(2)}, New Total: Rs.${updatedSale.grandTotal.toFixed(2)}`,
                         userId: userId
+                    },
+                    include: {
+                        user: {
+                            select: {
+                                id: true,
+                                username: true,
+                                name: true,
+                                role: true,
+                                isActive: true
+                            }
+                        }
                     }
                 });
             }
@@ -2217,7 +2245,8 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
                 data: await tx.sale.findUnique({
                     where: { id: saleId },
                     include: { items: true, payments: true }
-                })
+                }),
+                auditLog: createdAuditLog
             };
         } catch (error: any) {
             console.error('Update Sale failed:', error);
@@ -2231,6 +2260,9 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
 
     if (result?.success && result?.data) {
         cloudSync.queueSale(result.data).catch(err => console.error('Queue Error:', err));
+        if (result.auditLog) {
+            cloudSync.syncAuditLogs([result.auditLog]).catch(err => console.error('Audit Sync Error:', err));
+        }
     }
     return result;
 });
@@ -2759,20 +2791,34 @@ createSecureIpcHandler(
                 }
             });
 
-            await tx.auditLog.create({
+            const createdAuditLog = await tx.auditLog.create({
                 data: {
                     action: 'SALE_VOID',
                     details: `Sale #${sale.billNo} voided by ${user.role} user. Reason: ${reason || 'N/A'}. Stock for ${sale.items.length} item(s) returned to inventory.`,
                     userId
+                },
+                include: {
+                    user: {
+                        select: {
+                            id: true,
+                            username: true,
+                            name: true,
+                            role: true,
+                            isActive: true
+                        }
+                    }
                 }
             });
 
             logger.info('Sales', `Sale #${sale.billNo} voided by user ${userId} (${user.role})`);
-            return { success: true, data: updatedSale };
+            return { success: true, data: updatedSale, auditLog: createdAuditLog };
         });
 
         if (result?.success && result?.data) {
             cloudSync.queueSale(result.data).catch(err => console.error('Queue Error:', err));
+            if (result.auditLog) {
+                cloudSync.syncAuditLogs([result.auditLog]).catch(err => console.error('Audit Sync Error:', err));
+            }
         }
         return result;
     }
