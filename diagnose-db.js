@@ -3,8 +3,9 @@ const path = require('path');
 const fs = require('fs');
 
 async function main() {
-    const dbPath = path.join(__dirname, 'prisma', 'pos.db');
-    console.log('Checking Dev DB at:', dbPath);
+    const appData = process.env.APPDATA || (process.platform === 'darwin' ? process.env.HOME + '/Library/Application Support' : process.env.HOME + '/.config');
+    const dbPath = path.join(appData, 'zain-pos-v3', 'pos.db');
+    console.log('Checking Production DB at:', dbPath);
     console.log('Exists:', fs.existsSync(dbPath));
 
     if (!fs.existsSync(dbPath)) return;
@@ -18,14 +19,9 @@ async function main() {
     });
 
     try {
-        const count = await prisma.sale.count();
-        const latest = await prisma.sale.findFirst({
-            orderBy: { createdAt: 'desc' }
-        });
-        console.log('Total Sales:', count);
-        if (latest) {
-            console.log('Latest Sale Date:', latest.createdAt);
-            console.log('Latest Bill No:', latest.billNo);
+        const settings = await prisma.setting.findMany();
+        for (const s of settings) {
+            console.log(`Setting: key=${s.key}, value=${s.value}`);
         }
     } catch (e) {
         console.error('Error querying DB:', e.message);

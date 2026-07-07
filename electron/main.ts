@@ -1890,6 +1890,7 @@ ipcMain.handle('sales:updatePayment', async (_event, { saleId, paymentData, user
                     paymentMethod: paymentData.paymentMethod,
                     paidAmount: paymentData.paidAmount,
                     changeAmount: paymentData.changeAmount,
+                    isSynced: false
                 }
             });
 
@@ -2146,7 +2147,8 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
                     changeAmount: normalizedSaleData.changeAmount,
                     remarks: normalizedSaleData.remarks
                         ? `${normalizedSaleData.remarks}\n${updateTag}`
-                        : (originalSale.remarks ? `${originalSale.remarks}\n${updateTag}` : updateTag)
+                        : (originalSale.remarks ? `${originalSale.remarks}\n${updateTag}` : updateTag),
+                    isSynced: false
                 }
             });
 
@@ -2700,7 +2702,7 @@ createSecureIpcHandler(
     PermissionMiddleware.voidSale,
     async (_event, args: { saleId: string; reason: string; userId: string }, user) => {
         const { saleId, reason, userId } = args;
-        return await prisma.$transaction(async (tx: any) => {
+        const result = await prisma.$transaction(async (tx: any) => {
             const sale = await tx.sale.findUnique({
                 where: { id: saleId },
                 include: {
@@ -2735,11 +2737,25 @@ createSecureIpcHandler(
             }
 
             const voidTag = `[VOID ${new Date().toISOString()}] ${reason || 'No reason given'}`;
-            await tx.sale.update({
+            const updatedSale = await tx.sale.update({
                 where: { id: saleId },
                 data: {
                     status: 'VOIDED',
-                    remarks: sale.remarks ? `${sale.remarks}\n${voidTag}` : voidTag
+                    remarks: sale.remarks ? `${sale.remarks}\n${voidTag}` : voidTag,
+                    isSynced: false
+                },
+                include: {
+                    items: true,
+                    payments: true,
+                    user: {
+                        select: {
+                            id: true,
+                            username: true,
+                            name: true,
+                            role: true,
+                            isActive: true
+                        }
+                    }
                 }
             });
 
@@ -2752,8 +2768,13 @@ createSecureIpcHandler(
             });
 
             logger.info('Sales', `Sale #${sale.billNo} voided by user ${userId} (${user.role})`);
-            return { success: true };
+            return { success: true, data: updatedSale };
         });
+
+        if (result?.success && result?.data) {
+            cloudSync.queueSale(result.data).catch(err => console.error('Queue Error:', err));
+        }
+        return result;
     }
 );
 
