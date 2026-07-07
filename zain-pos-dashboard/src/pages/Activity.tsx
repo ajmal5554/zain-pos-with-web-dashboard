@@ -13,6 +13,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { socket } from '@/lib/socket';
 
 interface AuditLog {
     id: string;
@@ -101,6 +102,21 @@ export default function ActivityPage() {
 
     useEffect(() => {
         void fetchLogs();
+    }, []);
+
+    useEffect(() => {
+        if (isDemoModeEnabled()) return;
+        const refresh = () => { void fetchLogs(); };
+        socket.on('audit:new', refresh);
+        socket.on('sale:batch', refresh);
+        socket.on('sale:voided', refresh);
+        socket.on('sale:updated', refresh);
+        return () => {
+            socket.off('audit:new', refresh);
+            socket.off('sale:batch', refresh);
+            socket.off('sale:voided', refresh);
+            socket.off('sale:updated', refresh);
+        };
     }, []);
 
     const fetchLogs = async () => {

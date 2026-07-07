@@ -1094,7 +1094,23 @@ router.post('/audit', async (req, res) => {
         const { logs } = req.body;
         if (!Array.isArray(logs)) return res.status(400).json({ error: 'Invalid data' });
 
-        console.log(`ðŸ“¡ Cloud receiving ${logs.length} audit logs...`);
+        console.log(`📡 Cloud receiving ${logs.length} audit logs...`);
+
+        // Load existing logs to prevent duplicate notifications on re-syncs
+        const logIds = logs.map((l: any) => l.id).filter(Boolean);
+        const existingLogs = await prisma.auditLog.findMany({
+            where: { id: { in: logIds } },
+            select: { id: true }
+        });
+        const existingLogIds = new Set(existingLogs.map(l => l.id));
+
+        const newlyAddedSecurityLogs: any[] = [];
+
+        // Security relevant actions pattern matching
+        const SECURITY_ACTIONS = [
+            'VOID', 'DELETE', 'REFUND', 'RETURN', 'OVERRIDE', 'ADJUSTMENT', 
+            'PASSWORD', 'PERMISSION', 'DRAWER', 'SHIFT', 'RECONCILIATION'
+        ];
 
         for (const log of logs) {
             let finalUserId: string | null = null;
@@ -1139,6 +1155,8 @@ router.post('/audit', async (req, res) => {
                 }
             }
 
+            const isNewLog = !existingLogIds.has(log.id);
+
             await prisma.auditLog.upsert({
                 where: { id: log.id },
                 update: {},
@@ -1150,6 +1168,56 @@ router.post('/audit', async (req, res) => {
                     createdAt: new Date(log.createdAt)
                 }
             });
+
+            if (isNewLog) {
+                const isSecurityAction = SECURITY_ACTIONS.some(act => 
+                    log.action.toUpperCase().includes(act)
+                );
+                if (isSecurityAction) {
+                    newlyAddedSecurityLogs.push(log);
+                }
+            }
+        }
+
+        // Trigger notifications and sockets
+        if (newlyAddedSecurityLogs.length > 0) {
+            try {
+                const { getIO } = require('../socket');
+                const { notificationService } = require('../services/notificationService');
+                const io = getIO();
+                const shopId = getShopId();
+
+                // Emit live socket to refresh Activity Log page
+                io.to(`shop_${shopId}`).emit('audit:new', {
+                    count: newlyAddedSecurityLogs.length,
+                    timestamp: new Date()
+                });
+
+                for (const log of newlyAddedSecurityLogs) {
+                    const userName = log.user?.name || 'Staff';
+                    // Format action name nicely (e.g. SALE_VOID -> Sale Void)
+                    const formattedAction = log.action
+                        .replace(/_/g, ' ')
+                        .toLowerCase()
+                        .replace(/\b\w/g, (c: string) => c.toUpperCase());
+
+                    await notificationService.send({
+                        shopId,
+                        type: 'invoice_deleted', // standard type for dashboard alerts
+                        title: `⚠️ ${formattedAction}`,
+                        message: `${userName}: ${log.details}`,
+                        referenceId: log.id,
+                        metadata: {
+                            action: log.action,
+                            details: log.details,
+                            userName
+                        }
+                    });
+                    console.log(`📱 Audit notification triggered: ${log.action} - ${log.details}`);
+                }
+            } catch (e) {
+                console.error("Audit log notification trigger error:", e);
+            }
         }
 
         res.json({ success: true, count: logs.length });
