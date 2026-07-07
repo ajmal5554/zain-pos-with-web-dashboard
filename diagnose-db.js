@@ -19,9 +19,21 @@ async function main() {
     });
 
     try {
-        const settings = await prisma.setting.findMany();
-        for (const s of settings) {
-            console.log(`Setting: key=${s.key}, value=${s.value}`);
+        const latestVoided = await prisma.sale.findFirst({
+            where: { status: 'VOIDED' },
+            orderBy: { updatedAt: 'desc' }
+        });
+        if (latestVoided) {
+            console.log('Most Recently Updated Voided Sale in SQLite:', {
+                id: latestVoided.id,
+                billNo: latestVoided.billNo,
+                status: latestVoided.status,
+                createdAt: latestVoided.createdAt.toISOString(),
+                updatedAt: latestVoided.updatedAt.toISOString(),
+                isSynced: latestVoided.isSynced
+            });
+        } else {
+            console.log('No voided sales found in SQLite.');
         }
     } catch (e) {
         console.error('Error querying DB:', e.message);

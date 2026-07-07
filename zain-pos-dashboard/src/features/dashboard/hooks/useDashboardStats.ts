@@ -50,34 +50,46 @@ export function useDashboardStats() {
     useEffect(() => {
         if (isDemoModeEnabled() || !isConnected) return;
 
-        function onSaleEvent(data: { billNo?: string; grandTotal?: number; count?: number }) {
+        function onSaleBatch(data: { count?: number }) {
             latestFetchRef.current();
-
-            if (data.billNo) {
-                toast.success(`New sale recorded: Rs ${data.grandTotal ?? 0}`, {
-                    id: 'new-sale',
-                    duration: 3000,
-                    icon: 'Sale'
-                });
-                return;
-            }
-
             if (data.count) {
                 toast.success(`Synced ${data.count} new sales`, {
                     id: 'sync-batch',
-                    icon: 'Sync'
+                    icon: '🔄'
                 });
             }
         }
 
-        socket.on('sale:batch', onSaleEvent);
-        socket.on('sale:voided', onSaleEvent);
-        socket.on('sale:updated', onSaleEvent);
+        function onSaleVoided(data: { billNo?: string }) {
+            latestFetchRef.current();
+            if (data.billNo) {
+                toast.error(`Invoice Voided: Bill #${data.billNo}`, {
+                    id: `void-${data.billNo}`,
+                    duration: 4000,
+                    icon: '🚫'
+                });
+            }
+        }
+
+        function onSaleUpdated(data: { billNo?: string }) {
+            latestFetchRef.current();
+            if (data.billNo) {
+                toast.success(`Invoice Updated: Bill #${data.billNo}`, {
+                    id: `update-${data.billNo}`,
+                    duration: 4000,
+                    icon: '📝'
+                });
+            }
+        }
+
+        socket.on('sale:batch', onSaleBatch);
+        socket.on('sale:voided', onSaleVoided);
+        socket.on('sale:updated', onSaleUpdated);
 
         return () => {
-            socket.off('sale:batch', onSaleEvent);
-            socket.off('sale:voided', onSaleEvent);
-            socket.off('sale:updated', onSaleEvent);
+            socket.off('sale:batch', onSaleBatch);
+            socket.off('sale:voided', onSaleVoided);
+            socket.off('sale:updated', onSaleUpdated);
         };
     }, [isConnected]);
 
