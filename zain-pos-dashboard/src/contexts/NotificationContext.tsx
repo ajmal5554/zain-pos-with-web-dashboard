@@ -143,9 +143,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         socket.on('disconnect', reason => console.warn('[Socket] Disconnected:', reason));
 
         socket.on('notification', (notification: Notification) => {
-            const audio = new Audio('/sounds/notification.mp3');
+            const soundUrl = notification.type === 'sale' ? '/sounds/cash-register.wav' : '/sounds/notification.mp3';
+            const audio = new Audio(soundUrl);
             audio.play().catch(() => { });
-            toast(`${notification.title}: ${notification.message}`, { icon: '🔔', duration: 5000 });
+            toast(`${notification.title}: ${notification.message}`, { icon: '🛍️', duration: 5000 });
             setNotifications(prev => [notification, ...prev]);
             setUnreadCount(prev => prev + 1);
         });

@@ -40,6 +40,7 @@ self.addEventListener('push', function (event) {
         badge: data.badge || '/icons/badge.png',
         tag: tag,
         renotify: true,
+        sound: isSale ? '/sounds/cash-register.wav' : undefined,
         data: Object.assign({}, data.data || {}, {
             url: targetUrl,
             billNo: billNumber

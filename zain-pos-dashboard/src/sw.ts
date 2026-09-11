@@ -53,6 +53,7 @@ self.addEventListener('push', (event) => {
         badge: data.badge || '/icons/badge.png',
         tag,
         renotify: true,
+        sound: isSale ? '/sounds/cash-register.wav' : undefined,
         data: {
             url: targetUrl,
             billNo: billNumber,

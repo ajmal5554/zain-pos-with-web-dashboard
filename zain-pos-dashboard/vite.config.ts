@@ -15,7 +15,7 @@ export default defineConfig({
       srcDir: 'src',
       filename: 'sw.ts',
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/badge.png'],
+      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/badge.png', 'sounds/cash-register.wav', 'sounds/notification.mp3'],
       manifest: {
         name: 'Zain POS',
         short_name: 'Zain POS',
