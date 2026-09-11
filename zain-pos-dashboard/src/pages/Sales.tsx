@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Activity, AlertTriangle, Download, Eye, Receipt, Search, TrendingUp, X, FileText, Printer } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { invoiceService, type Invoice, type InvoiceParams } from '@/features/invoices/services/invoice.service';
@@ -27,6 +28,10 @@ import { socket } from '@/lib/socket';
 import { StatCard } from '@/components/shared/StatCard';
 
 export default function Sales() {
+    const [searchParams] = useSearchParams();
+    const billParam = searchParams.get('billNo');
+    const autoOpenedRef = useRef<string | null>(null);
+
     const [invoices, setInvoices] = useState<Invoice[]>([]);
     const [loading, setLoading] = useState(true);
     const { dateRange } = useDateFilter();
@@ -34,8 +39,8 @@ export default function Sales() {
     const [limit, setLimit] = useState(20);
     const [totalPages, setTotalPages] = useState(1);
     const [totalItems, setTotalItems] = useState(0);
-    const [search, setSearch] = useState('');
-    const [debouncedSearch, setDebouncedSearch] = useState('');
+    const [search, setSearch] = useState(() => billParam || '');
+    const [debouncedSearch, setDebouncedSearch] = useState(() => billParam || '');
     const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
     const [modalLoading, setModalLoading] = useState(false);
     const [exporting, setExporting] = useState(false);
@@ -66,6 +71,23 @@ export default function Sales() {
         const timer = setTimeout(() => setDebouncedSearch(search), 350);
         return () => clearTimeout(timer);
     }, [search]);
+
+    useEffect(() => {
+        if (billParam) {
+            setSearch(billParam);
+            setDebouncedSearch(billParam);
+        }
+    }, [billParam]);
+
+    useEffect(() => {
+        if (billParam && invoices.length > 0 && autoOpenedRef.current !== billParam) {
+            const match = invoices.find(inv => String(inv.billNo) === String(billParam));
+            if (match) {
+                autoOpenedRef.current = billParam;
+                void handleViewInvoice(match);
+            }
+        }
+    }, [billParam, invoices]);
 
     const fetchInvoices = useCallback(async () => {
         setLoading(true);

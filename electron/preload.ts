@@ -46,6 +46,8 @@ const api = {
             ipcRenderer.invoke('sales:updateSale', data),
         exchange: (data: any) => ipcRenderer.invoke('sales:exchange', data),
         refund: (data: any) => ipcRenderer.invoke('sales:refund', data),
+        getExchangeDetails: (data: { billNo?: string; saleId?: string; remarks?: string }) =>
+            ipcRenderer.invoke('sales:getExchangeDetails', data),
         voidSale: (data: { saleId: string, reason: string, userId: string }) =>
             ipcRenderer.invoke('sales:voidSale', data),
     },

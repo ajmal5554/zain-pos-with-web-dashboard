@@ -18,6 +18,8 @@ import {
 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import { showToast } from '../components/ui/Toast';
 import { ReceiptDesigner } from '../components/settings/ReceiptDesigner';
 import { LabelDesigner } from '../components/settings/LabelDesigner';
 import { db } from '../lib/db';
@@ -76,6 +78,9 @@ export const Settings: React.FC = () => {
     // Bulk sync state
     const [bulkSyncing, setBulkSyncing] = useState(false);
     const [bulkSyncProgress, setBulkSyncProgress] = useState({ total: 0, synced: 0, percentage: 0, message: '' });
+    const [showBulkSyncConfirm, setShowBulkSyncConfirm] = useState(false);
+    const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
+    const [showTaxUpdateConfirm, setShowTaxUpdateConfirm] = useState(false);
 
     useEffect(() => {
         loadSettings();
@@ -142,20 +147,20 @@ export const Settings: React.FC = () => {
                     logo: shopSettings.logo || '',
                 }
             }));
-            alert('Shop settings saved!');
+            showToast('Shop settings saved!', 'success');
         } catch (error) {
-            alert('Failed to save shop settings');
+            showToast('Failed to save shop settings', 'error');
         }
     };
 
     const handleSavePrinterSettings = async () => {
         // Validate printer names before saving
         if (!printerSettings.receiptPrinter?.trim()) {
-            alert('⚠️ Receipt Printer Name cannot be empty');
+            showToast('Receipt Printer Name cannot be empty', 'warning');
             return;
         }
         if (!printerSettings.labelPrinter?.trim()) {
-            alert('⚠️ Label Printer Name cannot be empty');
+            showToast('Label Printer Name cannot be empty', 'warning');
             return;
         }
 
@@ -169,16 +174,16 @@ export const Settings: React.FC = () => {
             if (!result?.success) {
                 throw new Error(result?.error || 'Failed to save printer settings');
             }
-            alert('✅ Printer settings saved successfully!');
+            showToast('Printer settings saved successfully!', 'success');
         } catch (error) {
-            alert(`❌ Failed to save printer settings: ${(error as Error).message}`);
+            showToast(`Failed to save printer settings: ${(error as Error).message}`, 'error');
         }
     };
 
     const handlePrintTestReceipt = async () => {
         try {
             if (!printerSettings.receiptPrinter?.trim()) {
-                alert('⚠️ Please set a Receipt Printer Name first');
+                showToast('Please set a Receipt Printer Name first', 'warning');
                 return;
             }
 
@@ -186,17 +191,31 @@ export const Settings: React.FC = () => {
                 shopName: shopSettings.shopName || 'Zain POS',
                 billNo: 'TEST-001',
                 date: new Date().toLocaleString(),
-                customer: 'Test Customer',
+                customerName: 'Test Customer',
+                customerPhone: '9876543210',
                 items: [
-                    { productName: 'Test Product 1', quantity: 1, rate: 100.00, amount: 100.00 },
-                    { productName: 'Test Product 2', quantity: 2, rate: 50.00, amount: 100.00 }
+                    {
+                        name: 'Test Item 1',
+                        quantity: 2,
+                        price: 150.00,
+                        total: 300.00,
+                        variant: 'Blue / L',
+                        barcode: 'TEST-001'
+                    },
+                    {
+                        name: 'Test Item 2',
+                        quantity: 1,
+                        price: 250.00,
+                        total: 250.00,
+                        variant: 'Red / M',
+                        barcode: 'TEST-002'
+                    }
                 ],
-                subtotal: 200.00,
-                discount: 20.00,
-                cgst: 16.20,
-                sgst: 16.20,
-                total: 212.40,
-                paid: 250.00,
+                subtotal: 550.00,
+                tax: 27.50,
+                discount: 15.00,
+                grandTotal: 562.50,
+                tendered: 600.00,
                 change: 37.60
             };
 
@@ -206,19 +225,19 @@ export const Settings: React.FC = () => {
             });
 
             if (result?.success) {
-                alert('✅ Test receipt sent to printer!');
+                showToast('Test receipt sent to printer!', 'success');
             } else {
                 throw new Error(result?.error || 'Unknown error');
             }
         } catch (error) {
-            alert(`❌ Failed to print test receipt: ${(error as Error).message}`);
+            showToast(`Failed to print test receipt: ${(error as Error).message}`, 'error');
         }
     };
 
     const handlePrintTestLabel = async () => {
         try {
             if (!printerSettings.labelPrinter?.trim()) {
-                alert('⚠️ Please set a Label Printer Name first');
+                showToast('Please set a Label Printer Name first', 'warning');
                 return;
             }
 
@@ -236,12 +255,12 @@ export const Settings: React.FC = () => {
             });
 
             if (result?.success) {
-                alert('✅ Test label sent to printer!');
+                showToast('Test label sent to printer!', 'success');
             } else {
                 throw new Error(result?.error || 'Unknown error');
             }
         } catch (error) {
-            alert(`❌ Failed to print test label: ${(error as Error).message}`);
+            showToast(`Failed to print test label: ${(error as Error).message}`, 'error');
         }
     };
 
@@ -253,12 +272,12 @@ export const Settings: React.FC = () => {
             });
 
             if (result?.success) {
-                alert(`✅ Receipt printer connection successful!\nPrinter: ${printerSettings.receiptPrinter}\nStatus: Connected`);
+                showToast(`Receipt printer connected: ${printerSettings.receiptPrinter}`, 'success');
             } else {
                 throw new Error(result?.error || 'Cannot connect to printer');
             }
         } catch (error) {
-            alert(`❌ Receipt printer connection failed: ${(error as Error).message}`);
+            showToast(`Receipt printer connection failed: ${(error as Error).message}`, 'error');
         }
     };
 
@@ -270,12 +289,12 @@ export const Settings: React.FC = () => {
             });
 
             if (result?.success) {
-                alert(`✅ Label printer connection successful!\nPrinter: ${printerSettings.labelPrinter}\nStatus: Connected`);
+                showToast(`Label printer connected: ${printerSettings.labelPrinter}`, 'success');
             } else {
                 throw new Error(result?.error || 'Cannot connect to printer');
             }
         } catch (error) {
-            alert(`❌ Label printer connection failed: ${(error as Error).message}`);
+            showToast(`Label printer connection failed: ${(error as Error).message}`, 'error');
         }
     };
 
@@ -300,9 +319,9 @@ export const Settings: React.FC = () => {
                 throw new Error(secretSaveResult?.error || 'Failed to save cloud sync secret');
             }
             await window.electronAPI.db.configureSync({ intervalMinutes: syncConfig.intervalMinutes });
-            alert('Cloud Sync configured successfully!');
+            showToast('Cloud Sync configured successfully!', 'success');
         } catch (error) {
-            alert('Failed to save sync settings');
+            showToast('Failed to save sync settings', 'error');
         } finally {
             setSyncing(false);
         }
@@ -332,13 +351,13 @@ export const Settings: React.FC = () => {
         }, 3000);
     };
 
-    const handleBulkSync = async () => {
+    const handleBulkSync = () => {
         if (bulkSyncing) return;
-        
-        if (!confirm('This will upload ALL unsynced data to the cloud. This may take several minutes. Continue?')) {
-            return;
-        }
+        setShowBulkSyncConfirm(true);
+    };
 
+    const executeBulkSync = async () => {
+        setShowBulkSyncConfirm(false);
         try {
             setBulkSyncing(true);
             setBulkSyncProgress({ total: 0, synced: 0, percentage: 0, message: 'Starting bulk sync...' });
@@ -348,14 +367,14 @@ export const Settings: React.FC = () => {
             });
 
             if (res.success) {
-                alert(res.message || 'Bulk sync completed successfully!');
+                showToast(res.message || 'Bulk sync completed successfully!', 'success');
                 setBulkSyncProgress({ total: 0, synced: 0, percentage: 100, message: 'Complete!' });
             } else {
-                alert('Bulk sync failed: ' + (res.error || 'Unknown error'));
+                showToast('Bulk sync failed: ' + (res.error || 'Unknown error'), 'error');
             }
         } catch (error: any) {
             console.error('Bulk sync error:', error);
-            alert('Bulk sync failed: ' + error.message);
+            showToast('Bulk sync failed: ' + error.message, 'error');
         } finally {
             setBulkSyncing(false);
             setTimeout(() => {
@@ -367,10 +386,10 @@ export const Settings: React.FC = () => {
     const handleSaveBackupConfig = async () => {
         try {
             const res = await window.electronAPI.db.configureBackup(backupConfig);
-            if (res.success) alert('Backup configuration updated!');
-            else alert(res.error || 'Failed to update backup config');
-        } catch (e) {
-            alert('Error saving backup config');
+            if (res.success) showToast('Backup configuration updated!', 'success');
+            else showToast(res.error || 'Failed to update backup config', 'error');
+        } catch (e: any) {
+            showToast('Error saving backup config: ' + (e?.message || ''), 'error');
         }
     };
 
@@ -667,22 +686,15 @@ export const Settings: React.FC = () => {
                                             <Button variant="outline" onClick={async () => {
                                                 const res = await window.electronAPI.db.backup();
                                                 if (res.success) {
-                                                    alert('Manual Backup Created!');
+                                                    showToast('Manual Backup Created!', 'success');
                                                 } else if (res.error) {
-                                                    alert(res.error);
+                                                    showToast(res.error, 'error');
                                                 }
                                             }} className="w-full">
                                                 Run Now
                                             </Button>
                                         </div>
-                                        <Button variant="outline" className="w-full text-red-500 border-red-200 hover:bg-red-50 transition-colors" onClick={async () => {
-                                            if (confirm('CRITICAL: This will overwrite ALL your current shop data with a backup file. Continue?')) {
-                                                const res = await window.electronAPI.db.restore();
-                                                if (res?.success === false && res?.error) {
-                                                    alert(res.error);
-                                                }
-                                            }
-                                        }}>
+                                        <Button variant="outline" className="w-full text-red-500 border-red-200 hover:bg-red-50 transition-colors" onClick={() => setShowRestoreConfirm(true)}>
                                             <RefreshCw className="w-4 h-4" />
                                             Restore from Backup
                                         </Button>
@@ -798,12 +810,12 @@ export const Settings: React.FC = () => {
                                             try {
                                                 const res = await window.electronAPI.data.downloadProductTemplate();
                                                 if (!res?.success) {
-                                                    alert(res?.error || 'Failed to download template.');
+                                                    showToast(res?.error || 'Failed to download template.', 'error');
                                                 } else if (res?.path) {
-                                                    alert(`Template saved:\n${res.path}`);
+                                                    showToast(`Template saved: ${res.path}`, 'success');
                                                 }
                                             } catch (e: any) {
-                                                alert(e?.message || 'Failed to download template.');
+                                                showToast(e?.message || 'Failed to download template.', 'error');
                                             }
                                         }}
                                     >
@@ -826,10 +838,10 @@ export const Settings: React.FC = () => {
                                             try {
                                                 const res = await window.electronAPI.data.importAll();
                                                 if (res?.success === false) {
-                                                    alert(res?.error || 'Import failed.');
+                                                    showToast(res?.error || 'Import failed.', 'error');
                                                 }
                                             } catch (e: any) {
-                                                alert(e?.message || 'Import failed.');
+                                                showToast(e?.message || 'Import failed.', 'error');
                                             }
                                         }}
                                     >
@@ -852,10 +864,10 @@ export const Settings: React.FC = () => {
                                             try {
                                                 const res = await window.electronAPI.data.restoreFromExcelBackup();
                                                 if (res?.success === false) {
-                                                    alert(res?.error || 'Restore failed.');
+                                                    showToast(res?.error || 'Restore failed.', 'error');
                                                 }
                                             } catch (e: any) {
-                                                alert(e?.message || 'Restore failed.');
+                                                showToast(e?.message || 'Restore failed.', 'error');
                                             }
                                         }}
                                     >
@@ -878,12 +890,12 @@ export const Settings: React.FC = () => {
                                             try {
                                                 const res = await window.electronAPI.data.exportAll();
                                                 if (!res?.success) {
-                                                    alert(res?.error || 'Export failed.');
+                                                    showToast(res?.error || 'Export failed.', 'error');
                                                 } else if (res?.path) {
-                                                    alert(`Export saved:\n${res.path}`);
+                                                    showToast(`Export saved: ${res.path}`, 'success');
                                                 }
                                             } catch (e: any) {
-                                                alert(e?.message || 'Export failed.');
+                                                showToast(e?.message || 'Export failed.', 'error');
                                             }
                                         }}
                                     >
@@ -902,18 +914,7 @@ export const Settings: React.FC = () => {
                                     <Button
                                         variant="danger"
                                         className="w-full mt-auto"
-                                        onClick={async () => {
-                                            if (confirm('Are you sure you want to set 5% tax to ALL products? This cannot be undone.')) {
-                                                try {
-                                                    const res = await db.products.updateMany({
-                                                        data: { taxRate: 5.0 }
-                                                    });
-                                                    alert(`Successfully updated ${res.count} products to 5% GST!`);
-                                                } catch (e) {
-                                                    alert('Error performing bulk update');
-                                                }
-                                            }
-                                        }}
+                                        onClick={() => setShowTaxUpdateConfirm(true)}
                                     >
                                         Apply 5% Tax to All
                                     </Button>
@@ -932,6 +933,62 @@ export const Settings: React.FC = () => {
                     )}
                 </div>
             </div>
+
+            {/* Bulk Sync Confirmation */}
+            <ConfirmDialog
+                isOpen={showBulkSyncConfirm}
+                title="Bulk Cloud Sync"
+                message="This will upload ALL unsynced data to the cloud. This may take several minutes. Do you want to continue?"
+                confirmText="Start Bulk Sync"
+                confirmVariant="primary"
+                onClose={() => setShowBulkSyncConfirm(false)}
+                onConfirm={executeBulkSync}
+            />
+
+            {/* Restore from Backup Confirmation */}
+            <ConfirmDialog
+                isOpen={showRestoreConfirm}
+                title="Restore from Backup"
+                message="CRITICAL: This will overwrite ALL your current shop data with the selected backup file. This cannot be undone. Are you sure you want to continue?"
+                confirmText="Overwrite & Restore"
+                confirmVariant="danger"
+                onClose={() => setShowRestoreConfirm(false)}
+                onConfirm={async () => {
+                    setShowRestoreConfirm(false);
+                    try {
+                        const res = await window.electronAPI.db.restore();
+                        if (res?.success === false && res?.error) {
+                            showToast(res.error, 'error');
+                        } else if (res?.success) {
+                            showToast('Database restored successfully! Reloading...', 'success');
+                            setTimeout(() => window.location.reload(), 1500);
+                        }
+                    } catch (e: any) {
+                        showToast(e?.message || 'Restore failed', 'error');
+                    }
+                }}
+            />
+
+            {/* Bulk Apply 5% GST Confirmation */}
+            <ConfirmDialog
+                isOpen={showTaxUpdateConfirm}
+                title="Apply 5% Tax to All Products"
+                message="Are you sure you want to set 5% tax to ALL products in your inventory? This cannot be undone."
+                confirmText="Apply 5% Tax"
+                confirmVariant="warning"
+                onClose={() => setShowTaxUpdateConfirm(false)}
+                onConfirm={async () => {
+                    setShowTaxUpdateConfirm(false);
+                    try {
+                        const res = await db.products.updateMany({
+                            data: { taxRate: 5.0 }
+                        });
+                        showToast(`Successfully updated ${res.count} products to 5% GST!`, 'success');
+                    } catch (e: any) {
+                        showToast('Error performing bulk update', 'error');
+                    }
+                }}
+            />
         </div>
     );
 };

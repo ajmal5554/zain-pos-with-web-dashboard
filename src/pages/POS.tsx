@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { CreditCard, Trash2, X, Plus, Minus, Scan, Save, Banknote, Smartphone, Printer, ArrowRight, CheckCircle, AlertTriangle } from 'lucide-react';
+import { CreditCard, Trash2, X, Plus, Minus, Scan, Save, Banknote, Smartphone, Printer, ArrowRight, CheckCircle, AlertTriangle, AlertCircle } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { useAuthStore } from '../store/authStore';
@@ -31,6 +31,24 @@ export const POS: React.FC = () => {
     const [processing, setProcessing] = useState(false);
     const [saleSuccess, setSaleSuccess] = useState(false);
     const [printError, setPrintError] = useState(false);
+
+    // Discount sanity check confirmation modal
+    const [showDiscountConfirm, setShowDiscountConfirm] = useState(false);
+    const [pendingSalePrint, setPendingSalePrint] = useState(true);
+
+    // Non-blocking notification toast (prevents window.alert app freezing in Electron)
+    const [notification, setNotification] = useState<{ id: number; message: string; type: 'error' | 'warning' | 'success' } | null>(null);
+    const notificationTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+    const showNotification = useCallback((message: string, type: 'error' | 'warning' | 'success' = 'warning') => {
+        if (notificationTimerRef.current) {
+            clearTimeout(notificationTimerRef.current);
+        }
+        setNotification({ id: Date.now(), message, type });
+        notificationTimerRef.current = setTimeout(() => {
+            setNotification(null);
+        }, 3200);
+    }, []);
 
     // Post-Sale Edit State
     const [currentSaleId, setCurrentSaleId] = useState<string | null>(null);
@@ -75,6 +93,9 @@ export const POS: React.FC = () => {
 
     useEffect(() => {
         return () => {
+            if (notificationTimerRef.current) {
+                clearTimeout(notificationTimerRef.current);
+            }
             // Preserve unfinished draft carts, but do not carry finalized/edit-loaded sales
             // into a fresh POS session after leaving this screen.
             if (currentSaleId) {
@@ -225,18 +246,17 @@ export const POS: React.FC = () => {
         setHasChanges(false);
         setOriginalSaleData(null);
         setSplitAmounts({ CASH: 0, CARD: 0, UPI: 0 });
+        setShowDiscountConfirm(false);
     }, [clearCart]);
 
     useEffect(() => {
         window.posLeaveGuard = {
             isActive: () => hasPostSaveUpdateWindow,
             confirmLeave: () => {
-                if (!hasPostSaveUpdateWindow) return true;
-                const confirmed = window.confirm(leaveWarningMessage);
-                if (confirmed) {
+                if (hasPostSaveUpdateWindow) {
                     releasePostSaveUpdateWindow();
                 }
-                return confirmed;
+                return true;
             }
         };
 
@@ -450,7 +470,7 @@ export const POS: React.FC = () => {
 
             if (variant) {
                 if (user?.role !== 'ADMIN' && !user?.permAddItem) {
-                    alert('Permission Denied: You are not allowed to add items to sales.');
+                    showNotification('Permission Denied: You are not allowed to add items to sales.', 'warning');
                     return;
                 }
                 addItem({
@@ -468,18 +488,20 @@ export const POS: React.FC = () => {
                 setBarcode('');
                 setTimeout(() => barcodeInputRef.current?.focus(), 20);
             } else {
-                alert(`Product not found! Scanned: "${barcode}"`);
+                showNotification(`Product not found! Scanned: "${trimmedBarcode}"`, 'error');
+                setBarcode('');
                 setTimeout(() => barcodeInputRef.current?.focus(), 20);
             }
         } catch (error) {
             console.error('Error adding product:', error);
+            showNotification('Error adding product to sale.', 'error');
             setTimeout(() => barcodeInputRef.current?.focus(), 20);
         }
     };
 
     const handleProductClick = (variant: any) => {
         if (user?.role !== 'ADMIN' && !user?.permAddItem) {
-            alert('Permission Denied: You are not allowed to add items to sales.');
+            showNotification('Permission Denied: You are not allowed to add items to sales.', 'warning');
             return;
         }
         addItem({
@@ -499,7 +521,7 @@ export const POS: React.FC = () => {
 
     const handleCheckout = () => {
         if (items.length === 0) {
-            alert('Cart is empty!');
+            showNotification('Cart is empty!', 'warning');
             return;
         }
         
@@ -508,11 +530,9 @@ export const POS: React.FC = () => {
         const total = getGrandTotal();
         
         if (discountValue > total) {
-            alert(
-                `Invalid discount!\n\n` +
-                `Discount: ₹${discountValue.toFixed(2)}\n` +
-                `Bill Total: ₹${total.toFixed(2)}\n\n` +
-                `Discount cannot exceed bill total.`
+            showNotification(
+                `Invalid discount! Discount (₹${discountValue.toFixed(2)}) cannot exceed bill total (₹${total.toFixed(2)}).`,
+                'error'
             );
             discountInputRef.current?.focus();
             return;
@@ -598,6 +618,7 @@ export const POS: React.FC = () => {
         setIsEditMode(false);
         setHasChanges(false);
         setOriginalSaleData(null);
+        setShowDiscountConfirm(false);
         loadNextBillNo();
         loadProducts(); // Refresh stock
         // Focus barcode
@@ -615,25 +636,40 @@ export const POS: React.FC = () => {
             const difference = Math.abs(splitTotal - finalTotal);
             
             if (difference > 0.01) {  // Allow 1 paisa rounding difference
-                alert(
-                    `Split payment error!\n\n` +
-                    `Bill Total: ₹${finalTotal.toFixed(2)}\n` +
-                    `Split Total: ₹${splitTotal.toFixed(2)}\n` +
-                    `Difference: ₹${difference.toFixed(2)}\n\n` +
-                    `Please adjust payment amounts.`
+                showNotification(
+                    `Split payment error: Split Total (₹${splitTotal.toFixed(2)}) does not match Bill Total (₹${finalTotal.toFixed(2)}). Difference: ₹${difference.toFixed(2)}`,
+                    'error'
                 );
                 return;
             }
         }
 
-        // Permission: Max Discount Check
-        if (user?.role !== 'ADMIN' && discount > (user?.maxDiscount || 0)) {
-            alert(`Permission Denied: Your maximum allowed discount is ₹${user?.maxDiscount || 0}. You tried to give ₹${discount}.`);
+        // Permission: Max Discount Check (percentage-based)
+        const subtotalForCheck = getSubtotal();
+        const discountPercent = subtotalForCheck > 0 ? roundCurrency((discount / subtotalForCheck) * 100) : 0;
+        const maxDiscountPercent = user?.maxDiscount || 0; // now stored as percentage
+
+        if (user?.role !== 'ADMIN' && maxDiscountPercent > 0 && discountPercent > maxDiscountPercent) {
+            const maxAllowedAmount = roundCurrency((subtotalForCheck * maxDiscountPercent) / 100);
+            showNotification(
+                `Permission Denied: Your max discount is ${maxDiscountPercent}% (₹${maxAllowedAmount.toFixed(0)} on this bill). You tried ${discountPercent.toFixed(1)}% (₹${discount.toFixed(0)}).`,
+                'warning'
+            );
             return;
         }
 
+        // Sanity check: warn for high discounts (>10% of bill) — requires explicit confirmation
+        const SANITY_THRESHOLD = 10; // percentage
+        if (discountPercent > SANITY_THRESHOLD && !showDiscountConfirm) {
+            setPendingSalePrint(shouldPrint);
+            setShowDiscountConfirm(true);
+            return;
+        }
+        // If we get here from the confirmation modal, close it
+        setShowDiscountConfirm(false);
+
         if (paid < finalTotal) {
-            alert('Paid amount is less than total!');
+            showNotification('Paid amount is less than total!', 'warning');
             return;
         }
 
@@ -648,7 +684,7 @@ export const POS: React.FC = () => {
                 // If Sale ID is present, we are in UPDATE mode
                 // Step 1: Check Permissions
                 if (user?.role !== 'ADMIN' && !user?.permEditSales) {
-                    alert("Unauthorized: You do not have permission to edit finalized invoices.");
+                    showNotification("Unauthorized: You do not have permission to edit finalized invoices.", 'warning');
                     setProcessing(false);
                     return;
                 }
@@ -777,7 +813,7 @@ export const POS: React.FC = () => {
             }
         } catch (error: any) {
             console.error('Failed to complete sale:', error);
-            alert(`Failed to complete sale: ${error.message || error}`);
+            showNotification(`Failed to complete sale: ${error.message || error}`, 'error');
         } finally {
             setProcessing(false);
         }
@@ -824,18 +860,42 @@ export const POS: React.FC = () => {
         }
     };
 
-    // Memoized filtered products for optimal performance
+    // Memoized filtered products for optimal performance (supports order-independent multi-word search, price, barcode, sku, category)
     const filteredProducts = useMemo(() => {
         if (!debouncedSearch) return products;
 
-        const query = debouncedSearch.toLowerCase().replace(/\s+/g, '');
+        const rawTrimmed = debouncedSearch.trim().toLowerCase();
+        if (!rawTrimmed) return products;
+
+        const tokens = rawTrimmed.split(/\s+/).filter(Boolean);
+        const compactQuery = rawTrimmed.replace(/[\s\-_]+/g, '');
 
         return products.filter((p) => {
-            const name = (p.product?.name || '').toLowerCase().replace(/\s+/g, '');
-            const barcode = (p.barcode || '').toLowerCase().replace(/\s+/g, '');
-            const sku = (p.sku || '').toLowerCase().replace(/\s+/g, '');
+            const name = p.product?.name || '';
+            const barcode = p.barcode || '';
+            const sku = p.sku || '';
+            const category = p.product?.category?.name || '';
+            const size = p.size || '';
+            const color = p.color || '';
+            const price = p.sellingPrice != null ? String(p.sellingPrice) : '';
+            const mrp = p.mrp != null ? String(p.mrp) : '';
 
-            return name.includes(query) || barcode.includes(query) || sku.includes(query);
+            const searchTarget = `${name} ${barcode} ${sku} ${category} ${size} ${color} ${price} ${mrp}`.toLowerCase();
+
+            // 1. Order-independent matching: every word entered must match somewhere in the product attributes
+            if (tokens.every((token) => searchTarget.includes(token))) {
+                return true;
+            }
+
+            // 2. Compact matching fallback: allows typing without spaces or hyphens (e.g. "shirt700" or "ts01")
+            if (compactQuery) {
+                const compactTarget = searchTarget.replace(/[\s\-_]+/g, '');
+                if (compactTarget.includes(compactQuery)) {
+                    return true;
+                }
+            }
+
+            return false;
         });
     }, [products, debouncedSearch]);
 
@@ -846,7 +906,101 @@ export const POS: React.FC = () => {
     const { subtotal, tax, finalTotal, change } = calculateTotals();
 
     return (
-        <div className="h-full flex flex-col bg-gray-50 dark:bg-gray-900" >
+        <div className="h-full flex flex-col bg-gray-50 dark:bg-gray-900 relative" >
+            {/* Non-blocking notification toast (prevents window.alert app freezing in Electron) */}
+            {notification && (
+                <div className="fixed top-3 left-1/2 -translate-x-1/2 z-50 pointer-events-auto transition-all animate-in fade-in slide-in-from-top-3 duration-200">
+                    <div className={`flex items-center gap-3 px-4 py-2.5 rounded-xl shadow-2xl border text-xs sm:text-sm font-semibold max-w-lg ${
+                        notification.type === 'error'
+                            ? 'bg-red-600 text-white border-red-700 shadow-red-500/30 ring-2 ring-red-400/30'
+                            : notification.type === 'success'
+                            ? 'bg-emerald-600 text-white border-emerald-700 shadow-emerald-500/30 ring-2 ring-emerald-400/30'
+                            : 'bg-amber-500 text-white border-amber-600 shadow-amber-500/30 ring-2 ring-amber-400/30'
+                    }`}>
+                        {notification.type === 'error' && <AlertCircle className="w-5 h-5 flex-shrink-0 animate-pulse" />}
+                        {notification.type === 'warning' && <AlertTriangle className="w-5 h-5 flex-shrink-0" />}
+                        {notification.type === 'success' && <CheckCircle className="w-5 h-5 flex-shrink-0" />}
+                        <span className="leading-snug">{notification.message}</span>
+                        <button
+                            type="button"
+                            onClick={() => setNotification(null)}
+                            className="p-1 hover:bg-white/20 rounded-lg transition-colors ml-1 text-white/80 hover:text-white"
+                        >
+                            <X className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                </div>
+            )}
+            {/* High Discount Sanity Check Confirmation Modal */}
+            {showDiscountConfirm && (() => {
+                const discVal = parseFloat(discountAmount) || 0;
+                const billTotal = getSubtotal();
+                const discPct = billTotal > 0 ? roundCurrency((discVal / billTotal) * 100) : 0;
+                const netPayable = roundCurrency(Math.max(0, billTotal - discVal));
+                return (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-150">
+                        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-md mx-4 overflow-hidden animate-in zoom-in-95 duration-200">
+                            {/* Header */}
+                            <div className="bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800 px-5 py-4 flex items-center gap-3">
+                                <div className="p-2 bg-amber-100 dark:bg-amber-900/40 rounded-full">
+                                    <AlertTriangle className="w-6 h-6 text-amber-600 dark:text-amber-400" />
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-gray-900 dark:text-white text-base">High Discount Warning</h3>
+                                    <p className="text-xs text-amber-700 dark:text-amber-400">This discount exceeds 10% of the bill total</p>
+                                </div>
+                            </div>
+
+                            {/* Body */}
+                            <div className="px-5 py-4 space-y-3">
+                                <div className="flex justify-between items-center bg-red-50 dark:bg-red-900/20 rounded-lg p-3 border border-red-200 dark:border-red-800">
+                                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Discount</span>
+                                    <span className="font-black text-red-600 dark:text-red-400 text-lg">₹{discVal.toFixed(0)} ({discPct.toFixed(1)}%)</span>
+                                </div>
+
+                                <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-3 border border-gray-200 dark:border-gray-700">
+                                    <div className="text-xs font-bold uppercase text-gray-400 mb-2">Bill Breakdown</div>
+                                    <div className="space-y-1 max-h-32 overflow-y-auto">
+                                        {items.map((item: any, i: number) => (
+                                            <div key={item.variantId} className="flex justify-between text-sm">
+                                                <span className="text-gray-600 dark:text-gray-400 truncate mr-2">
+                                                    {item.productName} {item.variantInfo && <span className="text-gray-400">({item.variantInfo})</span>} × {item.quantity}
+                                                </span>
+                                                <span className="font-mono font-medium text-gray-800 dark:text-gray-200 whitespace-nowrap">₹{(item.sellingPrice * item.quantity).toFixed(0)}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="border-t border-gray-200 dark:border-gray-700 mt-2 pt-2 flex justify-between">
+                                        <span className="text-xs font-bold text-gray-500 uppercase">Bill Total</span>
+                                        <span className="font-bold text-gray-800 dark:text-gray-200">₹{billTotal.toFixed(2)}</span>
+                                    </div>
+                                </div>
+
+                                <div className="flex justify-between items-center bg-green-50 dark:bg-green-900/20 rounded-lg p-3 border border-green-200 dark:border-green-800">
+                                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Net Payable After Discount</span>
+                                    <span className="font-black text-green-600 dark:text-green-400 text-lg">₹{netPayable.toFixed(0)}</span>
+                                </div>
+                            </div>
+
+                            {/* Actions */}
+                            <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 flex gap-3">
+                                <button
+                                    onClick={() => setShowDiscountConfirm(false)}
+                                    className="flex-1 px-4 py-2.5 rounded-lg border-2 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-bold text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-all"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={() => handleCompleteSale(pendingSalePrint)}
+                                    className="flex-1 px-4 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-bold text-sm shadow-md transition-all active:scale-[0.98]"
+                                >
+                                    Yes, Apply ₹{discVal.toFixed(0)} Discount
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
             {/* 1. TOP HEADER: Invoice Details */}
             <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center text-sm shadow-sm">
                 {/* Left: invoice fields — fills remaining space */}
@@ -882,9 +1036,28 @@ export const POS: React.FC = () => {
                         <input
                             ref={barcodeInputRef}
                             type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
                             value={barcode}
-                            onChange={(e) => setBarcode(e.target.value)}
-                            placeholder="Scan..."
+                            onChange={(e) => {
+                                // Strictly reject non-numeric characters (digits only)
+                                const digitsOnly = e.target.value.replace(/\D/g, '');
+                                setBarcode(digitsOnly);
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') return;
+                                // Allow navigation & edit keys
+                                if (['Backspace', 'Delete', 'Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+                                // Allow copy/paste/select-all combos
+                                if (e.ctrlKey || e.metaKey || e.altKey) return;
+                                // Allow function keys (F1, F2, etc.)
+                                if (e.key.startsWith('F') && e.key.length <= 3) return;
+                                // Block any non-digit character
+                                if (!/^\d$/.test(e.key)) {
+                                    e.preventDefault();
+                                }
+                            }}
+                            placeholder="Scan (numbers only)..."
                             className="input h-9 text-lg font-mono border-primary-500 ring-1 ring-primary-200"
                             autoFocus
                         />
@@ -953,7 +1126,7 @@ export const POS: React.FC = () => {
                                             <button
                                                 onClick={() => {
                                                     if (showPayment && items.length === 1) {
-                                                        alert('You cannot remove the last item from this sale here. Use New to cancel this bill or add another item first.');
+                                                        showNotification('You cannot remove the last item from this sale here. Use New to cancel this bill or add another item first.', 'warning');
                                                         return;
                                                     }
                                                     removeItem(item.variantId);

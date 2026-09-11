@@ -11,7 +11,8 @@ import { formatIndianCurrency } from '../lib/format';
 import { useAuthStore } from '../store/authStore';
 import { useCartStore } from '../store/cartStore';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, ArrowLeftRight, History, Minus, Plus, Undo2 } from 'lucide-react';
+import { showToast } from '../components/ui/Toast';
+import { AlertCircle, ArrowLeftRight, ArrowDownRight, ArrowUpRight, History, Minus, Plus, Undo2 } from 'lucide-react';
 
 type TimePeriod = 'day' | 'week' | 'month' | 'year' | 'all';
 
@@ -61,6 +62,36 @@ export const Sales: React.FC = () => {
     const [pageSize, setPageSize] = useState(50);
     const [totalRecords, setTotalRecords] = useState(0);
     const [expandedSaleId, setExpandedSaleId] = useState<string | null>(null);
+    const [exchangeDetailsMap, setExchangeDetailsMap] = useState<Record<string, any>>({});
+
+    const isExchangeRelatedSale = (sale: any): boolean =>
+        isReplacementSale(sale) ||
+        Boolean(sale?.exchanges && sale.exchanges.length > 0) ||
+        (sale?.remarks || '').includes('[EXCHANGE') ||
+        (sale?.remarks || '').includes('Replacement sale for Invoice');
+
+    const handleToggleExpand = async (sale: any) => {
+        if (expandedSaleId === sale.id) {
+            setExpandedSaleId(null);
+            return;
+        }
+        setExpandedSaleId(sale.id);
+
+        if (isExchangeRelatedSale(sale) && !exchangeDetailsMap[sale.id]) {
+            try {
+                const res = await window.electronAPI.sales.getExchangeDetails({
+                    billNo: sale.billNo,
+                    saleId: sale.id,
+                    remarks: sale.remarks
+                });
+                if (res.success && res.data) {
+                    setExchangeDetailsMap(prev => ({ ...prev, [sale.id]: res.data }));
+                }
+            } catch (err) {
+                console.error('Failed to load exchange details for bill #' + sale.billNo, err);
+            }
+        }
+    };
     const [shopSettings, setShopSettings] = useState<any>(null);
     const { user } = useAuthStore();
     const navigate = useNavigate();
@@ -309,7 +340,7 @@ export const Sales: React.FC = () => {
             .filter((item: any) => item.quantity > 0);
 
         if (preparedReturnItems.length === 0) {
-            alert('No returnable items left for this bill.');
+            showToast('No returnable items left for this bill.', 'warning');
             return;
         }
 
@@ -362,7 +393,7 @@ export const Sales: React.FC = () => {
             .filter((item: any) => item.quantity > 0);
 
         if (preparedReturnItems.length === 0) {
-            alert('No refundable items left for this bill.');
+            showToast('No refundable items left for this bill.', 'warning');
             return;
         }
 
@@ -415,26 +446,26 @@ export const Sales: React.FC = () => {
 
             const result = await window.electronAPI.sales.exchange(exchangeData);
             if (result.success) {
-                alert("Exchange Processed Successfully!");
+                showToast("Exchange Processed Successfully!", 'success');
                 setIsExchangeModalOpen(false);
                 loadSales();
             } else {
                 throw new Error(result.error);
             }
         } catch (error: any) {
-            alert(`Exchange Failed: ${error.message}`);
+            showToast(`Exchange Failed: ${error.message}`, 'error');
         }
     };
 
     const submitRefund = async () => {
         if (!selectedSaleForAction || !refundReason.trim()) {
-            alert("Reason is mandatory for refunds.");
+            showToast("Reason is mandatory for refunds.", 'warning');
             return;
         }
 
         const itemsToRefund = returnItems.filter(it => it.refundQty > 0);
         if (itemsToRefund.length === 0) {
-            alert("Select at least one item to refund.");
+            showToast("Select at least one item to refund.", 'warning');
             return;
         }
 
@@ -458,14 +489,14 @@ export const Sales: React.FC = () => {
 
             const result = await window.electronAPI.sales.refund(refundData);
             if (result.success) {
-                alert("Refund Processed!");
+                showToast("Refund Processed!", 'success');
                 setIsRefundModalOpen(false);
                 loadSales();
             } else {
                 throw new Error(result.error);
             }
         } catch (error: any) {
-            alert(`Refund Failed: ${error.message}`);
+            showToast(`Refund Failed: ${error.message}`, 'error');
         }
     };
 
@@ -487,9 +518,10 @@ export const Sales: React.FC = () => {
 
             loadSales();
             setVoidSaleId(null);
+            showToast('Sale voided successfully', 'success');
         } catch (error: any) {
             console.error('Failed to void sale:', error);
-            alert(`Failed to void sale: ${error.message || error}`);
+            showToast(`Failed to void sale: ${error.message || error}`, 'error');
         } finally {
             setIsVoiding(false);
         }
@@ -539,7 +571,7 @@ export const Sales: React.FC = () => {
         if (method === 'SPLIT') {
             const sum = (parseFloat(cashAmount) || 0) + (parseFloat(upiAmount) || 0) + (parseFloat(cardAmount) || 0);
             if (Math.abs(sum - totalAmount) > 0.01) {
-                alert(`Total must equal ${formatIndianCurrency(totalAmount)}. Current sum: ${formatIndianCurrency(sum)}`);
+                showToast(`Total must equal ${formatIndianCurrency(totalAmount)}. Current sum: ${formatIndianCurrency(sum)}`, 'warning');
                 return;
             }
             nextPaidAmount = sum;
@@ -573,8 +605,9 @@ export const Sales: React.FC = () => {
                 payments: result.data.payments
             } : s));
             setIsPaymentModalOpen(false);
+            showToast('Payment method updated successfully', 'success');
         } catch (error: any) {
-            alert(`Failed: ${error.message}`);
+            showToast(`Failed: ${error.message}`, 'error');
         } finally {
             setIsSavingPayment(false);
         }
@@ -616,7 +649,7 @@ export const Sales: React.FC = () => {
             await printService.printReceipt(receiptData);
         } catch (error) {
             console.error('Failed to print receipt:', error);
-            alert('Failed to print receipt');
+            showToast('Failed to print receipt', 'error');
         }
     };
 
@@ -935,7 +968,7 @@ export const Sales: React.FC = () => {
                                         <tr className={`group ${sale.status === 'VOIDED' ? 'bg-red-50 dark:bg-red-900/10' : ''} ${expandedSaleId === sale.id ? 'bg-primary-50/30' : ''}`}>
                                             <td>
                                                 <button
-                                                    onClick={() => setExpandedSaleId(expandedSaleId === sale.id ? null : sale.id)}
+                                                    onClick={() => handleToggleExpand(sale)}
                                                     className="p-1.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                                                 >
                                                     {expandedSaleId === sale.id ? (
@@ -994,6 +1027,17 @@ export const Sales: React.FC = () => {
                                                             (isExchangeGeneratedSale && user?.permEditSales)
                                                         );
 
+                                                    // For replacement bills, show compound badge with the fresh payment method
+                                                    let displayMethod = sale.paymentMethod;
+                                                    if (isExchangeGeneratedSale && sale.payments && sale.payments.length > 0) {
+                                                        const freshPayments = sale.payments.filter((p: any) => p.paymentMode !== 'EXCHANGE_CREDIT' && p.paymentMode !== 'EXCHANGE');
+                                                        if (freshPayments.length > 0) {
+                                                            displayMethod = `EXCH + ${freshPayments.map((p: any) => p.paymentMode).join('+')}`;
+                                                        } else {
+                                                            displayMethod = 'EXCHANGE';
+                                                        }
+                                                    }
+
                                                     return (
                                                         <button
                                                             onClick={() => canUpdatePayment && handleUpdatePayment(sale.id, sale.paymentMethod)}
@@ -1002,7 +1046,7 @@ export const Sales: React.FC = () => {
                                                             title={canUpdatePayment ? 'Click to update payment method' : 'No permission to update payment method'}
                                                         >
                                                             <span className={`badge py-1 px-3 ${sale.status === 'VOIDED' ? 'bg-red-100 text-red-800' : 'badge-info shadow-sm'} ${updatingPayment === sale.id ? 'opacity-50' : ''}`}>
-                                                                {updatingPayment === sale.id ? '...' : (sale.status === 'VOIDED' ? 'VOIDED' : sale.paymentMethod)}
+                                                                {updatingPayment === sale.id ? '...' : (sale.status === 'VOIDED' ? 'VOIDED' : displayMethod)}
                                                             </span>
                                                         </button>
                                                     );
@@ -1058,35 +1102,167 @@ export const Sales: React.FC = () => {
                                                 <td colSpan={9} className="p-0 border-b border-gray-200 dark:border-gray-700">
                                                     <div className="px-14 py-4 bg-white dark:bg-gray-800/40 m-2 rounded-xl border border-gray-100 dark:border-gray-700 shadow-inner">
                                                         {(() => {
-                                                            const replacementBillNo = extractReplacementBillNo(sale.remarks);
-                                                            const exchangedItems = (sale.exchanges || []).flatMap((ex: any) => (ex.items || []).filter((ei: any) => ei.returnedItemId));
+                                                            const exData = exchangeDetailsMap[sale.id];
+                                                            const isExchange = isExchangeRelatedSale(sale);
+                                                            if (!isExchange && !exData) return null;
 
-                                                            if (exchangedItems.length === 0 && !replacementBillNo) return null;
+                                                            const origBillNo = exData?.originalBillNo || (isReplacementSale(sale) ? sale.remarks?.match(/Invoice #(\d+)/)?.[1] : sale.billNo);
+                                                            const replBillNo = exData?.replacementBillNo || extractReplacementBillNo(sale.remarks) || (isReplacementSale(sale) ? sale.billNo : null);
+
+                                                            const returnedItems = (exData?.returnedItems && exData.returnedItems.length > 0)
+                                                                ? exData.returnedItems
+                                                                : (sale.exchanges || []).flatMap((ex: any) =>
+                                                                    (ex.items || []).filter((ei: any) => ei.returnedItemId).map((ei: any) => ({
+                                                                        name: ei.returnedItemName || 'Returned Item',
+                                                                        variant: ei.returnedVariantInfo || '',
+                                                                        qty: ei.returnedQty || 1,
+                                                                        amount: Math.abs(ei.priceDiff || 0)
+                                                                    }))
+                                                                );
+
+                                                            const replacementItems = (exData?.replacementItems && exData.replacementItems.length > 0)
+                                                                ? exData.replacementItems
+                                                                : (isReplacementSale(sale)
+                                                                    ? sale.items.map((it: any) => ({
+                                                                        name: it.productName,
+                                                                        variant: it.variantInfo || '',
+                                                                        qty: it.quantity,
+                                                                        amount: it.total || (it.sellingPrice * it.quantity)
+                                                                    }))
+                                                                    : (sale.exchanges || []).flatMap((ex: any) =>
+                                                                        (ex.items || []).filter((ei: any) => ei.newItemId).map((ei: any) => ({
+                                                                            name: ei.newItemName || 'Added Item',
+                                                                            variant: ei.newVariantInfo || '',
+                                                                            qty: ei.newQty || 1,
+                                                                            amount: ei.priceDiff || 0
+                                                                        }))
+                                                                    )
+                                                                );
+
+                                                            const returnedTotal = exData?.returnedTotal ?? returnedItems.reduce((s: number, i: any) => s + (i.amount || 0), 0);
+                                                            const replacementTotal = exData?.replacementTotal ?? replacementItems.reduce((s: number, i: any) => s + (i.amount || 0), 0);
+                                                            const diffAmount = exData?.differenceAmount ?? (replacementTotal - returnedTotal);
+
+                                                            if (returnedItems.length === 0 && replacementItems.length === 0) return null;
 
                                                             return (
-                                                                <div className="mb-5 rounded-xl border border-orange-200 bg-orange-50/80 px-4 py-3">
-                                                                    <div className="text-[10px] font-black uppercase tracking-widest text-orange-700 mb-2">
-                                                                        Exchange Details
+                                                                <div className="mb-6 rounded-xl border border-indigo-100 dark:border-indigo-900/30 bg-indigo-50/40 dark:bg-indigo-950/10 p-4 space-y-4">
+                                                                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-indigo-100/80 dark:border-indigo-900/40 pb-3">
+                                                                        <div className="flex items-center gap-2">
+                                                                            <span className="p-1 rounded-md bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300">
+                                                                                <ArrowLeftRight className="w-3.5 h-3.5" />
+                                                                            </span>
+                                                                            <span className="text-[11px] font-black uppercase tracking-wider text-indigo-900 dark:text-indigo-300">
+                                                                                Item Exchange Breakdown
+                                                                            </span>
+                                                                        </div>
+                                                                        <div className="flex items-center gap-2 font-mono text-xs">
+                                                                            {origBillNo && (
+                                                                                <span className="px-2 py-0.5 rounded-md bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 font-semibold">
+                                                                                    Original: #{origBillNo}
+                                                                                </span>
+                                                                            )}
+                                                                            {replBillNo && (
+                                                                                <span className="px-2 py-0.5 rounded-md bg-indigo-600 text-white font-semibold">
+                                                                                    Replacement: #{replBillNo}
+                                                                                </span>
+                                                                            )}
+                                                                        </div>
                                                                     </div>
-                                                                    <div className="space-y-1 text-xs text-orange-900">
-                                                                        {exchangedItems.map((exchangeItem: any, idx: number) => {
-                                                                            return (
-                                                                                <div key={`ex-detail-${idx}`} className="flex items-center justify-between gap-3">
-                                                                                    <span>
-                                                                                        Returned {exchangeItem.returnedItemName || 'Item'} x{exchangeItem.returnedQty || 0}
-                                                                                        {exchangeItem.newItemName ? ` -> Added ${exchangeItem.newItemName} x${exchangeItem.newQty || 0}` : ''}
-                                                                                    </span>
-                                                                                    <span className="font-bold">
-                                                                                        {exchangeItem.priceDiff < 0 ? formatIndianCurrency(Math.abs(exchangeItem.priceDiff)) : ''}
-                                                                                    </span>
-                                                                                </div>
-                                                                            );
-                                                                        })}
-                                                                        {replacementBillNo && (
-                                                                            <div className="pt-1 font-bold text-orange-700">
-                                                                                Replacement billed separately on Bill #{replacementBillNo}
+
+                                                                    {/* Returned Items Section */}
+                                                                    {returnedItems.length > 0 && (
+                                                                        <div className="space-y-1.5">
+                                                                            <div className="flex items-center justify-between text-xs font-bold text-rose-600 dark:text-rose-400">
+                                                                                <span className="flex items-center gap-1.5">
+                                                                                    <ArrowDownRight className="w-4 h-4" /> Items Returned by Customer
+                                                                                </span>
+                                                                                <span className="font-mono">Total: {formatIndianCurrency(returnedTotal)}</span>
                                                                             </div>
-                                                                        )}
+                                                                            <div className="space-y-1">
+                                                                                {returnedItems.map((item: any, idx: number) => (
+                                                                                    <div
+                                                                                        key={`ret-${idx}`}
+                                                                                        className="p-2.5 rounded-lg bg-rose-50/80 dark:bg-rose-950/20 border border-rose-200/80 dark:border-rose-900/40 text-xs flex justify-between items-center text-rose-950 dark:text-rose-200"
+                                                                                    >
+                                                                                        <div>
+                                                                                            <span className="font-bold">{item.name}</span>
+                                                                                            {item.variant && <span className="text-[10px] opacity-75 ml-1.5">({item.variant})</span>}
+                                                                                            <span className="ml-2 font-mono text-[11px] font-semibold bg-rose-100 dark:bg-rose-900/50 px-1.5 py-0.5 rounded">
+                                                                                                x{item.qty}
+                                                                                            </span>
+                                                                                        </div>
+                                                                                        <span className="font-mono font-bold text-rose-700 dark:text-rose-300">
+                                                                                            {formatIndianCurrency(item.amount)}
+                                                                                        </span>
+                                                                                    </div>
+                                                                                ))}
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+
+                                                                    {/* Replacement Items Given Section */}
+                                                                    {replacementItems.length > 0 && (
+                                                                        <div className="space-y-1.5">
+                                                                            <div className="flex items-center justify-between text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                                                                                <span className="flex items-center gap-1.5">
+                                                                                    <ArrowUpRight className="w-4 h-4" /> New Items Given in Exchange
+                                                                                </span>
+                                                                                <span className="font-mono">Total: {formatIndianCurrency(replacementTotal)}</span>
+                                                                            </div>
+                                                                            <div className="space-y-1">
+                                                                                {replacementItems.map((item: any, idx: number) => (
+                                                                                    <div
+                                                                                        key={`repl-${idx}`}
+                                                                                        className="p-2.5 rounded-lg bg-emerald-50/80 dark:bg-emerald-950/20 border border-emerald-200/80 dark:border-emerald-900/40 text-xs flex justify-between items-center text-emerald-950 dark:text-emerald-200"
+                                                                                    >
+                                                                                        <div>
+                                                                                            <span className="font-bold">{item.name}</span>
+                                                                                            {item.variant && <span className="text-[10px] opacity-75 ml-1.5">({item.variant})</span>}
+                                                                                            <span className="ml-2 font-mono text-[11px] font-semibold bg-emerald-100 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded">
+                                                                                                x{item.qty}
+                                                                                            </span>
+                                                                                        </div>
+                                                                                        <span className="font-mono font-bold text-emerald-700 dark:text-emerald-300">
+                                                                                            {formatIndianCurrency(item.amount)}
+                                                                                        </span>
+                                                                                    </div>
+                                                                                ))}
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+
+                                                                    {/* Financial Summary */}
+                                                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                                                                        <div className="p-3 rounded-xl bg-white dark:bg-gray-800/80 border border-gray-200/80 dark:border-gray-700/80 shadow-sm">
+                                                                            <span className="text-[10px] uppercase font-bold text-gray-400 block tracking-wider mb-1">
+                                                                                Returned Credit
+                                                                            </span>
+                                                                            <span className="font-mono font-bold text-gray-800 dark:text-gray-200 text-sm">
+                                                                                {formatIndianCurrency(returnedTotal)}
+                                                                            </span>
+                                                                        </div>
+                                                                        <div className="p-3 rounded-xl bg-white dark:bg-gray-800/80 border border-gray-200/80 dark:border-gray-700/80 shadow-sm">
+                                                                            <span className="text-[10px] uppercase font-bold text-gray-400 block tracking-wider mb-1">
+                                                                                New Goods Value
+                                                                            </span>
+                                                                            <span className="font-mono font-bold text-gray-800 dark:text-gray-200 text-sm">
+                                                                                {formatIndianCurrency(replacementTotal)}
+                                                                            </span>
+                                                                        </div>
+                                                                        <div className="p-3 rounded-xl bg-white dark:bg-gray-800/80 border border-gray-200/80 dark:border-gray-700/80 shadow-sm">
+                                                                            <span className="text-[10px] uppercase font-bold text-gray-400 block tracking-wider mb-1">
+                                                                                Difference Settled
+                                                                            </span>
+                                                                            <span className={`font-mono font-black text-sm ${
+                                                                                diffAmount > 0 ? 'text-emerald-600' :
+                                                                                diffAmount < 0 ? 'text-blue-600' : 'text-gray-600'
+                                                                            }`}>
+                                                                                {diffAmount > 0 ? `+${formatIndianCurrency(diffAmount)} (Paid)` :
+                                                                                 diffAmount < 0 ? `-${formatIndianCurrency(Math.abs(diffAmount))} (Refunded)` :
+                                                                                 '₹0.00 (Equal Value)'}
+                                                                            </span>
+                                                                        </div>
                                                                     </div>
                                                                 </div>
                                                             );
@@ -1151,16 +1327,27 @@ export const Sales: React.FC = () => {
                                                             ))}
                                                         </div>
 
-                                                        {sale.remarks && (
-                                                            <div className="mt-4 p-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-900/10 dark:border-amber-800">
-                                                                <div className="text-[10px] font-black uppercase tracking-widest text-amber-700 dark:text-amber-400">
-                                                                    Invoice Flag
+                                                        {(() => {
+                                                            if (!sale.remarks) return null;
+                                                            const cleanRemarks = sale.remarks
+                                                                .split('\n')
+                                                                .filter((line: string) => !line.trim().startsWith('Replacement sale for Invoice') && !line.trim().startsWith('[EXCHANGE'))
+                                                                .join('\n')
+                                                                .trim();
+
+                                                            if (!cleanRemarks) return null;
+
+                                                            return (
+                                                                <div className="mt-4 p-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-900/10 dark:border-amber-800">
+                                                                    <div className="text-[10px] font-black uppercase tracking-widest text-amber-700 dark:text-amber-400">
+                                                                        Invoice Flag
+                                                                    </div>
+                                                                    <div className="mt-1 text-xs text-amber-800 dark:text-amber-300 whitespace-pre-line">
+                                                                        {cleanRemarks}
+                                                                    </div>
                                                                 </div>
-                                                                <div className="mt-1 text-xs text-amber-800 dark:text-amber-300 whitespace-pre-line">
-                                                                    {sale.remarks}
-                                                                </div>
-                                                            </div>
-                                                        )}
+                                                            );
+                                                        })()}
 
                                                         {/* Payment Breakdown (Especially for SPLIT) */}
                                                         <div className="mt-6 pt-4 border-t border-gray-100 dark:border-gray-700">
@@ -1174,6 +1361,7 @@ export const Sales: React.FC = () => {
                                                                 ]).map((p: any, i: number) => {
                                                                     let Icon = Banknote;
                                                                     let colorClass = "bg-green-50 text-green-700 border-green-200";
+                                                                    let label = p.paymentMode;
 
                                                                     if (p.paymentMode === 'CARD') {
                                                                         Icon = CreditCard;
@@ -1181,12 +1369,19 @@ export const Sales: React.FC = () => {
                                                                     } else if (p.paymentMode === 'UPI') {
                                                                         Icon = QrCode;
                                                                         colorClass = "bg-purple-50 text-purple-700 border-purple-200";
+                                                                    } else if (p.paymentMode === 'EXCHANGE_CREDIT') {
+                                                                        Icon = ArrowLeftRight;
+                                                                        colorClass = "bg-amber-50 text-amber-700 border-amber-200";
+                                                                        label = 'EXCHANGE CREDIT';
+                                                                    } else if (p.paymentMode === 'EXCHANGE') {
+                                                                        Icon = ArrowLeftRight;
+                                                                        colorClass = "bg-amber-50 text-amber-700 border-amber-200";
                                                                     }
 
                                                                     return (
                                                                         <div key={i} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border shadow-sm ${colorClass}`}>
                                                                             <Icon className="w-3.5 h-3.5" />
-                                                                            <span className="text-xs font-black uppercase tracking-wider">{p.paymentMode}</span>
+                                                                            <span className="text-xs font-black uppercase tracking-wider">{label}</span>
                                                                             <span className="text-sm font-black text-gray-900 dark:text-gray-100">{formatIndianCurrency(p.amount)}</span>
                                                                         </div>
                                                                     );
@@ -1242,20 +1437,51 @@ export const Sales: React.FC = () => {
                                                                 </div>
                                                             </div>
                                                         )}
-                                                        <div className="mt-4 pt-3 border-t border-dashed border-gray-200 dark:border-gray-700 flex justify-end items-center gap-8">
-                                                            <div className="text-right">
-                                                                <div className="text-[10px] font-bold text-gray-400 uppercase">Subtotal</div>
-                                                                <div className="text-sm font-bold">{formatIndianCurrency(sale.subtotal)}</div>
-                                                            </div>
-                                                            <div className="text-right">
-                                                                <div className="text-[10px] font-bold text-gray-400 uppercase">Discount</div>
-                                                                <div className="text-sm font-bold text-orange-600">{formatIndianCurrency(sale.discount)}</div>
-                                                            </div>
-                                                            <div className="text-right">
-                                                                <div className="text-[10px] font-bold text-gray-400 uppercase text-primary-600">Total Paid</div>
-                                                                <div className="text-lg font-black text-primary-600">{formatIndianCurrency(sale.grandTotal)}</div>
-                                                            </div>
-                                                        </div>
+                                                        {(() => {
+                                                            const isReplacement = isReplacementSale(sale);
+                                                            const exchangeCreditPayment = (sale.payments || []).find((p: any) => p.paymentMode === 'EXCHANGE_CREDIT');
+                                                            const exchangeCreditAmount = exchangeCreditPayment ? Number(exchangeCreditPayment.amount || 0) : 0;
+                                                            const storeCreditMatch = (sale.remarks || '').match(/STORE CREDIT NOTE: Rs\.([\.\d]+)/i);
+                                                            const storeCreditAmount = storeCreditMatch ? parseFloat(storeCreditMatch[1]) : 0;
+                                                            const freshPaid = (sale.payments || []).filter((p: any) => p.paymentMode !== 'EXCHANGE_CREDIT' && p.paymentMode !== 'EXCHANGE').reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0);
+
+                                                            return (
+                                                                <div className="mt-4 pt-3 border-t border-dashed border-gray-200 dark:border-gray-700 flex flex-col gap-2">
+                                                                    <div className="flex justify-end items-center gap-8">
+                                                                        <div className="text-right">
+                                                                            <div className="text-[10px] font-bold text-gray-400 uppercase">Subtotal</div>
+                                                                            <div className="text-sm font-bold">{formatIndianCurrency(sale.subtotal)}</div>
+                                                                        </div>
+                                                                        <div className="text-right">
+                                                                            <div className="text-[10px] font-bold text-gray-400 uppercase">Discount</div>
+                                                                            <div className="text-sm font-bold text-orange-600">{formatIndianCurrency(sale.discount)}</div>
+                                                                        </div>
+                                                                        {isReplacement && exchangeCreditAmount > 0 && (
+                                                                            <div className="text-right">
+                                                                                <div className="text-[10px] font-bold text-amber-600 uppercase">Exchange Credit Applied</div>
+                                                                                <div className="text-sm font-bold text-amber-600">-{formatIndianCurrency(exchangeCreditAmount)}</div>
+                                                                            </div>
+                                                                        )}
+                                                                        <div className="text-right">
+                                                                            <div className={`text-[10px] font-bold uppercase ${isReplacement ? 'text-emerald-600' : 'text-primary-600'}`}>
+                                                                                {isReplacement ? 'Net Paid Today' : 'Total Paid'}
+                                                                            </div>
+                                                                            <div className={`text-lg font-black ${isReplacement ? 'text-emerald-600' : 'text-primary-600'}`}>
+                                                                                {formatIndianCurrency(isReplacement && exchangeCreditAmount > 0 ? freshPaid : sale.grandTotal)}
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                    {storeCreditAmount > 0 && (
+                                                                        <div className="flex justify-end">
+                                                                            <div className="px-3 py-1.5 rounded-lg bg-yellow-50 border border-yellow-200 text-yellow-800 text-xs font-bold flex items-center gap-2">
+                                                                                <AlertCircle className="w-3.5 h-3.5" />
+                                                                                Store Credit Note Issued: {formatIndianCurrency(storeCreditAmount)} (for future use)
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })()}
                                                     </div>
                                                 </td>
                                             </tr>

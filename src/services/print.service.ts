@@ -206,8 +206,9 @@ export function generateReceiptHtml(
           <div style="${styleStr}; font-size: 11px;">
             <table style="width: 100%; font-size: inherit;">
               <tr><td align="right">Total Items:</td><td align="right" width="80">${data.items.length}</td></tr>
-              <tr><td align="right">Taxable Amount (Excl. GST):</td><td align="right" width="80">${basicAmt.toFixed(2)}</td></tr>
+              <tr style="font-weight: bold;"><td align="right">Gross Subtotal (incl. GST):</td><td align="right" width="80">${(data.subtotal || 0).toFixed(2)}</td></tr>
               <tr><td align="right">Discount:</td><td align="right" width="80">${data.discount.toFixed(2)}</td></tr>
+              <tr><td align="right">Taxable Amount (Excl. GST):</td><td align="right" width="80">${basicAmt.toFixed(2)}</td></tr>
               <tr><td align="right">CGST @2.5%:</td><td align="right" width="80">${(data.cgst || 0).toFixed(2)}</td></tr>
               <tr><td align="right">SGST @2.5%:</td><td align="right" width="80">${(data.sgst || 0).toFixed(2)}</td></tr>
               <tr style="font-weight: bold; font-size: 14px; border-top: 1px dashed #000;">

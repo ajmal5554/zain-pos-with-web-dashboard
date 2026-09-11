@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ShieldCheck, Search, RefreshCw, IndianRupee } from 'lucide-react';
+import { ShieldCheck, Search, RefreshCw, Percent } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { useAuthStore } from '../store/authStore';
@@ -191,7 +191,7 @@ export const Permissions: React.FC = () => {
                                 <th className="px-4 py-4 text-center">Bulk Update</th>
                                 <th className="px-4 py-4 text-center">Back-Date</th>
                                 <th className="px-4 py-4 text-center">Insights</th>
-                                <th className="px-6 py-4 text-right">Discount (₹)</th>
+                                <th className="px-6 py-4 text-right">Max Disc (%)</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200 dark:divide-dark-border">
@@ -224,14 +224,21 @@ export const Permissions: React.FC = () => {
                                         ) : (
                                             <div className="flex items-center justify-end gap-2">
                                                 <div className="relative w-24">
-                                                    <IndianRupee className="absolute left-2 top-2.5 w-3 h-3 text-gray-400" />
                                                     <input
                                                         type="number"
-                                                        value={user.maxDiscount}
+                                                        min={0}
+                                                        max={100}
+                                                        value={user.maxDiscount || ''}
                                                         onChange={(e) => updateMaxDiscount(user.id, e.target.value)}
-                                                        onBlur={(e) => saveMaxDiscount(user.id, parseFloat(e.target.value) || 0)}
-                                                        className="w-full pl-6 pr-2 py-1.5 text-sm font-mono text-right bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded focus:ring-1 focus:ring-blue-500 outline-none"
+                                                        onBlur={(e) => {
+                                                            const val = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
+                                                            updateMaxDiscount(user.id, String(val));
+                                                            saveMaxDiscount(user.id, val);
+                                                        }}
+                                                        placeholder="0"
+                                                        className="w-full pl-2 pr-7 py-1.5 text-sm font-mono text-right bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded focus:ring-1 focus:ring-blue-500 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                                     />
+                                                    <Percent className="absolute right-2 top-2.5 w-3 h-3 text-gray-400" />
                                                 </div>
                                             </div>
                                         )}
@@ -252,10 +259,10 @@ export const Permissions: React.FC = () => {
                     </div>
                 </div>
                 <div className="p-4 bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-900/30 rounded-lg flex items-start gap-3">
-                    <IndianRupee className="w-5 h-5 text-amber-600 dark:text-amber-500 mt-0.5" />
+                    <Percent className="w-5 h-5 text-amber-600 dark:text-amber-500 mt-0.5" />
                     <div className="text-sm text-amber-800 dark:text-amber-400">
                         <p className="font-bold">Discount Allowance</p>
-                        <p>The "Max Discount" field limits the maximum amount a cashier can manually deduct from a customer's total bill.</p>
+                        <p>The "Max Disc (%)" field limits the maximum discount percentage a cashier can apply on any bill. For example, setting 10 means the cashier cannot give more than 10% off the bill total.</p>
                     </div>
                 </div>
             </div>

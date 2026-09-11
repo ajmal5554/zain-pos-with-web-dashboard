@@ -227,7 +227,8 @@ router.get('/audit-payment-modes', async (req, res) => {
                 billNo: true,
                 grandTotal: true,
                 paymentMethod: true,
-                createdAt: true
+                createdAt: true,
+                payments: true
             },
             orderBy: { createdAt: 'desc' }
         });
@@ -241,8 +242,26 @@ router.get('/audit-payment-modes', async (req, res) => {
 
         sales.forEach(sale => {
             const mode = sale.paymentMethod || 'CASH';
-            if (!audit[mode]) audit[mode] = [];
-            audit[mode].push(sale);
+
+            if (mode === 'SPLIT' && sale.payments && sale.payments.length > 0) {
+                // For split payments, attribute each portion to its correct bucket
+                sale.payments.forEach((payment: any) => {
+                    const pMode = (payment.paymentMode || 'CASH').toUpperCase();
+                    if (!audit[pMode]) audit[pMode] = [];
+                    audit[pMode].push({
+                        id: sale.id,
+                        billNo: sale.billNo,
+                        grandTotal: payment.amount,
+                        paymentMethod: pMode,
+                        createdAt: sale.createdAt,
+                        isSplit: true,
+                        originalTotal: sale.grandTotal
+                    });
+                });
+            } else {
+                if (!audit[mode]) audit[mode] = [];
+                audit[mode].push(sale);
+            }
         });
 
         res.json(audit);

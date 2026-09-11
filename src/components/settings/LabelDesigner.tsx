@@ -6,6 +6,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, Trash2, Type, Image as ImageIcon, Layout, AlignLeft, AlignCenter, AlignRight, Bold, Columns, RotateCcw, Download, Upload } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { useAuthStore } from '../../store/authStore';
 
 // --- Types ---
@@ -96,6 +97,7 @@ export const LabelDesigner: React.FC = () => {
         shopName: 'Zain POS',
     });
     const [stickConfig, setStickConfig] = useState(DEFAULT_STICKER_CONFIG);
+    const [showResetConfirm, setShowResetConfirm] = useState(false);
 
     const selectedBlock = blocks.find(b => b.id === selectedId) || null;
 
@@ -204,11 +206,7 @@ export const LabelDesigner: React.FC = () => {
     };
 
     const handleReset = () => {
-        if (confirm('Are you sure you want to reset to the default layout? All changes will be lost.')) {
-            setBlocks(DEFAULT_LABEL_LAYOUT);
-            setStickConfig(DEFAULT_STICKER_CONFIG);
-            setSelectedId(null);
-        }
+        setShowResetConfirm(true);
     };
 
     const handleExportTemplate = () => {
@@ -727,6 +725,21 @@ export const LabelDesigner: React.FC = () => {
                     </div>
                 </div>
             </div>
+
+            <ConfirmDialog
+                isOpen={showResetConfirm}
+                title="Reset Label Layout"
+                message="Are you sure you want to reset to the default layout? All unsaved modifications will be lost."
+                confirmText="Reset Layout"
+                confirmVariant="warning"
+                onClose={() => setShowResetConfirm(false)}
+                onConfirm={() => {
+                    setBlocks(DEFAULT_LABEL_LAYOUT);
+                    setStickConfig(DEFAULT_STICKER_CONFIG);
+                    setSelectedId(null);
+                    setShowResetConfirm(false);
+                }}
+            />
         </div>
     );
 };

@@ -643,8 +643,33 @@ export const Dashboard: React.FC = () => {
 
                     <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 lg:gap-6 auto-rows-fr">
                         {['CASH', 'UPI', 'CARD'].map((mode) => {
-                            const modeSales = todayStats.sales.filter((s: any) => s.status === 'COMPLETED' && s.paymentMethod === mode);
-                            const modeTotal = modeSales.reduce((sum: number, s: any) => sum + s.grandTotal, 0);
+                            const modeEntries = (todayStats.sales || [])
+                                .filter((s: any) => s.status === 'COMPLETED')
+                                .flatMap((s: any) => {
+                                    if (s.paymentMethod === 'SPLIT' && s.payments && s.payments.length > 0) {
+                                        return s.payments
+                                            .filter((p: any) => (p.paymentMode || '').toUpperCase() === mode)
+                                            .map((p: any) => ({
+                                                id: `${s.id}-${p.id || mode}`,
+                                                billNo: s.billNo,
+                                                createdAt: s.createdAt,
+                                                amount: Number(p.amount || 0),
+                                                isSplit: true,
+                                                originalTotal: s.grandTotal
+                                            }));
+                                    } else if ((s.paymentMethod || 'CASH').toUpperCase() === mode) {
+                                        return [{
+                                            id: s.id,
+                                            billNo: s.billNo,
+                                            createdAt: s.createdAt,
+                                            amount: Number(s.grandTotal || 0),
+                                            isSplit: false,
+                                            originalTotal: s.grandTotal
+                                        }];
+                                    }
+                                    return [];
+                                });
+                            const modeTotal = modeEntries.reduce((sum: number, tx: any) => sum + tx.amount, 0);
 
                             return (
                                 <div key={mode} className="flex flex-col h-full overflow-hidden rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-dark-card shadow-sm">
@@ -672,12 +697,21 @@ export const Dashboard: React.FC = () => {
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-gray-50 dark:divide-gray-800">
-                                                {modeSales.length > 0 ? (
-                                                    modeSales.map((sale: any) => (
-                                                        <tr key={sale.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors">
-                                                            <td className="px-4 py-3 font-mono text-gray-900 dark:text-white">#{sale.billNo}</td>
-                                                            <td className="px-4 py-3 text-xs text-gray-500 text-nowrap">{formatDate(new Date(sale.createdAt), 'hh:mm a')}</td>
-                                                            <td className="px-4 py-3 text-right font-bold text-gray-900 dark:text-white">{formatIndianCurrency(sale.grandTotal)}</td>
+                                                {modeEntries.length > 0 ? (
+                                                    modeEntries.map((tx: any) => (
+                                                        <tr key={tx.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors">
+                                                            <td className="px-4 py-3 font-mono text-gray-900 dark:text-white">
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <span>#{tx.billNo}</span>
+                                                                    {tx.isSplit && (
+                                                                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                                                                            Split
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                            </td>
+                                                            <td className="px-4 py-3 text-xs text-gray-500 text-nowrap">{formatDate(new Date(tx.createdAt), 'hh:mm a')}</td>
+                                                            <td className="px-4 py-3 text-right font-bold text-gray-900 dark:text-white">{formatIndianCurrency(tx.amount)}</td>
                                                         </tr>
                                                     ))
                                                 ) : (
@@ -689,7 +723,7 @@ export const Dashboard: React.FC = () => {
                                         </table>
                                     </div>
                                     <div className="p-3 bg-gray-50/50 dark:bg-gray-800/50 text-[10px] font-bold text-gray-400 text-center uppercase border-t border-gray-100 dark:border-gray-800">
-                                        Count: {modeSales.length} Invoices
+                                        Count: {modeEntries.length} Invoices
                                     </div>
                                 </div>
                             );

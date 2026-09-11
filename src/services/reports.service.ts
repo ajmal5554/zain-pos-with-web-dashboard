@@ -17,6 +17,7 @@ export const reportsService = {
             },
             include: {
                 items: true,
+                payments: true,
                 user: {
                     select: {
                         name: true,
@@ -30,7 +31,15 @@ export const reportsService = {
         const totalDiscount = sales.reduce((sum: number, sale: any): number => sum + sale.discount, 0);
 
         const paymentBreakdown = sales.reduce((acc: Record<string, number>, sale: any): Record<string, number> => {
-            acc[sale.paymentMethod] = (acc[sale.paymentMethod] || 0) + sale.grandTotal;
+            if (sale.paymentMethod === 'SPLIT' && sale.payments && sale.payments.length > 0) {
+                sale.payments.forEach((payment: any) => {
+                    const mode = (payment.paymentMode || 'CASH').toUpperCase();
+                    acc[mode] = (acc[mode] || 0) + Number(payment.amount || 0);
+                });
+            } else {
+                const mode = (sale.paymentMethod || 'CASH').toUpperCase();
+                acc[mode] = (acc[mode] || 0) + Number(sale.grandTotal || 0);
+            }
             return acc;
         }, {} as Record<string, number>);
 
@@ -67,6 +76,7 @@ export const reportsService = {
             },
             include: {
                 items: true,
+                payments: true,
             },
         });
 

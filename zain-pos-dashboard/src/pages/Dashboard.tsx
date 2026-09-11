@@ -211,9 +211,12 @@ export default function DashboardPage() {
                                         {txList.map((tx: any) => {
                                             const time = new Date(tx.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
                                             return (
-                                                <div key={tx.id} className="flex items-center justify-between px-4 py-2 hover:bg-muted/30 transition-colors">
+                                                <div key={`${tx.id}-${tx.paymentMethod ?? method}`} className="flex items-center justify-between px-4 py-2 hover:bg-muted/30 transition-colors">
                                                     <div>
-                                                        <p className="text-xs font-medium">#{tx.billNo ?? tx.id}</p>
+                                                        <p className="text-xs font-medium">
+                                                            #{tx.billNo ?? tx.id}
+                                                            {tx.isSplit && <span className="ml-1 text-[9px] bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 px-1 py-0.5 rounded">Split</span>}
+                                                        </p>
                                                         <p className="text-[10px] text-muted-foreground">{time}</p>
                                                     </div>
                                                     <span className="text-xs font-semibold">₹{Number(tx.grandTotal ?? 0).toLocaleString('en-IN')}</span>

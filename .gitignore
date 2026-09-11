@@ -34,3 +34,9 @@ prisma/dev.db-journal
 .env
 .env.local
 .env.production
+
+# Local diagnostic scripts
+check-*.ts
+test-*.ts
+get-local-users.ts
+

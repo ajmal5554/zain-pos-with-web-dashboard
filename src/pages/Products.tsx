@@ -10,6 +10,8 @@ import { useAuthStore } from '../store/authStore';
 
 import { StickerPrintModal } from '../components/ui/StickerPrintModal';
 import { Skeleton } from '../components/ui/Skeleton';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import { showToast } from '../components/ui/Toast';
 
 export const Products: React.FC = () => {
     type NumberInput = number | '';
@@ -111,14 +113,18 @@ export const Products: React.FC = () => {
             setLoading(true);
 
             let where: any = { isActive: true };
-            if (searchQuery) {
+            const tokens = searchQuery.trim().split(/\s+/).filter(Boolean);
+            if (tokens.length > 0) {
                 where = {
                     isActive: true,
-                    OR: [
-                        { name: { contains: searchQuery } },
-                        { variants: { some: { barcode: { contains: searchQuery }, isActive: true } } },
-                        { variants: { some: { sku: { contains: searchQuery }, isActive: true } } }
-                    ]
+                    AND: tokens.map((token) => ({
+                        OR: [
+                            { name: { contains: token } },
+                            { category: { name: { contains: token } } },
+                            { variants: { some: { barcode: { contains: token }, isActive: true } } },
+                            { variants: { some: { sku: { contains: token }, isActive: true } } }
+                        ]
+                    }))
                 };
             }
 
@@ -142,50 +148,11 @@ export const Products: React.FC = () => {
         }
     };
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
+    const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
+    const [duplicateNameConfirmOpen, setDuplicateNameConfirmOpen] = useState(false);
 
+    const executeSaveProduct = async () => {
         try {
-            // 1. Check for duplicates within the current form
-            const formBarcodes = formData.variants.map(v => v.barcode).filter(Boolean);
-            const hasDraftDuplicates = new Set(formBarcodes).size !== formBarcodes.length;
-            if (hasDraftDuplicates) {
-                alert('Duplicate barcodes found within your new item variants. Each variant must have a unique code.');
-                return;
-            }
-
-            // 2. Cross-check against the entire database
-            for (const variant of formData.variants) {
-                if (variant.barcode) {
-                    const existing = await db.productVariants.findFirst({
-                        where: {
-                            barcode: variant.barcode,
-                            ...(editingProduct ? { productId: { not: editingProduct.id } } : {})
-                        },
-                        include: { product: true }
-                    });
-
-                    if (existing) {
-                        alert(`CRITICAL ERROR: The code "${variant.barcode}" is already assigned to "${existing.product.name}". \n\nPlease use a different code to avoid merging items accidentally.`);
-                        return;
-                    }
-                }
-            }
-
-            // 3. Cross-check for duplicate product name
-            const existingName = await db.products.findFirst({
-                where: {
-                    name: { equals: formData.name },
-                    ...(editingProduct ? { id: { not: editingProduct.id } } : {})
-                }
-            });
-
-            if (existingName) {
-                if (!confirm(`An item named "${formData.name}" already exists in your inventory. \n\nAre you sure you want to create a duplicate entry? It is recommended to use unique names for better reporting.`)) {
-                    return;
-                }
-            }
-
             if (editingProduct) {
                 // Update existing product
                 await db.products.update({
@@ -265,9 +232,60 @@ export const Products: React.FC = () => {
             setShowModal(false);
             resetForm();
             loadData();
+            showToast(editingProduct ? 'Product updated successfully!' : 'Product created successfully!', 'success');
         } catch (error) {
             console.error('Failed to save product:', error);
-            alert('Failed to save product');
+            showToast('Failed to save product: ' + (error as Error).message, 'error');
+        }
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+
+        try {
+            // 1. Check for duplicates within the current form
+            const formBarcodes = formData.variants.map(v => v.barcode).filter(Boolean);
+            const hasDraftDuplicates = new Set(formBarcodes).size !== formBarcodes.length;
+            if (hasDraftDuplicates) {
+                showToast('Duplicate barcodes found within your new item variants. Each variant must have a unique code.', 'error');
+                return;
+            }
+
+            // 2. Cross-check against the entire database
+            for (const variant of formData.variants) {
+                if (variant.barcode) {
+                    const existing = await db.productVariants.findFirst({
+                        where: {
+                            barcode: variant.barcode,
+                            ...(editingProduct ? { productId: { not: editingProduct.id } } : {})
+                        },
+                        include: { product: true }
+                    });
+
+                    if (existing) {
+                        showToast(`The code "${variant.barcode}" is already assigned to "${existing.product.name}". Please use a unique barcode.`, 'error', 5000);
+                        return;
+                    }
+                }
+            }
+
+            // 3. Cross-check for duplicate product name
+            const existingName = await db.products.findFirst({
+                where: {
+                    name: { equals: formData.name },
+                    ...(editingProduct ? { id: { not: editingProduct.id } } : {})
+                }
+            });
+
+            if (existingName) {
+                setDuplicateNameConfirmOpen(true);
+                return;
+            }
+
+            await executeSaveProduct();
+        } catch (error) {
+            console.error('Failed to save product:', error);
+            showToast('Failed to save product', 'error');
         }
     };
 
@@ -289,27 +307,31 @@ export const Products: React.FC = () => {
         setFormData({ ...formData, variants: newVariants });
     };
 
-    const handleDeleteProduct = async (product: any) => {
-        if (!confirm(`Are you sure you want to delete "${product.name}"? This will also delete all variants and cannot be undone.`)) {
-            return;
-        }
+    const handleDeleteProduct = (product: any) => {
+        setDeleteTarget(product);
+    };
 
+    const confirmDeleteProduct = async () => {
+        if (!deleteTarget) return;
         try {
             // Soft delete to avoid breaking sales history
             await db.productVariants.updateMany({
-                where: { productId: product.id },
+                where: { productId: deleteTarget.id },
                 data: { isActive: false }
             });
 
             await db.products.update({
-                where: { id: product.id },
+                where: { id: deleteTarget.id },
                 data: { isActive: false }
             });
 
             loadData();
+            showToast(`Product "${deleteTarget.name}" deleted successfully`, 'success');
         } catch (error) {
             console.error('Failed to delete product:', error);
-            alert('Failed to delete product. Error: ' + (error as Error).message);
+            showToast('Failed to delete product. Error: ' + (error as Error).message, 'error');
+        } finally {
+            setDeleteTarget(null);
         }
     };
 
@@ -649,6 +671,31 @@ export const Products: React.FC = () => {
                 product={selectedProduct}
                 variant={selectedVariant}
             />
-        </div >
+
+            {/* Delete Product Confirmation */}
+            <ConfirmDialog
+                isOpen={!!deleteTarget}
+                title="Delete Product"
+                message={`Are you sure you want to delete "${deleteTarget?.name}"? This will also delete all its variants and cannot be undone.`}
+                confirmText="Delete"
+                confirmVariant="danger"
+                onClose={() => setDeleteTarget(null)}
+                onConfirm={confirmDeleteProduct}
+            />
+
+            {/* Duplicate Product Name Confirmation */}
+            <ConfirmDialog
+                isOpen={duplicateNameConfirmOpen}
+                title="Duplicate Product Name"
+                message={`An item named "${formData.name}" already exists in your inventory. Are you sure you want to create a duplicate entry? It is recommended to use unique names for better reporting.`}
+                confirmText="Continue with Duplicate"
+                confirmVariant="warning"
+                onClose={() => setDuplicateNameConfirmOpen(false)}
+                onConfirm={async () => {
+                    setDuplicateNameConfirmOpen(false);
+                    await executeSaveProduct();
+                }}
+            />
+        </div>
     );
 };

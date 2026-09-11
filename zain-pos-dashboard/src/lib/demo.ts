@@ -162,76 +162,284 @@ export const demoSales = [
 
 export const demoActivityLogs = [
     {
+        id: 'log-demo-sale-update',
+        action: 'SALE_UPDATE',
+        details: JSON.stringify({
+            version: 2,
+            type: 'SALE_UPDATE',
+            invoiceNo: '1425',
+            summary: 'Bill #1425 modified: Total ₹1,200.00 → ₹1,450.00 (+₹250.00)',
+            totals: {
+                before: {
+                    grandTotal: 1200.00,
+                    subtotal: 1200.00,
+                    discount: 0.00,
+                    discountPercent: 0,
+                    taxAmount: 0.00,
+                    itemCount: 2,
+                    paymentMethod: 'CASH',
+                    customerName: 'Walk-in Customer'
+                },
+                after: {
+                    grandTotal: 1450.00,
+                    subtotal: 1450.00,
+                    discount: 0.00,
+                    discountPercent: 0,
+                    taxAmount: 0.00,
+                    itemCount: 3,
+                    paymentMethod: 'CASH',
+                    customerName: 'Walk-in Customer'
+                }
+            },
+            itemChanges: [
+                {
+                    type: 'ADDED',
+                    name: 'Leather Belt (Black)',
+                    variant: 'Standard',
+                    newQty: 1,
+                    rate: 250.00
+                },
+                {
+                    type: 'QTY_CHANGED',
+                    name: 'Cotton Polo T-Shirt',
+                    variant: 'M',
+                    oldQty: 1,
+                    newQty: 2,
+                    oldRate: 450.00,
+                    newRate: 450.00
+                }
+            ]
+        }),
+        userId: 'demo-cashier1',
+        createdAt: new Date(Date.now() - 300_000).toISOString(),
+        user: { name: 'Cashier 1', role: 'CASHIER' }
+    },
+    {
+        id: 'log-demo-payment-update',
+        action: 'PAYMENT_UPDATE',
+        details: JSON.stringify({
+            version: 2,
+            type: 'PAYMENT_UPDATE',
+            invoiceNo: '1422',
+            payment: {
+                before: {
+                    method: 'CASH',
+                    paidAmount: 850.00
+                },
+                after: {
+                    method: 'UPI',
+                    paidAmount: 850.00
+                }
+            }
+        }),
+        userId: 'demo-cashier2',
+        createdAt: new Date(Date.now() - 450_000).toISOString(),
+        user: { name: 'Cashier 2', role: 'CASHIER' }
+    },
+    {
         id: 'log-1',
         action: 'USER_LOGIN',
-        details: 'User "admin" logged in from POS terminal.',
-        userId: 'demo-user',
-        createdAt: new Date().toISOString(),
+        details: 'User "admin" successfully authenticated from POS Terminal #1.',
+        userId: 'demo-admin',
+        createdAt: new Date(Date.now() - 600_000).toISOString(),
         user: { name: 'Admin User', role: 'ADMIN' }
     },
     {
         id: 'log-2',
-        action: 'SALE_REFUND',
-        details: 'Sale #1412 refunded. Amount: ₹650.00. Reason: Product defect.',
-        userId: 'demo-user',
-        createdAt: new Date(Date.now() - 1800_000).toISOString(),
+        action: 'DISCOUNT_APPLIED',
+        details: 'Discretionary discount of ₹150.00 (12%) applied on Bill #1420 by Cashier 1.',
+        userId: 'demo-cashier1',
+        createdAt: new Date(Date.now() - 1200_000).toISOString(),
         user: { name: 'Cashier 1', role: 'CASHIER' }
     },
     {
         id: 'log-3',
-        action: 'INVENTORY_ADJUSTMENT',
-        details: 'Manual stock adjustment for "Casual Polo" - Added 50 units due to warehouse recount.',
-        userId: 'demo-user',
-        createdAt: new Date(Date.now() - 3600_000).toISOString(),
-        user: { name: 'Store Manager', role: 'MANAGER' }
+        action: 'SALE_VOID',
+        details: 'Sale #1418 voided. Amount: ₹1,250.00. Reason: Customer changed mind before payment completion.',
+        userId: 'demo-admin',
+        createdAt: new Date(Date.now() - 2400_000).toISOString(),
+        user: { name: 'Admin User', role: 'ADMIN' }
     },
     {
         id: 'log-4',
-        action: 'DATA_SYNC',
-        details: 'Cloud sync completed successfully. 127 records synchronized to server.',
-        userId: 'system',
-        createdAt: new Date(Date.now() - 5400_000).toISOString(),
-        user: { name: 'System', role: 'AUTOMATION' }
+        action: 'SALE_REFUND',
+        details: 'Sale #1412 refunded. Amount: ₹650.00. Reason: Product defect on Linen Shirt (XL).',
+        userId: 'demo-cashier1',
+        createdAt: new Date(Date.now() - 3600_000).toISOString(),
+        user: { name: 'Cashier 1', role: 'CASHIER' }
     },
     {
         id: 'log-5',
-        action: 'REPORT_GENERATED',
-        details: 'Sales summary report generated for period: 01-Apr-2026 to 04-Apr-2026.',
-        userId: 'demo-user',
-        createdAt: new Date(Date.now() - 7200_000).toISOString(),
-        user: { name: 'Admin User', role: 'ADMIN' }
+        action: 'INVENTORY_ADJUSTMENT',
+        details: 'Manual stock adjustment for "Casual Polo" - Added 50 units due to warehouse recount.',
+        userId: 'demo-manager',
+        createdAt: new Date(Date.now() - 5400_000).toISOString(),
+        user: { name: 'Store Manager', role: 'MANAGER' }
     },
     {
         id: 'log-6',
         action: 'PRICE_OVERRIDE',
-        details: 'Price override applied to Sale #1410. Original: ₹500, Override: ₹450. Approved by manager.',
-        userId: 'demo-user',
-        createdAt: new Date(Date.now() - 9000_000).toISOString(),
+        details: 'Price override applied to Sale #1410. Original: ₹500, Override: ₹450. Manager authorization granted.',
+        userId: 'demo-cashier2',
+        createdAt: new Date(Date.now() - 7200_000).toISOString(),
         user: { name: 'Cashier 2', role: 'CASHIER' }
     },
     {
         id: 'log-7',
-        action: 'SHIFT_END',
-        details: 'Day shift ended. Cash collected: ₹45,230. Variance: +₹50.',
-        userId: 'demo-user',
-        createdAt: new Date(Date.now() - 86400_000).toISOString(),
+        action: 'CASH_DRAWER_OPEN',
+        details: 'Cash drawer opened manually outside transaction for petty cash disbursement (₹200).',
+        userId: 'demo-cashier1',
+        createdAt: new Date(Date.now() - 9000_000).toISOString(),
         user: { name: 'Cashier 1', role: 'CASHIER' }
     },
     {
         id: 'log-8',
-        action: 'USER_CREATED',
-        details: 'New user "john_doe" created with role: CASHIER.',
-        userId: 'demo-user',
-        createdAt: new Date(Date.now() - 172800_000).toISOString(),
-        user: { name: 'Admin User', role: 'ADMIN' }
+        action: 'EXCHANGE',
+        details: JSON.stringify({
+            version: 2,
+            type: 'EXCHANGE',
+            originalBillNo: '1405',
+            replacementBillNo: '1406',
+            returnedItems: [
+                {
+                    name: 'Slim Jeans',
+                    variant: '32',
+                    qty: 1,
+                    rate: 850.00,
+                    total: 850.00
+                }
+            ],
+            replacementItems: [
+                {
+                    name: 'Slim Jeans',
+                    variant: '34',
+                    qty: 1,
+                    rate: 850.00,
+                    total: 850.00
+                }
+            ],
+            returnedTotal: 850.00,
+            replacementTotal: 850.00,
+            differenceAmount: 0.00,
+            netPayable: 0.00,
+            paymentMethod: 'EXCHANGE',
+            summary: 'Exchange processed: Returned Slim Jeans (32) x1 (₹850.00) from Bill #1405 for Slim Jeans (34) x1 (₹850.00) on Bill #1406. Diff: ₹0.00 (Equal Value)'
+        }),
+        userId: 'demo-cashier2',
+        createdAt: new Date(Date.now() - 14400_000).toISOString(),
+        user: { name: 'Cashier 2', role: 'CASHIER' }
     },
     {
         id: 'log-9',
-        action: 'INVENTORY_ALERT',
-        details: 'Low stock alert: "Casual Polo" reached reorder threshold (10 units remaining).',
+        action: 'DATA_SYNC',
+        details: 'Cloud database synchronization completed successfully. 142 records synced to cloud.',
         userId: 'system',
-        createdAt: new Date(Date.now() - 259200_000).toISOString(),
+        createdAt: new Date(Date.now() - 18000_000).toISOString(),
         user: { name: 'System', role: 'AUTOMATION' }
+    },
+    {
+        id: 'log-10',
+        action: 'SHIFT_END',
+        details: 'Morning shift ended. Cash collected: ₹32,450. Card: ₹14,200. UPI: ₹18,900. Zero variance.',
+        userId: 'demo-cashier1',
+        createdAt: new Date(Date.now() - 86400_000 + 3600_000).toISOString(), // Yesterday
+        user: { name: 'Cashier 1', role: 'CASHIER' }
+    },
+    {
+        id: 'log-11',
+        action: 'PERMISSION_CHANGE',
+        details: 'Permissions updated for user "Cashier 2". Max discount cap set to 15%.',
+        userId: 'demo-admin',
+        createdAt: new Date(Date.now() - 86400_000 - 1800_000).toISOString(), // Yesterday
+        user: { name: 'Admin User', role: 'ADMIN' }
+    },
+    {
+        id: 'log-12',
+        action: 'PRODUCT_DELETE',
+        details: 'Discontinued SKU "OLD-TSHIRT-01" deleted from catalog by Store Manager.',
+        userId: 'demo-manager',
+        createdAt: new Date(Date.now() - 86400_000 - 7200_000).toISOString(), // Yesterday
+        user: { name: 'Store Manager', role: 'MANAGER' }
+    },
+    {
+        id: 'log-13',
+        action: 'USER_LOGIN',
+        details: 'User "Cashier 2" logged in from POS Terminal #2.',
+        userId: 'demo-cashier2',
+        createdAt: new Date(Date.now() - 172800_000).toISOString(), // 2 days ago
+        user: { name: 'Cashier 2', role: 'CASHIER' }
+    },
+    {
+        id: 'log-14',
+        action: 'SALE_RETURN',
+        details: 'Customer returned 2 items from Bill #1389. Restocked into inventory. Refund: ₹1,890.00.',
+        userId: 'demo-cashier1',
+        createdAt: new Date(Date.now() - 259200_000).toISOString(), // 3 days ago
+        user: { name: 'Cashier 1', role: 'CASHIER' }
+    },
+    {
+        id: 'log-15',
+        action: 'STOCK_ADD',
+        details: 'Bulk stock arrival recorded: 120 units added across Men Formal Shirts category.',
+        userId: 'demo-manager',
+        createdAt: new Date(Date.now() - 345600_000).toISOString(), // 4 days ago
+        user: { name: 'Store Manager', role: 'MANAGER' }
+    },
+    {
+        id: 'log-16',
+        action: 'BACKUP_CREATED',
+        details: 'Automated weekly system and SQLite database backup completed. Archive: backup-2026-09-01.zip.',
+        userId: 'system',
+        createdAt: new Date(Date.now() - 432000_000).toISOString(), // 5 days ago
+        user: { name: 'System', role: 'AUTOMATION' }
+    },
+    {
+        id: 'log-17',
+        action: 'USER_CREATED',
+        details: 'New user "john_doe" created with role: CASHIER.',
+        userId: 'demo-admin',
+        createdAt: new Date(Date.now() - 518400_000).toISOString(), // 6 days ago
+        user: { name: 'Admin User', role: 'ADMIN' }
+    },
+    {
+        id: 'log-18',
+        action: 'CASH_RECONCILIATION',
+        details: 'Monthly cash drawer audit. System expectation: ₹45,230. Physical count: ₹45,230. Variance: ₹0.00.',
+        userId: 'demo-admin',
+        createdAt: new Date(Date.now() - 864000_000).toISOString(), // 10 days ago
+        user: { name: 'Admin User', role: 'ADMIN' }
+    },
+    {
+        id: 'log-19',
+        action: 'SETTINGS_CHANGE',
+        details: 'Store GST profile updated: Default SGST (2.5%) and CGST (2.5%) re-verified for clothing items.',
+        userId: 'demo-admin',
+        createdAt: new Date(Date.now() - 1296000_000).toISOString(), // 15 days ago
+        user: { name: 'Admin User', role: 'ADMIN' }
+    },
+    {
+        id: 'log-20',
+        action: 'LOGIN_FAILED',
+        details: 'Failed login attempt for username "unknown_user" from IP 192.168.1.45 (Bad password).',
+        userId: 'system',
+        createdAt: new Date(Date.now() - 1728000_000).toISOString(), // 20 days ago
+        user: { name: 'Security Monitor', role: 'SECURITY' }
+    },
+    {
+        id: 'log-21',
+        action: 'PASSWORD_CHANGE',
+        details: 'Password changed for user "Cashier 1" following 90-day security rotation policy.',
+        userId: 'demo-cashier1',
+        createdAt: new Date(Date.now() - 2160000_000).toISOString(), // 25 days ago
+        user: { name: 'Cashier 1', role: 'CASHIER' }
+    },
+    {
+        id: 'log-22',
+        action: 'REPORT_GENERATED',
+        details: 'Monthly GST filing report (GSTR-1) exported in Excel format.',
+        userId: 'demo-admin',
+        createdAt: new Date(Date.now() - 2592000_000).toISOString(), // 30 days ago
+        user: { name: 'Admin User', role: 'ADMIN' }
     }
 ];
 

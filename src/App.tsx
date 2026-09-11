@@ -15,6 +15,7 @@ import { Forecasting } from './pages/Forecasting';
 import { MainLayout } from './components/Layout/MainLayout';
 import { WindowTitleBar } from './components/Layout/WindowTitleBar';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
+import { ToastContainer } from './components/ui/Toast';
 import { useAuthStore } from './store/authStore';
 
 type UserPermKey = 'permViewReports' | 'permManageProducts' | 'permViewSales' |
@@ -46,6 +47,7 @@ function App() {
     return (
         <div className="h-screen flex flex-col bg-gray-50 dark:bg-dark-bg">
             <WindowTitleBar />
+            <ToastContainer />
             <div className="flex-1 min-h-0">
                 <HashRouter>
                     <Routes>

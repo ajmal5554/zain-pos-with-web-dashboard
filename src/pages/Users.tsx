@@ -3,6 +3,8 @@ import { Plus, Edit, Trash2, Key, UserCheck, UserX, Search, Eye, EyeOff } from '
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import { showToast } from '../components/ui/Toast';
 import { useAuthStore } from '../store/authStore';
 
 // Helper Component for Password Input
@@ -38,6 +40,7 @@ export const Users: React.FC = () => {
     const [showUserModal, setShowUserModal] = useState(false);
     const [showPasswordModal, setShowPasswordModal] = useState(false);
     const [editingUser, setEditingUser] = useState<any>(null);
+    const [userToToggleStatus, setUserToToggleStatus] = useState<any | null>(null);
 
     // Form States
     const [formData, setFormData] = useState({
@@ -73,7 +76,7 @@ export const Users: React.FC = () => {
 
     const handleSaveUser = async () => {
         if (!formData.username || !formData.name || (!editingUser && !formData.password)) {
-            alert('Please fill all required fields');
+            showToast('Please fill all required fields', 'warning');
             return;
         }
 
@@ -102,17 +105,19 @@ export const Users: React.FC = () => {
                 setEditingUser(null);
                 setFormData({ username: '', password: '', name: '', role: 'CASHIER' });
                 loadUsers();
+                showToast(editingUser ? 'User updated successfully' : 'User created successfully', 'success');
             } else {
-                alert('Error: ' + res.error);
+                showToast('Error: ' + res.error, 'error');
             }
         } catch (error) {
             console.error(error);
+            showToast('Failed to save user: ' + (error as Error).message, 'error');
         }
     };
 
     const handleSavePassword = async () => {
         if (!passwordData.newPassword || passwordData.newPassword !== passwordData.confirmPassword) {
-            alert('Passwords do not match or are empty');
+            showToast('Passwords do not match or are empty', 'warning');
             return;
         }
 
@@ -125,22 +130,38 @@ export const Users: React.FC = () => {
             if (res.success) {
                 setShowPasswordModal(false);
                 setPasswordData({ userId: '', newPassword: '', confirmPassword: '' });
-                alert('Password updated successfully');
+                showToast('Password updated successfully', 'success');
             } else {
-                alert('Error: ' + res.error);
+                showToast('Error: ' + res.error, 'error');
             }
         } catch (error) {
             console.error(error);
+            showToast('Failed to change password: ' + (error as Error).message, 'error');
         }
     };
 
-    const handleToggleStatus = async (user: any) => {
-        if (confirm(`Are you sure you want to ${user.isActive ? 'deactivate' : 'activate'} this user?`)) {
-            const res = await window.electronAPI.users.update(user.id, {
-                data: { isActive: !user.isActive },
+    const handleToggleStatus = (user: any) => {
+        setUserToToggleStatus(user);
+    };
+
+    const confirmToggleStatus = async () => {
+        if (!userToToggleStatus) return;
+        try {
+            const res = await window.electronAPI.users.update(userToToggleStatus.id, {
+                data: { isActive: !userToToggleStatus.isActive },
                 updatedBy: currentUser?.id || ''
             });
-            if (res.success) loadUsers();
+            if (res.success) {
+                loadUsers();
+                showToast(`User ${userToToggleStatus.isActive ? 'deactivated' : 'activated'} successfully`, 'success');
+            } else {
+                showToast('Error: ' + res.error, 'error');
+            }
+        } catch (error) {
+            console.error(error);
+            showToast('Failed to update status: ' + (error as Error).message, 'error');
+        } finally {
+            setUserToToggleStatus(null);
         }
     };
 
@@ -319,6 +340,16 @@ export const Users: React.FC = () => {
                     <Button variant="primary" onClick={handleSavePassword}>Update Password</Button>
                 </div>
             </Modal>
+            {/* Toggle User Status Confirmation */}
+            <ConfirmDialog
+                isOpen={!!userToToggleStatus}
+                title={userToToggleStatus?.isActive ? 'Deactivate User' : 'Activate User'}
+                message={`Are you sure you want to ${userToToggleStatus?.isActive ? 'deactivate' : 'activate'} user "${userToToggleStatus?.name || userToToggleStatus?.username}"?`}
+                confirmText={userToToggleStatus?.isActive ? 'Deactivate' : 'Activate'}
+                confirmVariant={userToToggleStatus?.isActive ? 'danger' : 'primary'}
+                onClose={() => setUserToToggleStatus(null)}
+                onConfirm={confirmToggleStatus}
+            />
         </div>
     );
 };

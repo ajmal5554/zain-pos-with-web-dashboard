@@ -1907,10 +1907,29 @@ ipcMain.handle('sales:updatePayment', async (_event, { saleId, paymentData, user
             // 4. Log Activity only when the persisted payment state changed
             let createdAuditLog = null;
             if (paymentChanged) {
+                const paymentPayload = {
+                    version: 2,
+                    type: 'PAYMENT_UPDATE',
+                    invoiceNo: String(originalSale.billNo),
+                    summary: `Payment method updated for Bill #${originalSale.billNo}: ${originalSale.paymentMethod} -> ${paymentData.paymentMethod}`,
+                    payment: {
+                        before: {
+                            method: originalSale.paymentMethod,
+                            paidAmount: Number(originalSale.paidAmount || 0),
+                            payments: previousPayments
+                        },
+                        after: {
+                            method: paymentData.paymentMethod,
+                            paidAmount: Number(paymentData.paidAmount || 0),
+                            payments: nextPayments
+                        }
+                    }
+                };
+
                 createdAuditLog = await tx.auditLog.create({
                     data: {
                         action: 'PAYMENT_UPDATE',
-                        details: `Payment updated for Sale #${originalSale.billNo}. Old Method: ${originalSale.paymentMethod}, New Method: ${paymentData.paymentMethod}`,
+                        details: JSON.stringify(paymentPayload),
                         userId: userId
                     },
                     include: {
@@ -2110,6 +2129,17 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
             );
 
             const itemChanges: string[] = [];
+            const structuredItemChanges: Array<{
+                type: 'ADDED' | 'REMOVED' | 'QTY_CHANGED' | 'RATE_CHANGED';
+                name: string;
+                variant?: string;
+                oldQty?: number;
+                newQty?: number;
+                oldRate?: number;
+                newRate?: number;
+                rate?: number;
+            }> = [];
+
             const changedVariantIds = new Set<string>([
                 ...oldItemsByVariant.keys(),
                 ...newItemsByVariant.keys()
@@ -2120,12 +2150,28 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
                 const newItem = newItemsByVariant.get(variantId);
 
                 if (!oldItem && newItem) {
-                    itemChanges.push(`added ${describeItem(newItem)} x${newItem.quantity}`);
+                    const desc = describeItem(newItem);
+                    itemChanges.push(`added ${desc} x${newItem.quantity}`);
+                    structuredItemChanges.push({
+                        type: 'ADDED',
+                        name: newItem.productName || 'Item',
+                        variant: (newItem.variantInfo || '').trim() || undefined,
+                        newQty: Number(newItem.quantity || 1),
+                        rate: Number(newItem.sellingPrice || 0)
+                    });
                     continue;
                 }
 
                 if (oldItem && !newItem) {
-                    itemChanges.push(`removed ${describeItem(oldItem)} x${oldItem.quantity}`);
+                    const desc = describeItem(oldItem);
+                    itemChanges.push(`removed ${desc} x${oldItem.quantity}`);
+                    structuredItemChanges.push({
+                        type: 'REMOVED',
+                        name: oldItem.productName || 'Item',
+                        variant: (oldItem.variantInfo || '').trim() || undefined,
+                        oldQty: Number(oldItem.quantity || 1),
+                        rate: Number(oldItem.sellingPrice || 0)
+                    });
                     continue;
                 }
 
@@ -2136,9 +2182,28 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
                     const newPrice = Number(newItem.sellingPrice || 0);
 
                     if (oldQty !== newQty) {
-                        itemChanges.push(`${describeItem(newItem)} qty ${oldQty} -> ${newQty}`);
-                    } else if (oldPrice !== newPrice) {
-                        itemChanges.push(`${describeItem(newItem)} rate Rs.${oldPrice.toFixed(2)} -> Rs.${newPrice.toFixed(2)}`);
+                        const desc = describeItem(newItem);
+                        itemChanges.push(`${desc} qty ${oldQty} -> ${newQty}`);
+                        structuredItemChanges.push({
+                            type: 'QTY_CHANGED',
+                            name: newItem.productName || 'Item',
+                            variant: (newItem.variantInfo || '').trim() || undefined,
+                            oldQty,
+                            newQty,
+                            rate: newPrice
+                        });
+                    }
+                    if (oldPrice !== newPrice) {
+                        const desc = describeItem(newItem);
+                        itemChanges.push(`${desc} rate Rs.${oldPrice.toFixed(2)} -> Rs.${newPrice.toFixed(2)}`);
+                        structuredItemChanges.push({
+                            type: 'RATE_CHANGED',
+                            name: newItem.productName || 'Item',
+                            variant: (newItem.variantInfo || '').trim() || undefined,
+                            oldRate: oldPrice,
+                            newRate: newPrice,
+                            newQty
+                        });
                     }
                 }
             }
@@ -2219,10 +2284,41 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
 
             let createdAuditLog = null;
             if (hasChanges) {
+                const changePayload = {
+                    version: 2,
+                    type: 'SALE_UPDATE',
+                    invoiceNo: String(originalSale.billNo),
+                    summary: `Bill #${originalSale.billNo} modified: Total Rs.${originalSale.grandTotal.toFixed(2)} -> Rs.${updatedSale.grandTotal.toFixed(2)}${changeSummary}`,
+                    totals: {
+                        before: {
+                            grandTotal: Number(originalSale.grandTotal || 0),
+                            subtotal: Number(originalSale.subtotal || 0),
+                            discount: Number(originalSale.discount || 0),
+                            discountPercent: Number(originalSale.discountPercent || 0),
+                            taxAmount: Number(originalSale.taxAmount || 0),
+                            itemCount: oldItemCount,
+                            paymentMethod: originalSale.paymentMethod,
+                            customerName: originalSale.customerName || undefined
+                        },
+                        after: {
+                            grandTotal: Number(updatedSale.grandTotal || 0),
+                            subtotal: Number(normalizedSaleData.subtotal || 0),
+                            discount: Number(normalizedSaleData.discount || 0),
+                            discountPercent: Number(normalizedSaleData.discountPercent || 0),
+                            taxAmount: Number(normalizedSaleData.taxAmount || 0),
+                            itemCount: newItemCount,
+                            paymentMethod: normalizedSaleData.paymentMethod,
+                            customerName: normalizedSaleData.customerName || undefined
+                        }
+                    },
+                    itemChanges: structuredItemChanges,
+                    remarks: updateTag
+                };
+
                 createdAuditLog = await tx.auditLog.create({
                     data: {
                         action: 'SALE_UPDATE',
-                        details: `Sale #${originalSale.billNo} updated from POS. Old Total: Rs.${originalSale.grandTotal.toFixed(2)}, New Total: Rs.${updatedSale.grandTotal.toFixed(2)}`,
+                        details: JSON.stringify(changePayload),
                         userId: userId
                     },
                     include: {
@@ -2288,7 +2384,8 @@ createSecureIpcHandler(
                 where: { id: exchangeData.originalInvoiceId },
                 include: {
                     items: true,
-                    refunds: { include: { items: true } }
+                    refunds: { include: { items: true } },
+                    exchanges: { include: { items: true } }
                 }
             });
             if (!originalSale) {
@@ -2338,12 +2435,12 @@ createSecureIpcHandler(
                 return sum + (Number(variant.sellingPrice || 0) * Number(item.newQty || 0));
             }, 0);
 
+            // Cap exchange credit to the new bill subtotal (no cash refunds in exchange)
             const exchangeCreditApplied = Math.min(totalReturnedValue, totalNewValue);
             const netPayable = roundCurrency(Math.max(0, totalNewValue - exchangeCreditApplied));
             const normalizedDifferenceAmount = roundCurrency(totalNewValue - totalReturnedValue);
-            const originalGrandTotal = Number(originalSale.grandTotal || 0);
-            const returnedRatio = Math.max(0, Math.min(1, totalReturnedValue / Math.max(originalGrandTotal, 0.01)));
-            const originalNetGrandTotal = roundCurrency(Math.max(0, originalGrandTotal - totalReturnedValue));
+            // Store credit: if returned value > new value, the excess becomes a credit note
+            const storeCreditBalance = roundCurrency(Math.max(0, totalReturnedValue - totalNewValue));
             const exchangePayments = (exchangeData.payments || [])
                 .filter((payment: any) => Number(payment.amount || 0) > 0)
                 .map((payment: any) => ({
@@ -2361,7 +2458,7 @@ createSecureIpcHandler(
                 throw new Error('Exchange payment total does not match the payable amount.');
             }
 
-            // 2. Remove returned quantities from original sale items
+            // 2. IMMUTABLE BILL: Validate returned quantities but DO NOT modify original sale items or totals
             for (const item of returnedItems) {
                 const saleItem = originalSale.items.find((si: any) => si.variantId === item.returnedId);
                 if (!saleItem) {
@@ -2371,29 +2468,17 @@ createSecureIpcHandler(
                     const refundItem = (refund.items || []).find((ri: any) => ri.variantId === item.returnedId);
                     return sum + (refundItem?.quantity || 0);
                 }, 0);
-                const availableQty = Math.max(0, saleItem.quantity - refundedQty);
+                // Also count quantities already returned via previous exchanges
+                const previouslyExchangedQty = (originalSale.exchanges || []).reduce((sum: number, ex: any) => {
+                    return sum + (ex.items || [])
+                        .filter((ei: any) => ei.returnedItemId === item.returnedId)
+                        .reduce((s: number, ei: any) => s + (ei.returnedQty || 0), 0);
+                }, 0);
+                const availableQty = Math.max(0, saleItem.quantity - refundedQty - previouslyExchangedQty);
                 if (availableQty < item.returnedQty) {
-                    throw new Error(`Returned qty exceeds sold qty for ${saleItem.productName}`);
+                    throw new Error(`Returned qty exceeds available qty for ${saleItem.productName}`);
                 }
-
-                if (saleItem.quantity === item.returnedQty) {
-                    await tx.saleItem.delete({ where: { id: saleItem.id } });
-                } else {
-                    const newQty = saleItem.quantity - item.returnedQty;
-                    const unitDiscount = saleItem.quantity > 0 ? (saleItem.discount / saleItem.quantity) : 0;
-                    const unitTaxAmount = saleItem.quantity > 0 ? (saleItem.taxAmount / saleItem.quantity) : 0;
-                    const unitTotal = saleItem.quantity > 0 ? (saleItem.total / saleItem.quantity) : 0;
-
-                    await tx.saleItem.update({
-                        where: { id: saleItem.id },
-                        data: {
-                            quantity: newQty,
-                            discount: unitDiscount * newQty,
-                            taxAmount: unitTaxAmount * newQty,
-                            total: unitTotal * newQty
-                        }
-                    });
-                }
+                // Original SaleItem rows are NOT modified — bill remains immutable
             }
 
             // 3. Create Exchange Entry
@@ -2420,12 +2505,12 @@ createSecureIpcHandler(
             });
 
             // 4. Create replacement sale on exchange date
+            const replacementPaymentMethod = ['CASH', 'CARD', 'UPI', 'SPLIT'].includes(exchangeData.replacementPaymentMethod)
+                ? exchangeData.replacementPaymentMethod
+                : (['CASH', 'CARD', 'UPI', 'SPLIT'].includes(originalSale.paymentMethod) ? originalSale.paymentMethod : 'CASH');
+
             let replacementSale: any = null;
             if (newItems.length > 0) {
-                const replacementPaymentMethod = ['CASH', 'CARD', 'UPI', 'SPLIT'].includes(exchangeData.replacementPaymentMethod)
-                    ? exchangeData.replacementPaymentMethod
-                    : (['CASH', 'CARD', 'UPI', 'SPLIT'].includes(originalSale.paymentMethod) ? originalSale.paymentMethod : 'CASH');
-
                 const nextBillNo = await getNextBillNoForDate(new Date(), tx);
 
                 const replacementSaleItems = newItems.map((item: any) => {
@@ -2473,9 +2558,9 @@ createSecureIpcHandler(
                         sgst: taxAmount / 2,
                         grandTotal: replacementTotal,
                         paymentMethod: netPayable > 0 ? replacementPaymentMethod : 'EXCHANGE',
-                        paidAmount: replacementTotal,
+                        paidAmount: netPayable, // Only the fresh money collected today
                         changeAmount: 0,
-                        remarks: `Replacement sale for Invoice #${originalSale.billNo}. Exchange Ref: ${exchange.id}. New: Rs.${replacementTotal.toFixed(2)}, Credit: Rs.${exchangeCreditApplied.toFixed(2)}, Payable: Rs.${netPayable.toFixed(2)}`,
+                        remarks: `Replacement sale for Invoice #${originalSale.billNo}. Exchange Ref: ${exchange.id}. New: Rs.${replacementTotal.toFixed(2)}, Credit: Rs.${exchangeCreditApplied.toFixed(2)}, Payable: Rs.${netPayable.toFixed(2)}${storeCreditBalance > 0 ? `. STORE CREDIT NOTE: Rs.${storeCreditBalance.toFixed(2)} issued to customer for future use.` : ''}`,
                         createdAt: now,
                         items: {
                             create: replacementSaleItems
@@ -2499,16 +2584,12 @@ createSecureIpcHandler(
                 ? `Replacement Bill #${replacementSale.billNo}`
                 : 'No replacement bill';
 
-            const replacementTag = `[EXCHANGE ${now.toISOString()}] Returned: ${returnedSummary || 'N/A'}. ${replacementSummary}. Ref: ${exchange.id}`;
+            const storeCreditNote = storeCreditBalance > 0 ? ` STORE CREDIT: Rs.${storeCreditBalance.toFixed(2)} balance issued to customer.` : '';
+            const replacementTag = `[EXCHANGE ${now.toISOString()}] Returned: ${returnedSummary || 'N/A'}. ${replacementSummary}. Ref: ${exchange.id}${storeCreditNote}`;
+            // IMMUTABLE BILL: Only append exchange note to remarks — DO NOT modify financial fields
             await tx.sale.update({
                 where: { id: originalSale.id },
                 data: {
-                    subtotal: roundCurrency(Number(originalSale.subtotal || 0) * (1 - returnedRatio)),
-                    discount: roundCurrency(Number(originalSale.discount || 0) * (1 - returnedRatio)),
-                    taxAmount: roundCurrency(Number(originalSale.taxAmount || 0) * (1 - returnedRatio)),
-                    cgst: roundCurrency(Number(originalSale.cgst || 0) * (1 - returnedRatio)),
-                    sgst: roundCurrency(Number(originalSale.sgst || 0) * (1 - returnedRatio)),
-                    grandTotal: originalNetGrandTotal,
                     remarks: originalSale.remarks ? `${originalSale.remarks}\n${replacementTag}` : replacementTag
                 }
             });
@@ -2555,10 +2636,62 @@ createSecureIpcHandler(
             }
 
             // 7. Log Activity
+            const structuredReturnedItems = returnedItems.map((item: any) => {
+                const saleItem = originalSale.items.find((si: any) => si.variantId === item.returnedId);
+                const unitPrice = saleItem && saleItem.quantity > 0 ? (saleItem.total / saleItem.quantity) : 0;
+                return {
+                    name: saleItem?.productName || 'Item',
+                    variant: saleItem?.variantInfo || '',
+                    qty: item.returnedQty || 1,
+                    rate: roundCurrency(unitPrice),
+                    total: roundCurrency(unitPrice * (item.returnedQty || 1))
+                };
+            });
+
+            const structuredReplacementItems = newItems.map((item: any) => {
+                const variant = replacementVariantById.get(item.newId);
+                const rate = variant?.sellingPrice || 0;
+                return {
+                    name: variant?.product?.name || 'Item',
+                    variant: `${variant?.size || ''} ${variant?.color || ''}`.trim(),
+                    qty: item.newQty || 1,
+                    rate: roundCurrency(rate),
+                    total: roundCurrency(rate * (item.newQty || 1))
+                };
+            });
+
+            const diffDisplay = normalizedDifferenceAmount > 0
+                ? `+₹${normalizedDifferenceAmount.toFixed(2)} (Paid by Customer)`
+                : normalizedDifferenceAmount < 0
+                ? `-₹${Math.abs(normalizedDifferenceAmount).toFixed(2)} (Refunded)`
+                : '₹0.00 (Equal Value)';
+
+            const exchangeSummary = `Exchange processed: Returned ${structuredReturnedItems.map((i: any) => `${i.name} x${i.qty}`).join(', ')} (₹${totalReturnedValue.toFixed(2)}) from Bill #${originalSale.billNo} for ${structuredReplacementItems.map((i: any) => `${i.name} x${i.qty}`).join(', ')} (₹${totalNewValue.toFixed(2)})${replacementSale ? ` on Bill #${replacementSale.billNo}` : ''}. Diff: ${diffDisplay}`;
+
+            const exchangeAuditPayload = {
+                version: 2,
+                type: 'EXCHANGE',
+                originalBillNo: originalSale.billNo,
+                originalInvoiceId: originalSale.id,
+                replacementBillNo: replacementSale?.billNo,
+                replacementSaleId: replacementSale?.id,
+                returnedItems: structuredReturnedItems,
+                replacementItems: structuredReplacementItems,
+                returnedTotal: roundCurrency(totalReturnedValue),
+                replacementTotal: roundCurrency(totalNewValue),
+                differenceAmount: normalizedDifferenceAmount,
+                netPayable,
+                exchangeCreditApplied,
+                storeCreditBalance,
+                paymentMethod: netPayable > 0 ? replacementPaymentMethod : 'EXCHANGE',
+                customerName: originalSale.customerName,
+                summary: exchangeSummary
+            };
+
             await tx.auditLog.create({
                 data: {
                     action: 'EXCHANGE',
-                    details: `Exchange processed for Invoice ID ${exchangeData.originalInvoiceId}. Diff: Rs.${normalizedDifferenceAmount.toFixed(2)}${replacementSale ? `, Replacement Sale #${replacementSale.billNo}` : ''}`,
+                    details: JSON.stringify(exchangeAuditPayload),
                     userId: exchangeData.userId,
                     createdAt: now
                 }
@@ -2579,6 +2712,164 @@ createSecureIpcHandler(
         extractUserId: (args: any) => args.userId
     }
 );
+
+// Retrieve structured Exchange/Refund details for any sale (original or replacement)
+ipcMain.handle('sales:getExchangeDetails', async (_event, args: { billNo?: string; saleId?: string; remarks?: string }) => {
+    try {
+        const { billNo, saleId, remarks } = args || {};
+        const targetBills = new Set<string>();
+        if (billNo) targetBills.add(String(billNo));
+
+        if (remarks) {
+            const replMatch = remarks.match(/Replacement Bill #(\d+)/i);
+            if (replMatch) targetBills.add(replMatch[1]);
+            const origMatch = remarks.match(/Invoice #(\d+)/i);
+            if (origMatch) targetBills.add(origMatch[1]);
+        }
+
+        // 1. Search AuditLog for structured EXCHANGE events
+        const exchangeLogs = await prisma.auditLog.findMany({
+            where: { action: 'EXCHANGE' },
+            include: {
+                user: {
+                    select: { id: true, name: true, role: true }
+                }
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 50
+        });
+
+        for (const log of exchangeLogs) {
+            try {
+                const parsed = JSON.parse(log.details);
+                const logOrigBill = String(parsed.originalBillNo || '');
+                const logReplBill = String(parsed.replacementBillNo || '');
+                const logOrigId = String(parsed.originalInvoiceId || '');
+                const logReplId = String(parsed.replacementSaleId || '');
+
+                const isMatch = (
+                    (billNo && (logOrigBill === String(billNo) || logReplBill === String(billNo))) ||
+                    (saleId && (logOrigId === saleId || logReplId === saleId)) ||
+                    Array.from(targetBills).some(b => b === logOrigBill || b === logReplBill)
+                );
+
+                if (isMatch) {
+                    return {
+                        success: true,
+                        data: {
+                            type: 'EXCHANGE',
+                            originalBillNo: logOrigBill,
+                            replacementBillNo: logReplBill,
+                            returnedItems: parsed.returnedItems || [],
+                            replacementItems: parsed.replacementItems || [],
+                            returnedTotal: Number(parsed.returnedTotal || 0),
+                            replacementTotal: Number(parsed.replacementTotal || 0),
+                            differenceAmount: Number(parsed.differenceAmount ?? 0),
+                            netPayable: Number(parsed.netPayable ?? 0),
+                            exchangeCreditApplied: Number(parsed.exchangeCreditApplied ?? 0),
+                            paymentMethod: parsed.paymentMethod,
+                            summary: parsed.summary,
+                            createdAt: log.createdAt,
+                            actor: log.user?.name || 'Staff'
+                        }
+                    };
+                }
+            } catch {
+                // skip non-json
+            }
+        }
+
+        // 2. Fallback to querying the Exchange database table
+        let exchangeRef = '';
+        if (remarks) {
+            const refMatch = remarks.match(/(?:Exchange Ref:|Ref:)\s*([a-zA-Z0-9-]+)/i);
+            if (refMatch) exchangeRef = refMatch[1].trim();
+        }
+
+        let exchange = null;
+        if (exchangeRef) {
+            exchange = await prisma.exchange.findUnique({
+                where: { id: exchangeRef },
+                include: {
+                    items: true,
+                    payments: true,
+                    invoice: { include: { items: true } }
+                }
+            });
+        }
+        if (!exchange && saleId) {
+            exchange = await prisma.exchange.findFirst({
+                where: { originalInvoiceId: saleId },
+                include: {
+                    items: true,
+                    payments: true,
+                    invoice: { include: { items: true } }
+                }
+            });
+        }
+
+        if (exchange) {
+            const variantIds = Array.from(new Set(
+                (exchange.items || []).flatMap((i: any) => [i.returnedItemId, i.newItemId].filter(Boolean))
+            ));
+            const variants = await prisma.productVariant.findMany({
+                where: { id: { in: variantIds } },
+                include: { product: true }
+            });
+            const variantMap = new Map<string, any>(variants.map((v: any) => [v.id, v]));
+
+            const returnedItems = (exchange.items || [])
+                .filter((i: any) => i.returnedItemId && i.returnedQty > 0)
+                .map((i: any) => {
+                    const v = variantMap.get(i.returnedItemId);
+                    return {
+                        name: v?.product?.name || 'Returned Item',
+                        variant: `${v?.size || ''} ${v?.color || ''}`.trim(),
+                        qty: i.returnedQty,
+                        amount: Math.abs(i.priceDiff)
+                    };
+                });
+
+            const replacementItems = (exchange.items || [])
+                .filter((i: any) => i.newItemId && i.newQty > 0)
+                .map((i: any) => {
+                    const v = variantMap.get(i.newItemId);
+                    return {
+                        name: v?.product?.name || 'New Item',
+                        variant: `${v?.size || ''} ${v?.color || ''}`.trim(),
+                        qty: i.newQty,
+                        amount: i.priceDiff
+                    };
+                });
+
+            const returnedTotal = returnedItems.reduce((s: number, i: any) => s + (i.amount || 0), 0);
+            const replacementTotal = replacementItems.reduce((s: number, i: any) => s + (i.amount || 0), 0);
+            const replBillMatch = remarks?.match(/Replacement Bill #(\d+)/);
+
+            return {
+                success: true,
+                data: {
+                    type: 'EXCHANGE',
+                    originalBillNo: exchange.invoice?.billNo || '',
+                    replacementBillNo: replBillMatch ? replBillMatch[1] : '',
+                    returnedItems,
+                    replacementItems,
+                    returnedTotal,
+                    replacementTotal,
+                    differenceAmount: exchange.differenceAmount,
+                    summary: `Exchange on Bill #${exchange.invoice?.billNo}`,
+                    createdAt: exchange.exchangeDate
+                }
+            };
+        }
+
+        return { success: false, error: 'No exchange details found' };
+    } catch (error: any) {
+        console.error('sales:getExchangeDetails error:', error);
+        return { success: false, error: error.message };
+    }
+});
+
 // Professional Refund Handler
 createSecureIpcHandler(
     'sales:refund',
@@ -2703,10 +2994,35 @@ createSecureIpcHandler(
             }
 
             // 3. Log Activity
+            const structuredRefundItems = normalizedRefundItems.map((item: any) => {
+                const saleItem = originalSale.items.find((si: any) => si.variantId === item.id);
+                return {
+                    name: saleItem?.productName || 'Item',
+                    variant: saleItem?.variantInfo || '',
+                    qty: item.qty || 1,
+                    amount: item.amount || 0
+                };
+            });
+
+            const refundSummary = `Refund of ₹${computedRefundAmount.toFixed(2)} processed for Bill #${originalSale.billNo}: ${structuredRefundItems.map((i: any) => `${i.name} x${i.qty}`).join(', ')}. Reason: ${sanitizedReason || 'N/A'}`;
+
+            const refundAuditPayload = {
+                version: 2,
+                type: 'REFUND',
+                billNo: originalSale.billNo,
+                originalInvoiceId: originalSale.id,
+                refundAmount: computedRefundAmount,
+                reason: sanitizedReason,
+                refundPayments,
+                refundedItems: structuredRefundItems,
+                customerName: originalSale.customerName,
+                summary: refundSummary
+            };
+
             await tx.auditLog.create({
                 data: {
                     action: 'REFUND',
-                    details: `Refund processed for Invoice ID ${refundData.originalInvoiceId}.Amount: ₹${computedRefundAmount.toFixed(2)}.Reason: ${sanitizedReason}`,
+                    details: JSON.stringify(refundAuditPayload),
                     userId: refundData.userId,
                     createdAt: now
                 }
@@ -2849,7 +3165,7 @@ ipcMain.handle('print:receipt', async (_event, data) => {
                 if (settled) return;
                 settled = true;
                 resolve({ success: false, error: 'Print timeout: printer did not respond in time.' });
-            }, 15000);
+            }, 6000);
 
             const options: Electron.WebContentsPrintOptions = {
                 silent: true,
@@ -2919,7 +3235,7 @@ ipcMain.handle('print:label', async (_event, data) => {
                 settled = true;
                 try { printWindow.close(); } catch { }
                 resolve({ success: false, error: 'Label print timeout: printer did not respond in time.' });
-            }, 15000);
+            }, 6000);
 
             const options: any = {
                 silent: true,
@@ -4102,15 +4418,39 @@ createSecureIpcHandler(
             data.password = await bcrypt.hash(data.password, 10);
         }
 
+        const existingUser = await prisma.user.findUnique({ where: { id } });
+
         const updatedUser = await prisma.user.update({
             where: { id },
             data: data
         });
 
+        const changesList: string[] = [];
+        if (data.maxDiscount !== undefined && existingUser?.maxDiscount !== data.maxDiscount) {
+            changesList.push(`Max discount cap set to ${data.maxDiscount}% (was ${existingUser?.maxDiscount || 0}%)`);
+        }
+        if (data.role && existingUser?.role !== data.role) {
+            changesList.push(`Role changed from ${existingUser?.role} to ${data.role}`);
+        }
+        if (data.name && existingUser?.name !== data.name) {
+            changesList.push(`Name changed to "${data.name}"`);
+        }
+        if (data.password) {
+            changesList.push('Password was reset');
+        }
+        const permKeys = Object.keys(data).filter(k => k.startsWith('perm') && (existingUser as any)?.[k] !== (data as any)[k]);
+        if (permKeys.length > 0) {
+            changesList.push(`Permissions updated: ${permKeys.map(k => `${k.replace('perm', '')} (${(data as any)[k] ? 'Enabled' : 'Disabled'})`).join(', ')}`);
+        }
+
+        const detailsText = changesList.length > 0
+            ? `User "${updatedUser.name || updatedUser.username}" updated (${user.role}): ${changesList.join('; ')}`
+            : `User "${updatedUser.username}" updated by ${user.role} user${user.id === id ? ' (self-update)' : ''}`;
+
         await prisma.auditLog.create({
             data: {
                 action: 'USER_UPDATE',
-                details: `User "${updatedUser.username}" updated by ${user.role} user${user.id === id ? ' (self-update)' : ''}`,
+                details: detailsText,
                 userId: updatedBy
             }
         });

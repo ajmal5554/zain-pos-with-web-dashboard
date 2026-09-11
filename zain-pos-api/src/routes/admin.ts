@@ -146,6 +146,8 @@ router.patch('/users/:id', async (req: AuthRequest, res) => {
         return res.status(400).json({ error: 'No allowed fields provided' });
     }
 
+    const existing = await prisma.user.findUnique({ where: { id } });
+
     const updated = await prisma.user.update({
         where: { id },
         data,
@@ -177,10 +179,29 @@ router.patch('/users/:id', async (req: AuthRequest, res) => {
         }
     });
 
+    const changesList: string[] = [];
+    if (data.maxDiscount !== undefined && existing?.maxDiscount !== data.maxDiscount) {
+        changesList.push(`Max discount cap changed to ${data.maxDiscount}% (was ${existing?.maxDiscount || 0}%)`);
+    }
+    if (data.role && existing?.role !== data.role) {
+        changesList.push(`Role changed from ${existing?.role} to ${data.role}`);
+    }
+    if (data.name && existing?.name !== data.name) {
+        changesList.push(`Name changed to "${data.name}"`);
+    }
+    const permKeys = Object.keys(data).filter(k => k.startsWith('perm') && (existing as any)?.[k] !== (data as any)[k]);
+    if (permKeys.length > 0) {
+        changesList.push(`Permissions updated: ${permKeys.map(k => `${k.replace('perm', '')} (${(data as any)[k] ? 'Enabled' : 'Disabled'})`).join(', ')}`);
+    }
+
+    const detailsText = changesList.length > 0
+        ? `Admin ${actor.name || actor.username} updated user "${updated.name || updated.username}": ${changesList.join('; ')}`
+        : `User ${updated.username} updated from web dashboard by ${actor.username}`;
+
     await prisma.auditLog.create({
         data: {
             action: 'REMOTE_USER_UPDATED',
-            details: `User ${updated.username} updated from web dashboard by ${actor.username}`,
+            details: detailsText,
             userId: actor.id
         }
     });

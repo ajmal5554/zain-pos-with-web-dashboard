@@ -6,6 +6,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, Trash2, Type, Image as ImageIcon, Layout, AlignLeft, AlignCenter, AlignRight, Bold, RotateCcw, CreditCard, Menu, DollarSign, Percent, Hash, Download, Upload } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { DEFAULT_RECEIPT_PRINTER_CONFIG, generateReceiptHtml, type ReceiptData, type ReceiptPrinterConfig } from '../../services/print.service';
 import { useAuthStore } from '../../store/authStore';
 
@@ -104,6 +105,7 @@ export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ printerSetting
     const [saving, setSaving] = useState(false);
     const [previewHtml, setPreviewHtml] = useState('');
     const [printerConfig, setPrinterConfig] = useState<ReceiptPrinterConfig>(DEFAULT_RECEIPT_PRINTER_CONFIG);
+    const [showResetConfirm, setShowResetConfirm] = useState(false);
     const [shopDetails, setShopDetails] = useState({
         shopName: 'YOUR SHOP NAME',
         address: '123 Business Street, City',
@@ -245,10 +247,7 @@ export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ printerSetting
     };
 
     const handleReset = () => {
-        if (confirm('Are you sure you want to reset to the default layout?')) {
-            setBlocks(DEFAULT_LAYOUT);
-            setSelectedBlock(null);
-        }
+        setShowResetConfirm(true);
     };
 
     const handleExportTemplate = () => {
@@ -407,8 +406,9 @@ export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ printerSetting
                         <table className="w-full text-right" style={{ fontSize: 'inherit' }}>
                             <tbody>
                                 <tr><td>Total Items:</td><td>2</td></tr>
-                                <tr><td>Taxable Amount (Excl. GST):</td><td>128.57</td></tr>
+                                <tr className="font-bold"><td>Gross Subtotal (incl. GST):</td><td>135.00</td></tr>
                                 <tr><td>Discount:</td><td>0.00</td></tr>
+                                <tr><td>Taxable Amount (Excl. GST):</td><td>128.57</td></tr>
                                 <tr><td>CGST @2.5%:</td><td>3.21</td></tr>
                                 <tr><td>SGST @2.5%:</td><td>3.21</td></tr>
                                 <tr className="font-bold border-t border-dashed border-black">
@@ -684,6 +684,20 @@ export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ printerSetting
                     )}
                 </div>
             </div>
+
+            <ConfirmDialog
+                isOpen={showResetConfirm}
+                title="Reset Receipt Layout"
+                message="Are you sure you want to reset to the default layout? Any unsaved modifications will be lost."
+                confirmText="Reset Layout"
+                confirmVariant="warning"
+                onClose={() => setShowResetConfirm(false)}
+                onConfirm={() => {
+                    setBlocks(DEFAULT_LAYOUT);
+                    setSelectedBlock(null);
+                    setShowResetConfirm(false);
+                }}
+            />
         </div>
     );
 };

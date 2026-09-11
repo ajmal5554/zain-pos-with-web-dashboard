@@ -60,16 +60,55 @@ export const notificationService = {
             // However, the user asked for `shopId` logic.
             // I will fetch subscriptions for users.
 
-            // Allow sending to all for now as it's likely single deployment per shop.
             const subscriptions = await prisma.pushSubscription.findMany();
 
-            const pushPayload = JSON.stringify({
-                title,
-                body: message,
-                icon: '/icons/icon-192x192.png',
-                data: {
-                    url: referenceId ? `/dashboard/sales` : '/dashboard/notifications' // generic url logic
+            const billNumber = metadata?.billNo;
+            const amount = metadata?.amount !== undefined ? metadata.amount : undefined;
+
+            let finalTitle = title;
+            let finalBody = message;
+            let tag: string | undefined;
+            let targetUrl = '/sales';
+
+            if (type === 'sale') {
+                finalTitle = 'New Sale';
+                if (billNumber && amount !== undefined && amount !== null) {
+                    const num = Number(amount);
+                    const formatted = isNaN(num) ? String(amount) : (num % 1 === 0 ? num.toFixed(0) : num.toFixed(2));
+                    finalBody = `Bill #${billNumber} • ₹${formatted}`;
                 }
+                tag = billNumber ? `sale-${billNumber}` : `sale-${referenceId || Date.now()}`;
+                targetUrl = billNumber ? `/sales?billNo=${encodeURIComponent(billNumber)}` : '/sales';
+            } else if (type === 'invoice_updated') {
+                tag = billNumber ? `invoice-update-${billNumber}` : `update-${referenceId || Date.now()}`;
+                targetUrl = billNumber ? `/sales?billNo=${encodeURIComponent(billNumber)}` : '/sales';
+            } else if (type === 'invoice_deleted') {
+                tag = billNumber ? `invoice-void-${billNumber}` : `void-${referenceId || Date.now()}`;
+                targetUrl = billNumber ? `/sales?billNo=${encodeURIComponent(billNumber)}` : '/sales';
+            } else {
+                targetUrl = '/activity';
+            }
+
+            const pushPayload = JSON.stringify({
+                title: finalTitle,
+                body: finalBody,
+                icon: '/icons/icon-192.png',
+                badge: '/icons/badge.png',
+                tag,
+                data: {
+                    type,
+                    referenceId,
+                    billNo: billNumber,
+                    amount,
+                    url: targetUrl,
+                    metadata
+                },
+                actions: [
+                    {
+                        action: 'view',
+                        title: 'View Bill'
+                    }
+                ]
             });
 
             const sendPromises = subscriptions.map(async (sub) => {

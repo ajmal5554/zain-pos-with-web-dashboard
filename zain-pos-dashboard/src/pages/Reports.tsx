@@ -361,7 +361,9 @@ export default function Reports() {
                         sgst.toFixed(2),
                         totalGst.toFixed(2),
                         (sale.grandTotal ?? 0).toFixed(2),
-                        sale.paymentMethod,
+                        sale.paymentMethod === 'SPLIT' && (sale as any).payments?.length
+                            ? (sale as any).payments.map((p: any) => `${p.paymentMode} ₹${p.amount.toFixed(2)}`).join(' + ')
+                            : sale.paymentMethod,
                     ];
                 }), grandTotalRow],
                 theme: 'grid',
@@ -457,7 +459,9 @@ export default function Reports() {
                         sgst,
                         totalGst,
                         sale.grandTotal,
-                        sale.paymentMethod,
+                        sale.paymentMethod === 'SPLIT' && (sale as any).payments?.length
+                            ? (sale as any).payments.map((p: any) => `${p.paymentMode} ₹${p.amount.toFixed(2)}`).join(' + ')
+                            : sale.paymentMethod,
                     ];
                 }),
                 ['GRAND TOTAL', '', '', a.subtotal, a.discount, a.taxableValue, (a.taxableValue - a.totalTax), a.cgst, a.sgst, a.totalTax, a.grandTotal, ''],

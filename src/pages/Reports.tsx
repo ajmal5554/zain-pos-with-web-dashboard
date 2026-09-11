@@ -8,6 +8,7 @@ import {
     subMonths,
     startOfQuarter,
     endOfQuarter,
+    isSameDay,
 } from 'date-fns';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -81,6 +82,8 @@ interface SaleRow {
     payments?: PaymentRow[];
     refunds?: RefundRow[];
     reportStatus?: 'COMPLETED' | 'REFUNDED' | 'PARTIALLY_REFUNDED';
+    exchangeCredit?: number;
+    taxableValue?: number;
 }
 
 interface TaxSlabSummary {
@@ -112,6 +115,7 @@ interface ReportTotals {
     count: number;
     subtotal: number;
     discount: number;
+    exchangeCredit?: number;
     taxableValue: number;
     cgst: number;
     sgst: number;
@@ -129,6 +133,7 @@ interface DailySummary {
     billCount: number;
     subtotal: number;
     discount: number;
+    exchangeCredit?: number;
     taxableValue: number;
     cgst: number;
     sgst: number;
@@ -143,6 +148,7 @@ interface ReportData {
     startDate: Date;
     endDate: Date;
     taxInvoices: SaleRow[];
+    regularSales: SaleRow[];
     allSales: SaleRow[];
     cancelledSales: SaleRow[];
     exchangeReplacementSales: SaleRow[];
@@ -167,6 +173,44 @@ const parseDateInputValue = (value: string, endOfDay = false): Date => {
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+function getReportFileName(
+    reportType: 'summary' | 'detailed',
+    startDate: Date,
+    endDate: Date,
+    extension: 'pdf' | 'xlsx'
+): string {
+    const typeLabel = reportType === 'summary' ? 'Summary' : 'Detailed';
+
+    // 1. Single day (e.g., 15-Aug-2026)
+    if (isSameDay(startDate, endDate)) {
+        return `GST-${typeLabel}-${format(startDate, 'dd-MMM-yyyy')}.${extension}`;
+    }
+
+    const isSameMonthAndYear =
+        startDate.getFullYear() === endDate.getFullYear() &&
+        startDate.getMonth() === endDate.getMonth();
+    const isFirstDay = startDate.getDate() === 1;
+    const isLastDay = endDate.getDate() === endOfMonth(startDate).getDate();
+
+    // 2. Full calendar month (e.g., Aug 1 to Aug 31 -> August-2026)
+    if (isSameMonthAndYear && isFirstDay && isLastDay) {
+        return `GST-${typeLabel}-${format(startDate, 'MMMM-yyyy')}.${extension}`;
+    }
+
+    // 3. Partial range within same month (e.g., 01-to-15-Aug-2026)
+    if (isSameMonthAndYear) {
+        return `GST-${typeLabel}-${format(startDate, 'dd')}-to-${format(endDate, 'dd-MMM-yyyy')}.${extension}`;
+    }
+
+    // 4. Same year, different months (e.g., 20-Jul-to-10-Aug-2026)
+    if (startDate.getFullYear() === endDate.getFullYear()) {
+        return `GST-${typeLabel}-${format(startDate, 'dd-MMM')}-to-${format(endDate, 'dd-MMM-yyyy')}.${extension}`;
+    }
+
+    // 5. Across different years (e.g., 15-Dec-2025-to-15-Jan-2026)
+    return `GST-${typeLabel}-${format(startDate, 'dd-MMM-yyyy')}-to-${format(endDate, 'dd-MMM-yyyy')}.${extension}`;
+}
 
 function getPaymentBreakdown(sale: SaleRow): PaymentSummary {
     const result: PaymentSummary = { cash: 0, upi: 0, card: 0 };
@@ -358,11 +402,13 @@ function calculateTotals(salesList: SaleRow[]): ReportTotals {
     const allItems: SaleItemRow[] = [];
     const payment: PaymentSummary = { cash: 0, upi: 0, card: 0 };
 
-    let subtotal = 0, discount = 0, cgst = 0, sgst = 0, totalTax = 0, grandTotal = 0;
+    let subtotal = 0, discount = 0, exchangeCredit = 0, taxableValue = 0, cgst = 0, sgst = 0, totalTax = 0, grandTotal = 0;
 
     for (const sale of salesList) {
         subtotal += sale.subtotal;
         discount += sale.discount;
+        exchangeCredit += (sale.exchangeCredit || 0);
+        taxableValue += (sale.taxableValue !== undefined ? sale.taxableValue : (sale.subtotal - sale.discount));
         cgst += sale.cgst || 0;
         sgst += sale.sgst || 0;
         totalTax += sale.taxAmount;
@@ -379,7 +425,8 @@ function calculateTotals(salesList: SaleRow[]): ReportTotals {
         count: salesList.length,
         subtotal,
         discount,
-        taxableValue: subtotal - discount,
+        exchangeCredit,
+        taxableValue,
         cgst,
         sgst,
         totalTax,
@@ -404,12 +451,14 @@ function buildDailySummaries(salesList: SaleRow[]): DailySummary[] {
 
     for (const [dateKey, sales] of dayMap.entries()) {
         const sortedBills = sales.map((s) => String(s.billNo)).sort(compareBillNos);
-        let subtotal = 0, discount = 0, cgst = 0, sgst = 0, totalTax = 0, grandTotal = 0;
+        let subtotal = 0, discount = 0, exchangeCredit = 0, taxableValue = 0, cgst = 0, sgst = 0, totalTax = 0, grandTotal = 0;
         let cash = 0, upi = 0, card = 0;
 
         for (const sale of sales) {
             subtotal += sale.subtotal;
             discount += sale.discount;
+            exchangeCredit += (sale.exchangeCredit || 0);
+            taxableValue += (sale.taxableValue !== undefined ? sale.taxableValue : (sale.subtotal - sale.discount));
             cgst += sale.cgst || 0;
             sgst += sale.sgst || 0;
             totalTax += sale.taxAmount;
@@ -428,7 +477,8 @@ function buildDailySummaries(salesList: SaleRow[]): DailySummary[] {
             billCount: sales.length,
             subtotal,
             discount,
-            taxableValue: subtotal - discount,
+            exchangeCredit,
+            taxableValue,
             cgst,
             sgst,
             totalTax,
@@ -464,7 +514,127 @@ function isReplacementSale(sale: SaleRow): boolean {
     return sale.paymentMethod === 'EXCHANGE' || (sale.remarks || '').includes('Replacement sale for Invoice');
 }
 
+function processSaleForReport(sale: SaleRow): SaleRow {
+    const netSale = getNetSaleForReport(sale);
+    const isReplacement = isReplacementSale(sale);
+    if (!isReplacement) {
+        const taxable = netSale.subtotal - netSale.discount;
+        return {
+            ...netSale,
+            exchangeCredit: 0,
+            taxableValue: taxable,
+        };
+    }
+
+    // It's an exchange replacement bill (e.g. #1840 or #1841)
+    const payBreakdown = getPaymentBreakdown(sale);
+    const freshPaid = payBreakdown.cash + payBreakdown.upi + payBreakdown.card;
+
+    if (freshPaid <= 0.009) {
+        // Fully covered by exchange credit (e.g. #1840)
+        return {
+            ...netSale,
+            exchangeCredit: netSale.subtotal,
+            taxableValue: 0,
+            cgst: 0,
+            sgst: 0,
+            taxAmount: 0,
+            grandTotal: 0,
+            items: (netSale.items || []).map((it) => ({
+                ...it,
+                taxAmount: 0,
+            })),
+            payments: [{ paymentMode: 'EXCHANGE_CREDIT', amount: netSale.subtotal }],
+        };
+    }
+
+    // Partial exchange credit + fresh payment collected (e.g. #1841: 800 bill, 750 credit, 50 UPI)
+    const ratio = freshPaid / Math.max(netSale.grandTotal, 0.01);
+    const netGrandTotal = parseFloat(freshPaid.toFixed(2));
+
+    const netItems = (netSale.items || []).map((item) => {
+        const itemTotal = parseFloat((item.total * ratio).toFixed(2));
+        const itemTax = item.taxRate > 0 ? parseFloat(((itemTotal * item.taxRate) / (100 + item.taxRate)).toFixed(2)) : 0;
+        return {
+            ...item,
+            taxAmount: itemTax,
+            total: itemTotal,
+        };
+    });
+
+    const netTax = parseFloat(netItems.reduce((sum, it) => sum + it.taxAmount, 0).toFixed(2));
+    const netCgst = parseFloat((netTax / 2).toFixed(2));
+    const netSgst = parseFloat((netTax / 2).toFixed(2));
+    const netTaxable = parseFloat((netGrandTotal - netTax).toFixed(2));
+
+    return {
+        ...netSale,
+        exchangeCredit: parseFloat((netSale.subtotal - freshPaid).toFixed(2)),
+        taxableValue: netTaxable,
+        cgst: netCgst,
+        sgst: netSgst,
+        taxAmount: netTax,
+        grandTotal: netGrandTotal,
+        items: netItems,
+        payments: [
+            { paymentMode: 'CASH', amount: payBreakdown.cash },
+            { paymentMode: 'UPI', amount: payBreakdown.upi },
+            { paymentMode: 'CARD', amount: payBreakdown.card },
+        ].filter((p) => p.amount > 0),
+    };
+}
+
+function getExchangeNetDifferentialSale(sale: SaleRow): SaleRow | null {
+    const payBreakdown = getPaymentBreakdown(sale);
+    const netPaid = payBreakdown.cash + payBreakdown.upi + payBreakdown.card;
+    if (netPaid <= 0.009) return null;
+
+    const ratio = netPaid / Math.max(sale.grandTotal, 0.01);
+    const netSubtotal = parseFloat((sale.subtotal * ratio).toFixed(2));
+    const netDiscount = parseFloat((sale.discount * ratio).toFixed(2));
+    const netGrandTotal = parseFloat(netPaid.toFixed(2));
+
+    const netItems = (sale.items || []).map((item) => {
+        const itemTotal = parseFloat((item.total * ratio).toFixed(2));
+        const itemTax = item.taxRate > 0 ? parseFloat(((itemTotal * item.taxRate) / (100 + item.taxRate)).toFixed(2)) : 0;
+        return {
+            ...item,
+            quantity: 1,
+            sellingPrice: itemTotal,
+            discount: parseFloat((item.discount * ratio).toFixed(2)),
+            taxAmount: itemTax,
+            total: itemTotal,
+        };
+    });
+
+    const netTax = parseFloat(netItems.reduce((sum, it) => sum + it.taxAmount, 0).toFixed(2));
+    const netCgst = parseFloat((netTax / 2).toFixed(2));
+    const netSgst = parseFloat((netTax / 2).toFixed(2));
+
+    return {
+        ...sale,
+        id: `${sale.id}-diff`,
+        billNo: `${sale.billNo} (Exchange Extra)`,
+        subtotal: netSubtotal,
+        discount: netDiscount,
+        taxAmount: netTax,
+        cgst: netCgst,
+        sgst: netSgst,
+        grandTotal: netGrandTotal,
+        items: netItems,
+        payments: [
+            { paymentMode: 'CASH', amount: payBreakdown.cash },
+            { paymentMode: 'UPI', amount: payBreakdown.upi },
+            { paymentMode: 'CARD', amount: payBreakdown.card },
+        ].filter((p) => p.amount > 0),
+        remarks: `Net additional payment collected on replacement bill #${sale.billNo}`,
+    };
+}
+
 function formatGstBillLabel(sale: SaleRow): string {
+    if (sale.id.endsWith('-diff') || String(sale.billNo).includes('Exchange Extra')) {
+        return String(sale.billNo);
+    }
     if (isReplacementSale(sale)) {
         return `${sale.billNo} (REPLACEMENT BILL)`;
     }
@@ -570,21 +740,22 @@ export const Reports: React.FC = () => {
             const activeSales = sales.filter((sale) => sale.status !== 'VOIDED');
             const nettedSales = activeSales.map((sale) => getNetSaleForReport(sale));
 
-            const exchangeReplacementSales = nettedSales.filter(isReplacementSale);
-            const regularSales = nettedSales.filter((s) => !isReplacementSale(s));
-            const taxInvoices = regularSales.filter((s) => !s.isHistorical);
+            const processedSales = nettedSales.map((sale) => processSaleForReport(sale));
+            const exchangeReplacementSales = processedSales.filter(isReplacementSale);
+            const taxInvoices = processedSales.filter((s) => !s.isHistorical);
 
             setReportData({
                 startDate: start,
                 endDate: end,
                 taxInvoices,
-                allSales: nettedSales,
+                regularSales: processedSales,
+                allSales: processedSales,
                 cancelledSales,
                 exchangeReplacementSales,
                 taxInvoiceTotals: calculateTotals(taxInvoices),
-                allSalesTotals: calculateTotals(regularSales),
+                allSalesTotals: calculateTotals(processedSales),
                 exchangeReplacementTotals: calculateTotals(exchangeReplacementSales),
-                dailySummaries: buildDailySummaries(regularSales),
+                dailySummaries: buildDailySummaries(processedSales),
             });
         } catch (error) {
             console.error('Failed to generate report:', error);
@@ -711,7 +882,7 @@ export const Reports: React.FC = () => {
 
         } else {
             // Detailed Report
-            const saleColumns = ['DATE', 'BILL NO', 'GROSS AMOUNT\n(incl. GST)', 'DISCOUNT', 'NET AMOUNT\n(incl. GST)', 'TAXABLE AMOUNT\n(excl. GST)', 'CGST', 'SGST', 'TOTAL GST', 'AMOUNT PAID', 'PAYMENT'];
+            const saleColumns = ['DATE', 'BILL NO', 'GROSS AMOUNT\n(incl. GST)', 'EXCHANGE\nCREDIT', 'DISCOUNT', 'TAXABLE AMOUNT\n(excl. GST)', 'CGST', 'SGST', 'TOTAL GST', 'NET TURNOVER\n(AMOUNT PAID)', 'PAYMENT'];
 
             const mapSaleRow = (sale: SaleRow) => {
                 const pb = getPaymentBreakdown(sale);
@@ -726,28 +897,34 @@ export const Reports: React.FC = () => {
                 const cgst = parseFloat((totalGst / 2).toFixed(2));
                 const sgst = parseFloat((totalGst / 2).toFixed(2));
 
+                const exCredit = (sale.exchangeCredit || 0);
+                const displayTaxable = sale.taxableValue !== undefined ? sale.taxableValue : taxableAmount;
+                const displayTax = sale.taxAmount !== undefined ? sale.taxAmount : totalGst;
+                const displayCgst = sale.cgst !== undefined ? sale.cgst : cgst;
+                const displaySgst = sale.sgst !== undefined ? sale.sgst : sgst;
+
                 return [
                     format(new Date(sale.createdAt), 'dd/MMM/yy'),
-                    formatGstBillLabel(sale),
+                    isReplacementSale(sale) ? `${sale.billNo} (EXCHANGE)` : String(sale.billNo),
                     sale.subtotal.toFixed(2),
+                    exCredit > 0 ? `-${exCredit.toFixed(2)}` : '-',
                     sale.discount.toFixed(2),
-                    netAmount.toFixed(2),
-                    taxableAmount.toFixed(2),
-                    cgst.toFixed(2),
-                    sgst.toFixed(2),
-                    totalGst.toFixed(2),
+                    displayTaxable.toFixed(2),
+                    displayCgst.toFixed(2),
+                    displaySgst.toFixed(2),
+                    displayTax.toFixed(2),
                     sale.grandTotal.toFixed(2),
-                    payModes.join('+') || sale.paymentMethod,
+                    payModes.join('+') || (exCredit > 0 ? 'Exchange Credit' : sale.paymentMethod),
                 ];
             };
 
             doc.setFontSize(11);
             doc.setFont('helvetica', 'bold');
-            doc.text('DETAILED INVOICE REPORT', 14, currentY);
+            doc.text('DETAILED INVOICE REPORT - TAX INVOICES (FRESH SALES)', 14, currentY);
             currentY += 5;
 
-            // Sort sales based on user selection
-            const sortedSales = [...reportData.allSales].sort((a, b) =>
+            // Sort regular sales based on user selection
+            const sortedRegularSales = [...reportData.regularSales].sort((a, b) =>
                 sortBy === 'billNo' ? compareBillNos(String(a.billNo), String(b.billNo)) : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
             );
 
@@ -758,9 +935,9 @@ export const Reports: React.FC = () => {
                 'GRAND TOTAL',                          
                 `${a.count} bills`,                     
                 a.subtotal.toFixed(2),                  
+                (a.exchangeCredit || 0) > 0 ? `-${(a.exchangeCredit || 0).toFixed(2)}` : '-',
                 a.discount.toFixed(2),                   
                 a.taxableValue.toFixed(2),              
-                totalTaxableAmount.toFixed(2),         // New taxable amount column
                 a.cgst.toFixed(2),                      
                 a.sgst.toFixed(2),                      
                 a.totalTax.toFixed(2),                  
@@ -768,17 +945,21 @@ export const Reports: React.FC = () => {
                 'All modes',                                     
             ];
 
+            const regularBody = sortedRegularSales.length > 0
+                ? [...sortedRegularSales.map(mapSaleRow), grandTotalRow]
+                : [['No fresh tax invoices in this date range', '', '', '', '', '', '', '', '', '', ''], grandTotalRow];
+
             autoTable(doc, {
                 startY: currentY,
                 head: [saleColumns],
-                body: [...sortedSales.map(mapSaleRow), grandTotalRow],
+                body: regularBody,
                 theme: 'grid',
                 styles: { fontSize: 8, cellPadding: 1 },
                 headStyles: { fillColor: [255, 255, 255], textColor: [0, 0, 0], fontStyle: 'bold' },
                 bodyStyles: { fillColor: [255, 255, 255] },
                 // Style the last row (Grand Total) differently
                 didParseCell: function (data: any) {
-                    if (data.row.index === sortedSales.length) { // Last row is Grand Total
+                    if (data.row.index === regularBody.length - 1) { // Last row is Grand Total
                         data.cell.styles.fontStyle = 'bold';
                         data.cell.styles.fillColor = [220, 220, 220];
                     }
@@ -834,7 +1015,7 @@ export const Reports: React.FC = () => {
             }
         }
 
-        doc.save(`GST-${reportType === 'summary' ? 'Summary' : 'Detailed'}-${format(reportData.startDate, 'dd-MM-yyyy')}-to-${format(reportData.endDate, 'dd-MM-yyyy')}.pdf`);
+        doc.save(getReportFileName(reportType, reportData.startDate, reportData.endDate, 'pdf'));
     };
 
     // ── Excel Export ──────────────────────────────────────────────────────────
@@ -846,7 +1027,17 @@ export const Reports: React.FC = () => {
         const dateRange = `From ${format(reportData.startDate, 'dd/MM/yyyy')} To ${format(reportData.endDate, 'dd/MM/yyyy')}`;
         const a = reportData.allSalesTotals;
 
-        // Sorted sales used in both Detailed sheet and Items Detail sheet
+        // Sorted sales used in Detailed sheet and Items Detail sheet
+        const sortedRegularSales = [...reportData.regularSales].sort((a, b) =>
+            sortBy === 'billNo'
+                ? compareBillNos(String(a.billNo), String(b.billNo))
+                : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        );
+        const sortedReplacementSales = [...reportData.exchangeReplacementSales].sort((a, b) =>
+            sortBy === 'billNo'
+                ? compareBillNos(String(a.billNo), String(b.billNo))
+                : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        );
         const sortedSales = [...reportData.allSales].sort((a, b) =>
             sortBy === 'billNo'
                 ? compareBillNos(String(a.billNo), String(b.billNo))
@@ -884,7 +1075,7 @@ export const Reports: React.FC = () => {
             XLSX.utils.book_append_sheet(wb, ws, 'Daily Summary');
 
         } else {
-            const header = ['DATE & TIME', 'BILL NO', 'CUSTOMER', 'GROSS AMOUNT (incl. GST)', 'DISCOUNT', 'NET AMOUNT (incl. GST)', 'TAXABLE AMOUNT (excl. GST)', 'CGST', 'SGST', 'TOTAL GST', 'AMOUNT PAID', 'PAYMENT'];
+            const header = ['DATE & TIME', 'BILL NO', 'CUSTOMER', 'GROSS AMOUNT (incl. GST)', 'EXCHANGE CREDIT', 'DISCOUNT', 'TAXABLE AMOUNT (excl. GST)', 'CGST', 'SGST', 'TOTAL GST', 'NET AMOUNT PAID', 'PAYMENT'];
 
             const mapSaleExcel = (sale: SaleRow) => {
                 const pb = getPaymentBreakdown(sale);
@@ -899,39 +1090,60 @@ export const Reports: React.FC = () => {
                 const cgst = parseFloat((totalGst / 2).toFixed(2));
                 const sgst = parseFloat((totalGst / 2).toFixed(2));
 
+                const exCredit = (sale.exchangeCredit || 0);
+                const displayTaxable = sale.taxableValue !== undefined ? sale.taxableValue : taxableAmount;
+                const displayTax = sale.taxAmount !== undefined ? sale.taxAmount : totalGst;
+                const displayCgst = sale.cgst !== undefined ? sale.cgst : cgst;
+                const displaySgst = sale.sgst !== undefined ? sale.sgst : sgst;
+
                 return [
                     format(new Date(sale.createdAt), 'dd/MMM/yy HH:mm'),
-                    sale.billNo,
+                    isReplacementSale(sale) ? `${sale.billNo} (EXCHANGE)` : String(sale.billNo),
                     sale.customerName || 'Walk-in Customer',
                     sale.subtotal,
+                    exCredit > 0 ? -exCredit : 0,
                     sale.discount,
-                    netAmount,
-                    taxableAmount,
-                    cgst,
-                    sgst,
-                    totalGst,
+                    displayTaxable,
+                    displayCgst,
+                    displaySgst,
+                    displayTax,
                     sale.grandTotal,
-                    payModes.join('+') || sale.paymentMethod,
+                    payModes.join('+') || (exCredit > 0 ? 'Exchange Credit' : sale.paymentMethod),
                 ];
             };
 
-            const data = [
+            const data: any[] = [
                 [shopSettings.shopName],
                 [shopSettings.address.replace('\n', ', ')],
                 [`Ph: ${shopSettings.phone}  |  GSTIN: ${shopSettings.gstin}`],
                 [],
                 [dateRange],
                 [],
-                ['DETAILED INVOICE REPORT'],
+                ['DETAILED TAX INVOICES (FRESH SALES)'],
                 header,
-                ...sortedSales.map(mapSaleExcel),
-                ['GRAND TOTAL', '', '', a.subtotal, a.discount, a.taxableValue, (a.taxableValue - a.totalTax), a.cgst, a.sgst, a.totalTax, a.grandTotal, ''],
+                ...sortedRegularSales.map(mapSaleExcel),
+                ['GRAND TOTAL', `${a.count} bills`, '', a.subtotal, -(a.exchangeCredit || 0), a.discount, a.taxableValue, a.cgst, a.sgst, a.totalTax, a.grandTotal, ''],
+            ];
+
+            if (sortedReplacementSales.length > 0) {
+                const rep = reportData.exchangeReplacementTotals;
+                data.push(
+                    [],
+                    ['EXCHANGE REPLACEMENT INVOICES (EXCLUDED FROM GST SALES TURNOVER)'],
+                    header,
+                    ...sortedReplacementSales.map(mapSaleExcel),
+                    ['TOTAL REPLACEMENTS', '', '', rep.subtotal, rep.discount, rep.taxableValue, (rep.taxableValue - rep.totalTax), rep.cgst, rep.sgst, rep.totalTax, rep.grandTotal, ''],
+                    ['Note: Replacement invoices for returned goods. Base values are offset by returned goods to prevent double taxation.']
+                );
+            }
+
+            data.push(
                 [],
-                ['PAYMENT BREAKDOWN'],
+                ['PAYMENT BREAKDOWN (FRESH SALES)'],
                 ['Cash', a.payment.cash],
                 ['UPI', a.payment.upi],
                 ['Card', a.payment.card],
-            ];
+            );
 
             const ws = XLSX.utils.aoa_to_sheet(data);
             XLSX.utils.book_append_sheet(wb, ws, 'Detailed Report');
@@ -939,7 +1151,7 @@ export const Reports: React.FC = () => {
 
         // ── Items Detail sheet (all modes) ────────────────────────────────────
         const itemsHeader = [
-            'BILL NO', 'INVOICE DATE', 'ACTUAL SALE DATE', 'CUSTOMER', 'PAYMENT METHOD',
+            'INVOICE TYPE', 'BILL NO', 'INVOICE DATE', 'ACTUAL SALE DATE', 'CUSTOMER', 'PAYMENT METHOD',
             'PRODUCT', 'BARCODE', 'SKU', 'SIZE', 'COLOR',
             'QTY', 'MRP', 'SELLING PRICE', 'DISCOUNT',
             'TAX %', 'CGST AMT', 'SGST AMT', 'LINE TOTAL',
@@ -957,6 +1169,7 @@ export const Reports: React.FC = () => {
         ];
 
         for (const sale of sortedSales) {
+            const invoiceType = isReplacementSale(sale) ? 'Replacement' : 'Tax Invoice';
             const invoiceDate = format(new Date(sale.createdAt), 'dd/MMM/yy HH:mm');
             const actualSaleDate = sale.actualSaleDate
                 ? format(new Date(sale.actualSaleDate), 'dd/MMM/yy')
@@ -970,6 +1183,7 @@ export const Reports: React.FC = () => {
                     const cgstAmt = parseFloat(((taxable * halfTax) / 100).toFixed(2));
                     const sgstAmt = cgstAmt;
                     itemsData.push([
+                        invoiceType,
                         sale.billNo, invoiceDate, actualSaleDate, customer, payMethod,
                         item.productName,
                         item.variant?.barcode || '',
@@ -983,6 +1197,7 @@ export const Reports: React.FC = () => {
             } else {
                 // Historical sale — no item breakdown
                 itemsData.push([
+                    invoiceType,
                     sale.billNo, invoiceDate, actualSaleDate, customer, payMethod,
                     '(Historical — no item details)',
                     '', '', '', '',
@@ -995,7 +1210,7 @@ export const Reports: React.FC = () => {
         const wsItems = XLSX.utils.aoa_to_sheet(itemsData);
         XLSX.utils.book_append_sheet(wb, wsItems, 'Items Detail');
 
-        XLSX.writeFile(wb, `GST-${reportType === 'summary' ? 'Summary' : 'Detailed'}-${format(reportData.startDate, 'dd-MM-yyyy')}-to-${format(reportData.endDate, 'dd-MM-yyyy')}.xlsx`);
+        XLSX.writeFile(wb, getReportFileName(reportType, reportData.startDate, reportData.endDate, 'xlsx'));
     };
 
     // ── Date Presets ─────────────────────────────────────────────────────────
@@ -1023,11 +1238,21 @@ export const Reports: React.FC = () => {
     // ── UI ────────────────────────────────────────────────────────────────────
 
     const a = reportData?.allSalesTotals;
+    const [detailedFilter, setDetailedFilter] = useState<'all' | 'fresh' | 'replacements'>('all');
 
     // Sorted data based on user selection
-    const sortedSales = useMemo(() => {
+    const sortedRegularSales = useMemo(() => {
         if (!reportData) return [];
-        const sales = [...reportData.allSales];
+        const sales = [...reportData.regularSales];
+        if (sortBy === 'billNo') {
+            return sales.sort((a, b) => compareBillNos(String(a.billNo), String(b.billNo)));
+        }
+        return sales.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    }, [reportData, sortBy]);
+
+    const sortedReplacementSales = useMemo(() => {
+        if (!reportData) return [];
+        const sales = [...reportData.exchangeReplacementSales];
         if (sortBy === 'billNo') {
             return sales.sort((a, b) => compareBillNos(String(a.billNo), String(b.billNo)));
         }
@@ -1185,37 +1410,45 @@ export const Reports: React.FC = () => {
             {/* Report Preview */}
             {reportData && a && (
                 <>
-                    {reportData.exchangeReplacementTotals.count > 0 && (
-                        <div className="card p-4 border-l-4 border-amber-500 bg-amber-50/40 dark:bg-amber-900/10">
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                                <div>
-                                    <p className="text-sm font-bold text-amber-800 dark:text-amber-300">Exchange Replacement Bills</p>
-                                    <p className="text-xs text-amber-700/80 dark:text-amber-400/80">
-                                        These bills stay visible in Sales History, but are excluded from the normal GST sales totals below.
-                                    </p>
-                                </div>
-                                <div className="flex gap-6 text-sm">
+                    {reportData.exchangeReplacementTotals.count > 0 && (() => {
+                        const netCollected = reportData.exchangeReplacementTotals.payment.cash +
+                            reportData.exchangeReplacementTotals.payment.upi +
+                            reportData.exchangeReplacementTotals.payment.card;
+                        const offsetAmount = Math.max(0, reportData.exchangeReplacementTotals.grandTotal - netCollected);
+                        return (
+                            <div className="card p-4 border-l-4 border-amber-500 bg-amber-50/40 dark:bg-amber-900/10">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
                                     <div>
-                                        <span className="text-xs text-amber-700/80 block">Bills</span>
-                                        <span className="font-bold">{reportData.exchangeReplacementTotals.count}</span>
+                                        <p className="text-sm font-bold text-amber-800 dark:text-amber-300">Exchange Replacement Bills</p>
+                                        <p className="text-xs text-amber-700/80 dark:text-amber-400/80">
+                                            {formatIndianCurrency(offsetAmount)} was offset by returned goods from previous invoices. {netCollected > 0 ? `Net extra collected (${formatIndianCurrency(netCollected)}) is included in GST turnover above.` : 'No additional payment collected.'}
+                                        </p>
                                     </div>
-                                    <div>
-                                        <span className="text-xs text-amber-700/80 block">Taxable</span>
-                                        <span className="font-bold">{formatIndianCurrency(reportData.exchangeReplacementTotals.taxableValue)}</span>
-                                    </div>
-                                    <div>
-                                        <span className="text-xs text-amber-700/80 block">Grand Total</span>
-                                        <span className="font-bold">{formatIndianCurrency(reportData.exchangeReplacementTotals.grandTotal)}</span>
+                                    <div className="flex gap-6 text-sm font-mono">
+                                        <div>
+                                            <span className="text-xs text-amber-700/80 dark:text-amber-400/80 block">Bills</span>
+                                            <span className="font-bold">{reportData.exchangeReplacementTotals.count}</span>
+                                        </div>
+                                        <div>
+                                            <span className="text-xs text-amber-700/80 dark:text-amber-400/80 block">Replacement Value</span>
+                                            <span className="font-bold">{formatIndianCurrency(reportData.exchangeReplacementTotals.grandTotal)}</span>
+                                        </div>
+                                        <div>
+                                            <span className="text-xs text-amber-700/80 dark:text-amber-400/80 block">Net Added to GST</span>
+                                            <span className="font-bold text-emerald-700 dark:text-emerald-400">
+                                                {formatIndianCurrency(netCollected)}
+                                            </span>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
-                        </div>
-                    )}
+                        );
+                    })()}
 
                     {/* Summary Stats */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <div className="card p-4 border-l-4 border-blue-500">
-                            <p className="text-xs text-gray-500 dark:text-gray-400">Total Bills</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">Total GST Invoices</p>
                             <p className="text-2xl font-bold">{a.count}</p>
                         </div>
                         <div className="card p-4 border-l-4 border-green-500">
@@ -1349,62 +1582,242 @@ export const Reports: React.FC = () => {
                     {/* Detailed View */}
                     {reportType === 'detailed' && (
                         <>
-                            <div className="card">
-                                <h4 className="font-bold mb-3">All Invoices</h4>
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-sm">
-                                        <thead>
-                                            <tr className="border-b dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
-                                                <th className="text-left py-2 px-3">Date</th>
-                                                <th className="text-center py-2 px-3">Bill No</th>
-                                                <th className="text-right py-2 px-3">Subtotal</th>
-                                                <th className="text-right py-2 px-3">Discount</th>
-                                                <th className="text-right py-2 px-3">Taxable</th>
-                                                <th className="text-right py-2 px-3">CGST</th>
-                                                <th className="text-right py-2 px-3">SGST</th>
-                                                <th className="text-right py-2 px-3">Grand Total</th>
-                                                <th className="text-center py-2 px-3">Payment</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {sortedSales.map((sale) => {
-                                                const pb = getPaymentBreakdown(sale);
-                                                const payModes: string[] = [];
-                                                if (pb.cash > 0) payModes.push('Cash');
-                                                if (pb.upi > 0) payModes.push('UPI');
-                                                if (pb.card > 0) payModes.push('Card');
-
-                                                return (
-                                                    <tr key={sale.id} className="border-b dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-800/50">
-                                                        <td className="py-2 px-3">{format(new Date(sale.createdAt), 'dd/MMM/yy')}</td>
-                                                        <td className="py-2 px-3 text-center font-mono">{formatGstBillLabel(sale)}</td>
-                                                        <td className="py-2 px-3 text-right">{formatIndianCurrency(sale.subtotal)}</td>
-                                                        <td className="py-2 px-3 text-right text-red-500">{sale.discount > 0 ? `-${formatIndianCurrency(sale.discount)}` : '-'}</td>
-                                                        <td className="py-2 px-3 text-right">{formatIndianCurrency(sale.subtotal - sale.discount)}</td>
-                                                        <td className="py-2 px-3 text-right text-gray-500">{formatIndianCurrency(sale.cgst || 0)}</td>
-                                                        <td className="py-2 px-3 text-right text-gray-500">{formatIndianCurrency(sale.sgst || 0)}</td>
-                                                        <td className="py-2 px-3 text-right font-semibold">{formatIndianCurrency(sale.grandTotal)}</td>
-                                                        <td className="py-2 px-3 text-center text-xs">{payModes.join('+') || sale.paymentMethod}</td>
-                                                    </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                        <tfoot>
-                                            <tr className="bg-gray-100 dark:bg-gray-800 font-bold">
-                                                <td className="py-2 px-3">TOTAL</td>
-                                                <td className="py-2 px-3 text-center">{a.count} bills</td>
-                                                <td className="py-2 px-3 text-right">{formatIndianCurrency(a.subtotal)}</td>
-                                                <td className="py-2 px-3 text-right text-red-500">-{formatIndianCurrency(a.discount)}</td>
-                                                <td className="py-2 px-3 text-right">{formatIndianCurrency(a.taxableValue)}</td>
-                                                <td className="py-2 px-3 text-right">{formatIndianCurrency(a.cgst)}</td>
-                                                <td className="py-2 px-3 text-right">{formatIndianCurrency(a.sgst)}</td>
-                                                <td className="py-2 px-3 text-right">{formatIndianCurrency(a.grandTotal)}</td>
-                                                <td className="py-2 px-3"></td>
-                                            </tr>
-                                        </tfoot>
-                                    </table>
+                            {/* Filter Bar if replacement sales exist */}
+                            {reportData.exchangeReplacementSales.length > 0 && (
+                                <div className="flex items-center gap-2 mb-1">
+                                    <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Show:</span>
+                                    <div className="inline-flex rounded-lg border dark:border-gray-700 bg-gray-100 dark:bg-gray-800 p-0.5 text-xs font-medium">
+                                        <button
+                                            type="button"
+                                            onClick={() => setDetailedFilter('all')}
+                                            className={`px-3 py-1 rounded-md transition-colors ${
+                                                detailedFilter === 'all'
+                                                    ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 shadow-sm font-semibold'
+                                                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                                            }`}
+                                        >
+                                            All Sections ({reportData.regularSales.length + reportData.exchangeReplacementSales.length})
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setDetailedFilter('fresh')}
+                                            className={`px-3 py-1 rounded-md transition-colors ${
+                                                detailedFilter === 'fresh'
+                                                    ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 shadow-sm font-semibold'
+                                                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                                            }`}
+                                        >
+                                            Tax Invoices & Turnover ({reportData.regularSales.length})
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setDetailedFilter('replacements')}
+                                            className={`px-3 py-1 rounded-md transition-colors ${
+                                                detailedFilter === 'replacements'
+                                                    ? 'bg-white dark:bg-gray-900 text-amber-700 dark:text-amber-300 shadow-sm font-semibold'
+                                                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                                            }`}
+                                        >
+                                            Exchange Replacements ({reportData.exchangeReplacementSales.length})
+                                        </button>
+                                    </div>
                                 </div>
-                            </div>
+                            )}
+
+                            {/* Invoices Table */}
+                            {(detailedFilter === 'all' || detailedFilter === 'fresh' || detailedFilter === 'replacements') && (
+                                <div className="card">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <h4 className="font-bold">GST Invoices & Sales Register</h4>
+                                        <span className="text-xs text-gray-500 font-medium">{a.count} bills</span>
+                                    </div>
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-sm">
+                                            <thead>
+                                                <tr className="border-b dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
+                                                    <th className="text-left py-2 px-3">Date</th>
+                                                    <th className="text-center py-2 px-3">Bill No</th>
+                                                    <th className="text-right py-2 px-3">Gross Amount</th>
+                                                    <th className="text-right py-2 px-3">Exchange Credit</th>
+                                                    <th className="text-right py-2 px-3">Discount</th>
+                                                    <th className="text-right py-2 px-3">Taxable</th>
+                                                    <th className="text-right py-2 px-3">CGST</th>
+                                                    <th className="text-right py-2 px-3">SGST</th>
+                                                    <th className="text-right py-2 px-3">Grand Total</th>
+                                                    <th className="text-center py-2 px-3">Payment</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {(() => {
+                                                    const displayedSales = sortedRegularSales.filter((sale) => {
+                                                        if (detailedFilter === 'fresh') return !isReplacementSale(sale);
+                                                        if (detailedFilter === 'replacements') return isReplacementSale(sale);
+                                                        return true;
+                                                    });
+
+                                                    if (displayedSales.length === 0) {
+                                                        return (
+                                                            <tr>
+                                                                <td colSpan={10} className="text-center py-6 text-gray-400 text-sm">
+                                                                    No invoices in this view
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    }
+
+                                                    return displayedSales.map((sale) => {
+                                                        const pb = getPaymentBreakdown(sale);
+                                                        const payModes: string[] = [];
+                                                        if (pb.cash > 0) payModes.push(`Cash: ${formatIndianCurrency(pb.cash)}`);
+                                                        if (pb.upi > 0) payModes.push(`UPI: ${formatIndianCurrency(pb.upi)}`);
+                                                        if (pb.card > 0) payModes.push(`Card: ${formatIndianCurrency(pb.card)}`);
+                                                        if (payModes.length === 0 && (sale.exchangeCredit || 0) > 0) {
+                                                            payModes.push('Exchange Credit');
+                                                        }
+
+                                                        const isRep = isReplacementSale(sale);
+
+                                                        return (
+                                                            <tr key={sale.id} className={`border-b dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-800/50 ${isRep ? 'bg-amber-50/20 dark:bg-amber-950/10' : ''}`}>
+                                                                <td className="py-2 px-3">{format(new Date(sale.createdAt), 'dd/MMM/yy')}</td>
+                                                                <td className="py-2 px-3 text-center font-mono">
+                                                                    <span className="font-semibold">{sale.billNo}</span>
+                                                                    {isRep && (
+                                                                        <span className="ml-1.5 text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400">
+                                                                            (EXCHANGE)
+                                                                        </span>
+                                                                    )}
+                                                                </td>
+                                                                <td className="py-2 px-3 text-right">{formatIndianCurrency(sale.subtotal)}</td>
+                                                                <td className="py-2 px-3 text-right text-amber-600 dark:text-amber-400 font-mono">
+                                                                    {(sale.exchangeCredit || 0) > 0 ? `-${formatIndianCurrency(sale.exchangeCredit || 0)}` : '-'}
+                                                                </td>
+                                                                <td className="py-2 px-3 text-right text-red-500">{sale.discount > 0 ? `-${formatIndianCurrency(sale.discount)}` : '-'}</td>
+                                                                <td className="py-2 px-3 text-right">{formatIndianCurrency(sale.taxableValue !== undefined ? sale.taxableValue : (sale.subtotal - sale.discount))}</td>
+                                                                <td className="py-2 px-3 text-right text-gray-500">{formatIndianCurrency(sale.cgst || 0)}</td>
+                                                                <td className="py-2 px-3 text-right text-gray-500">{formatIndianCurrency(sale.sgst || 0)}</td>
+                                                                <td className="py-2 px-3 text-right font-semibold">{formatIndianCurrency(sale.grandTotal)}</td>
+                                                                <td className="py-2 px-3 text-center text-xs">{payModes.join(', ') || sale.paymentMethod}</td>
+                                                            </tr>
+                                                        );
+                                                    });
+                                                })()}
+                                            </tbody>
+                                            <tfoot>
+                                                <tr className="bg-gray-100 dark:bg-gray-800 font-bold">
+                                                    <td className="py-2 px-3">TOTAL</td>
+                                                    <td className="py-2 px-3 text-center">{a.count} bills</td>
+                                                    <td className="py-2 px-3 text-right">{formatIndianCurrency(a.subtotal)}</td>
+                                                    <td className="py-2 px-3 text-right text-amber-600 dark:text-amber-400 font-mono">
+                                                        {(a.exchangeCredit || 0) > 0 ? `-${formatIndianCurrency(a.exchangeCredit || 0)}` : '-'}
+                                                    </td>
+                                                    <td className="py-2 px-3 text-right text-red-500">-{formatIndianCurrency(a.discount)}</td>
+                                                    <td className="py-2 px-3 text-right">{formatIndianCurrency(a.taxableValue)}</td>
+                                                    <td className="py-2 px-3 text-right">{formatIndianCurrency(a.cgst)}</td>
+                                                    <td className="py-2 px-3 text-right">{formatIndianCurrency(a.sgst)}</td>
+                                                    <td className="py-2 px-3 text-right">{formatIndianCurrency(a.grandTotal)}</td>
+                                                    <td className="py-2 px-3 text-center text-xs text-emerald-700 dark:text-emerald-400">
+                                                        {a.payment.upi > 0 ? `UPI: ${formatIndianCurrency(a.payment.upi)}` : ''}
+                                                    </td>
+                                                </tr>
+                                            </tfoot>
+                                        </table>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Exchange Replacement Invoices Table */}
+                            {(detailedFilter === 'all' || detailedFilter === 'replacements') && reportData.exchangeReplacementSales.length > 0 && (
+                                <div className="card border-l-4 border-amber-500">
+                                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+                                        <div>
+                                            <div className="flex items-center gap-2">
+                                                <h4 className="font-bold text-amber-900 dark:text-amber-200">Exchange Replacement Invoices</h4>
+                                                <span className="badge py-0.5 px-2 bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 text-xs">
+                                                    Non-Revenue / Exchange Adjustment
+                                                </span>
+                                            </div>
+                                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                                                Bills issued for returned goods. Base amounts are offset by returned goods to prevent double taxation.
+                                            </p>
+                                        </div>
+                                        <span className="text-xs font-mono font-semibold text-amber-800 dark:text-amber-300">
+                                            {reportData.exchangeReplacementTotals.count} bills
+                                        </span>
+                                    </div>
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-sm">
+                                            <thead>
+                                                <tr className="border-b dark:border-gray-700 bg-amber-50/50 dark:bg-amber-950/20">
+                                                    <th className="text-left py-2 px-3">Date</th>
+                                                    <th className="text-center py-2 px-3">Bill No</th>
+                                                    <th className="text-right py-2 px-3">Subtotal</th>
+                                                    <th className="text-right py-2 px-3">Discount</th>
+                                                    <th className="text-right py-2 px-3">Taxable</th>
+                                                    <th className="text-right py-2 px-3">CGST</th>
+                                                    <th className="text-right py-2 px-3">SGST</th>
+                                                    <th className="text-right py-2 px-3">Replacement Value</th>
+                                                    <th className="text-center py-2 px-3">Payment</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {sortedReplacementSales.map((sale) => {
+                                                    const pb = getPaymentBreakdown(sale);
+                                                    const payModes: string[] = [];
+                                                    if (pb.cash > 0) payModes.push(`Cash: ${formatIndianCurrency(pb.cash)}`);
+                                                    if (pb.upi > 0) payModes.push(`UPI: ${formatIndianCurrency(pb.upi)}`);
+                                                    if (pb.card > 0) payModes.push(`Card: ${formatIndianCurrency(pb.card)}`);
+
+                                                    return (
+                                                        <tr key={sale.id} className="border-b dark:border-gray-700/50 hover:bg-amber-50/30 dark:hover:bg-amber-950/10">
+                                                            <td className="py-2 px-3">{format(new Date(sale.createdAt), 'dd/MMM/yy')}</td>
+                                                            <td className="py-2 px-3 text-center font-mono">
+                                                                <span className="font-semibold">{sale.billNo}</span>
+                                                                <span className="ml-1.5 text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400">
+                                                                    (REPLACEMENT)
+                                                                </span>
+                                                            </td>
+                                                            <td className="py-2 px-3 text-right">{formatIndianCurrency(sale.subtotal)}</td>
+                                                            <td className="py-2 px-3 text-right text-red-500">{sale.discount > 0 ? `-${formatIndianCurrency(sale.discount)}` : '-'}</td>
+                                                            <td className="py-2 px-3 text-right">{formatIndianCurrency(sale.subtotal - sale.discount)}</td>
+                                                            <td className="py-2 px-3 text-right text-gray-500">{formatIndianCurrency(sale.cgst || 0)}</td>
+                                                            <td className="py-2 px-3 text-right text-gray-500">{formatIndianCurrency(sale.sgst || 0)}</td>
+                                                            <td className="py-2 px-3 text-right font-semibold">{formatIndianCurrency(sale.grandTotal)}</td>
+                                                            <td className="py-2 px-3 text-center text-xs">
+                                                                {payModes.length > 0 ? payModes.join(', ') : sale.paymentMethod}
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                            <tfoot>
+                                                {(() => {
+                                                    const repTotals = reportData.exchangeReplacementTotals;
+                                                    const netPaidCash = repTotals.payment.cash;
+                                                    const netPaidUpi = repTotals.payment.upi;
+                                                    const netPaidCard = repTotals.payment.card;
+                                                    const netPaidTotal = netPaidCash + netPaidUpi + netPaidCard;
+                                                    return (
+                                                        <tr className="bg-amber-100/70 dark:bg-amber-950/40 font-bold">
+                                                            <td className="py-2 px-3">TOTAL</td>
+                                                            <td className="py-2 px-3 text-center">{repTotals.count} bills</td>
+                                                            <td className="py-2 px-3 text-right">{formatIndianCurrency(repTotals.subtotal)}</td>
+                                                            <td className="py-2 px-3 text-right text-red-500">-{formatIndianCurrency(repTotals.discount)}</td>
+                                                            <td className="py-2 px-3 text-right">{formatIndianCurrency(repTotals.taxableValue)}</td>
+                                                            <td className="py-2 px-3 text-right">{formatIndianCurrency(repTotals.cgst)}</td>
+                                                            <td className="py-2 px-3 text-right">{formatIndianCurrency(repTotals.sgst)}</td>
+                                                            <td className="py-2 px-3 text-right">{formatIndianCurrency(repTotals.grandTotal)}</td>
+                                                            <td className="py-2 px-3 text-center text-xs text-emerald-700 dark:text-emerald-400 font-semibold">
+                                                                {netPaidTotal > 0 ? `Net Extra Paid: ${formatIndianCurrency(netPaidTotal)}` : 'Offset by Exchange'}
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })()}
+                                            </tfoot>
+                                        </table>
+                                    </div>
+                                </div>
+                            )}
 
                             {/* Tax Rate Breakdown */}
                             {a.taxSlabs.length > 0 && (

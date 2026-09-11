@@ -361,11 +361,12 @@ router.post('/sales', async (req, res) => {
 
             // Notify for genuinely NEW completed sales only
             for (const sale of newSales) {
+                const formattedAmount = sale.grandTotal % 1 === 0 ? sale.grandTotal.toFixed(0) : sale.grandTotal.toFixed(2);
                 await notificationService.send({
                     shopId,
                     type: 'sale',
-                    title: '🛍️ New Sale',
-                    message: `Bill #${sale.billNo} - ₹${sale.grandTotal.toFixed(2)}`,
+                    title: 'New Sale',
+                    message: `Bill #${sale.billNo} • ₹${formattedAmount}`,
                     referenceId: sale.id,
                     metadata: {
                         billNo: sale.billNo,
