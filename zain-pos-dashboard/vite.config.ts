@@ -17,6 +17,7 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/badge.png', 'sounds/cash-register.wav', 'sounds/notification.mp3'],
       manifest: {
+        id: '/',
         name: 'Zain POS',
         short_name: 'Zain POS',
         description: 'Real-time Sales Dashboard for Zain POS',
@@ -31,13 +32,25 @@ export default defineConfig({
             src: '/icons/icon-192.png',
             sizes: '192x192',
             type: 'image/png',
-            purpose: 'any maskable'
+            purpose: 'any'
+          },
+          {
+            src: '/icons/icon-192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'maskable'
           },
           {
             src: '/icons/icon-512.png',
             sizes: '512x512',
             type: 'image/png',
-            purpose: 'any maskable'
+            purpose: 'any'
+          },
+          {
+            src: '/icons/icon-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable'
           },
           {
             src: '/pwa-192x192.png',

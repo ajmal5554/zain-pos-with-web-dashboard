@@ -389,8 +389,8 @@ router.post('/sales', async (req, res) => {
                 await notificationService.send({
                     shopId,
                     type: 'invoice_deleted',
-                    title: '🚫 Invoice Voided',
-                    message: `Bill #${sale.billNo} was voided.`,
+                    title: 'Invoice Voided',
+                    message: `Bill #${sale.billNo} was voided`,
                     referenceId: sale.id,
                     metadata: {
                         billNo: sale.billNo,
@@ -407,11 +407,12 @@ router.post('/sales', async (req, res) => {
                     billNo: sale.billNo,
                     timestamp: new Date()
                 });
+                const formattedAmount = sale.grandTotal % 1 === 0 ? sale.grandTotal.toFixed(0) : sale.grandTotal.toFixed(2);
                 await notificationService.send({
                     shopId,
                     type: 'invoice_updated',
-                    title: '✏️ Invoice Updated',
-                    message: `Bill #${sale.billNo} was updated. New Total: ₹${sale.grandTotal.toFixed(2)} (${sale.paymentMethod})`,
+                    title: 'Invoice Updated',
+                    message: `Bill #${sale.billNo} was updated. New Total: ₹${formattedAmount}`,
                     referenceId: sale.id,
                     metadata: {
                         billNo: sale.billNo,
@@ -878,14 +879,16 @@ router.post('/exchanges', async (req, res) => {
                     });
 
                     // Send OS-level push notification
+                    const diffFormatted = exchange.differenceAmount % 1 === 0 ? exchange.differenceAmount.toFixed(0) : exchange.differenceAmount.toFixed(2);
                     await notificationService.send({
                         shopId,
                         type: 'invoice_updated',
-                        title: '🔄 Invoice Exchanged',
-                        message: `Bill #${sale.billNo} - Exchanged. Difference: ₹${exchange.differenceAmount.toFixed(2)}`,
+                        title: 'Invoice Updated',
+                        message: `Bill #${sale.billNo} was updated (Exchange diff: ₹${diffFormatted})`,
                         referenceId: sale.id,
                         metadata: {
                             billNo: sale.billNo,
+                            amount: sale.grandTotal,
                             differenceAmount: exchange.differenceAmount,
                             notes: exchange.notes
                         }

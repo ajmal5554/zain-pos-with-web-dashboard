@@ -80,9 +80,21 @@ export const notificationService = {
                 tag = billNumber ? `sale-${billNumber}` : `sale-${referenceId || Date.now()}`;
                 targetUrl = billNumber ? `/sales?billNo=${encodeURIComponent(billNumber)}` : '/sales';
             } else if (type === 'invoice_updated') {
+                finalTitle = 'Invoice Updated';
+                if (billNumber && amount !== undefined && amount !== null) {
+                    const num = Number(amount);
+                    const formatted = isNaN(num) ? String(amount) : (num % 1 === 0 ? num.toFixed(0) : num.toFixed(2));
+                    finalBody = `Bill #${billNumber} was updated. New Total: ₹${formatted}`;
+                } else if (billNumber) {
+                    finalBody = `Bill #${billNumber} was updated`;
+                }
                 tag = billNumber ? `invoice-update-${billNumber}` : `update-${referenceId || Date.now()}`;
                 targetUrl = billNumber ? `/sales?billNo=${encodeURIComponent(billNumber)}` : '/sales';
             } else if (type === 'invoice_deleted') {
+                finalTitle = 'Invoice Voided';
+                if (billNumber) {
+                    finalBody = `Bill #${billNumber} was voided`;
+                }
                 tag = billNumber ? `invoice-void-${billNumber}` : `void-${referenceId || Date.now()}`;
                 targetUrl = billNumber ? `/sales?billNo=${encodeURIComponent(billNumber)}` : '/sales';
             } else {

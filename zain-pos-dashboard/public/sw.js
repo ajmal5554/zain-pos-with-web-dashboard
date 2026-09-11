@@ -8,28 +8,52 @@ self.addEventListener('push', function (event) {
         }
     }
 
+    var rawType = (data.data && data.data.type) || data.type || '';
     var title = data.title || 'New Sale';
+    // Strip leading emojis so Android does not truncate header
+    title = title.replace(/^[\s\uFE0F\u200D\u2600-\u27BF\uD83C-\uDBFF\uDC00-\uDFFF]+/g, '').trim() || title;
 
     // Extract dynamic bill number and amount from payload
     var billNumber = (data.data && data.data.billNo) || data.billNo || (data.data && data.data.metadata && data.data.metadata.billNo);
     var rawAmount = (data.data && data.data.amount !== undefined) ? data.data.amount : (data.amount !== undefined ? data.amount : (data.data && data.data.metadata ? data.data.metadata.amount : undefined));
 
-    var body = data.body || 'New sale recorded';
+    var body = data.body || 'New notification';
 
-    // Format sale body: "Bill #1865 • ₹570"
-    var isSale = (data.data && data.data.type === 'sale') || data.type === 'sale' || title.toLowerCase().indexOf('sale') !== -1;
-    if (isSale && billNumber) {
-        if (rawAmount !== undefined && rawAmount !== null) {
-            var num = Number(rawAmount);
-            var formatted = isNaN(num) ? String(rawAmount) : (num % 1 === 0 ? num.toFixed(0) : num.toFixed(2));
-            body = 'Bill #' + billNumber + ' • ₹' + formatted;
-        } else {
-            body = 'Bill #' + billNumber;
+    var isSale = rawType === 'sale' || title.toLowerCase().indexOf('sale') !== -1;
+    var isUpdate = rawType === 'invoice_updated' || title.toLowerCase().indexOf('update') !== -1 || title.toLowerCase().indexOf('exchanged') !== -1;
+    var isVoid = rawType === 'invoice_deleted' || title.toLowerCase().indexOf('void') !== -1;
+
+    if (isSale) {
+        title = 'New Sale';
+        if (billNumber) {
+            if (rawAmount !== undefined && rawAmount !== null) {
+                var num = Number(rawAmount);
+                var formatted = isNaN(num) ? String(rawAmount) : (num % 1 === 0 ? num.toFixed(0) : num.toFixed(2));
+                body = 'Bill #' + billNumber + ' • ₹' + formatted;
+            } else {
+                body = 'Bill #' + billNumber;
+            }
+        }
+    } else if (isUpdate) {
+        title = 'Invoice Updated';
+        if (billNumber) {
+            if (rawAmount !== undefined && rawAmount !== null) {
+                var num = Number(rawAmount);
+                var formatted = isNaN(num) ? String(rawAmount) : (num % 1 === 0 ? num.toFixed(0) : num.toFixed(2));
+                body = 'Bill #' + billNumber + ' was updated. New Total: ₹' + formatted;
+            } else {
+                body = 'Bill #' + billNumber + ' was updated';
+            }
+        }
+    } else if (isVoid) {
+        title = 'Invoice Voided';
+        if (billNumber) {
+            body = 'Bill #' + billNumber + ' was voided';
         }
     }
 
-    // Stable tag per sale to prevent duplicates on retries
-    var tag = data.tag || (billNumber ? ('sale-' + billNumber) : (data.data && data.data.type ? (data.data.type + '-' + Date.now()) : undefined));
+    // Stable tag per sale/update so each event appears neatly in the Zain POS group
+    var tag = data.tag || (billNumber ? ((rawType || 'notif') + '-' + billNumber) : (rawType ? (rawType + '-' + Date.now()) : undefined));
 
     // Deep link target URL
     var targetUrl = (data.data && data.data.url) || data.url || (billNumber ? ('/sales?billNo=' + encodeURIComponent(billNumber)) : '/sales');
@@ -40,7 +64,7 @@ self.addEventListener('push', function (event) {
         badge: data.badge || '/icons/badge.png',
         tag: tag,
         renotify: true,
-        sound: isSale ? '/sounds/cash-register.wav' : undefined,
+        sound: isSale ? '/sounds/cash-register.wav' : '/sounds/notification.mp3',
         data: Object.assign({}, data.data || {}, {
             url: targetUrl,
             billNo: billNumber
