@@ -18,12 +18,18 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
     const [darkMode, setDarkMode] = useState(false);
     const location = useLocation();
 
-    // Dark Mode Effect
+    // Dark Mode Effect & System Bar Sync
     useEffect(() => {
+        const metaThemeColor = document.querySelector("meta[name='theme-color']");
+        const metaColorScheme = document.querySelector("meta[name='color-scheme']");
         if (darkMode) {
             document.documentElement.classList.add('dark');
+            if (metaThemeColor) metaThemeColor.setAttribute('content', '#020617');
+            if (metaColorScheme) metaColorScheme.setAttribute('content', 'dark');
         } else {
             document.documentElement.classList.remove('dark');
+            if (metaThemeColor) metaThemeColor.setAttribute('content', '#ffffff');
+            if (metaColorScheme) metaColorScheme.setAttribute('content', 'light');
         }
     }, [darkMode]);
 
