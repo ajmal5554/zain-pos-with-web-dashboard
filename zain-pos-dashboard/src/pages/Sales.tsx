@@ -28,7 +28,7 @@ import { socket } from '@/lib/socket';
 import { StatCard } from '@/components/shared/StatCard';
 
 export default function Sales() {
-    const [searchParams] = useSearchParams();
+    const [searchParams, setSearchParams] = useSearchParams();
     const billParam = searchParams.get('billNo');
     const autoOpenedRef = useRef<string | null>(null);
 
@@ -39,8 +39,8 @@ export default function Sales() {
     const [limit, setLimit] = useState(20);
     const [totalPages, setTotalPages] = useState(1);
     const [totalItems, setTotalItems] = useState(0);
-    const [search, setSearch] = useState(() => billParam || '');
-    const [debouncedSearch, setDebouncedSearch] = useState(() => billParam || '');
+    const [search, setSearch] = useState('');
+    const [debouncedSearch, setDebouncedSearch] = useState('');
     const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
     const [modalLoading, setModalLoading] = useState(false);
     const [exporting, setExporting] = useState(false);
@@ -67,27 +67,52 @@ export default function Sales() {
         }
     };
 
+    const handleCloseModal = () => {
+        setSelectedInvoice(null);
+        if (searchParams.has('billNo')) {
+            const newParams = new URLSearchParams(searchParams);
+            newParams.delete('billNo');
+            setSearchParams(newParams, { replace: true });
+        }
+    };
+
     useEffect(() => {
         const timer = setTimeout(() => setDebouncedSearch(search), 350);
         return () => clearTimeout(timer);
     }, [search]);
 
+    // When billParam is present in URL (e.g. from notification "View Bill"),
+    // open the invoice modal directly WITHOUT filtering the main sales table or totals
     useEffect(() => {
-        if (billParam) {
-            setSearch(billParam);
-            setDebouncedSearch(billParam);
-        }
-    }, [billParam]);
+        if (!billParam || autoOpenedRef.current === billParam) return;
 
-    useEffect(() => {
-        if (billParam && invoices.length > 0 && autoOpenedRef.current !== billParam) {
-            const match = invoices.find(inv => String(inv.billNo) === String(billParam));
-            if (match) {
-                autoOpenedRef.current = billParam;
-                void handleViewInvoice(match);
-            }
+        // Try to find in current invoices first
+        const match = invoices.find(inv => String(inv.billNo) === String(billParam));
+        if (match) {
+            autoOpenedRef.current = billParam;
+            void handleViewInvoice(match);
+            return;
         }
-    }, [billParam, invoices]);
+
+        // If in demo mode, find in demoInvoices
+        if (inDemoMode) {
+            const demoMatch = demoInvoices.find(inv => String(inv.billNo) === String(billParam));
+            if (demoMatch) {
+                autoOpenedRef.current = billParam;
+                void handleViewInvoice(demoMatch);
+            }
+            return;
+        }
+
+        // Otherwise fetch this specific bill for the modal without filtering the page list
+        autoOpenedRef.current = billParam;
+        invoiceService.getInvoices({ search: billParam, limit: 1 }).then(res => {
+            if (res.invoices && res.invoices.length > 0) {
+                const found = res.invoices.find(inv => String(inv.billNo) === String(billParam)) || res.invoices[0];
+                void handleViewInvoice(found);
+            }
+        }).catch(() => { });
+    }, [billParam, invoices, inDemoMode]);
 
     const fetchInvoices = useCallback(async () => {
         setLoading(true);
@@ -348,7 +373,7 @@ export default function Sales() {
                 />
             </div>
 
-            <Dialog open={!!selectedInvoice} onOpenChange={(open) => !open && setSelectedInvoice(null)}>
+            <Dialog open={!!selectedInvoice} onOpenChange={(open) => !open && handleCloseModal()}>
                 <DialogContent className="sm:max-w-xl rounded-2xl">
                     {selectedInvoice && (
                         <>
