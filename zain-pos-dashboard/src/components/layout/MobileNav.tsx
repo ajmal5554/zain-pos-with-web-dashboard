@@ -22,7 +22,7 @@ export function MobileNav() {
         .filter((item): item is typeof navigation[number] => !!item);
 
     return (
-        <div data-mobile-nav="true" className="sm:hidden fixed bottom-0 inset-x-0 z-40 border-t border-slate-200 bg-white px-2 pb-safe dark:border-slate-800 dark:bg-slate-950">
+        <div className="sm:hidden fixed bottom-0 inset-x-0 z-40 border-t border-slate-200 bg-white px-2 pb-safe dark:border-slate-800 dark:bg-slate-950">
             <nav className="flex justify-between items-center px-1 py-1.5 min-h-[60px]">
                 {primaryNav.map((item) => {
                     const Icon = item.icon;
