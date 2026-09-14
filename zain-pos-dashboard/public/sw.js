@@ -22,6 +22,10 @@ self.addEventListener('push', function (event) {
     var isSale = rawType === 'sale' || title.toLowerCase().indexOf('sale') !== -1;
     var isUpdate = rawType === 'invoice_updated' || title.toLowerCase().indexOf('update') !== -1 || title.toLowerCase().indexOf('exchanged') !== -1;
     var isVoid = rawType === 'invoice_deleted' || title.toLowerCase().indexOf('void') !== -1;
+    var isProductAdded = rawType === 'product_added' || title.toLowerCase().indexOf('product') !== -1;
+    var isLowStock = rawType === 'low_stock' || title.toLowerCase().indexOf('low stock') !== -1 || title.toLowerCase().indexOf('stock') !== -1;
+
+    var actionTitle = 'View Details';
 
     if (isSale) {
         title = 'New Sale';
@@ -34,6 +38,7 @@ self.addEventListener('push', function (event) {
                 body = 'Bill #' + billNumber;
             }
         }
+        actionTitle = 'View Bill';
     } else if (isUpdate) {
         title = 'Invoice Updated';
         if (billNumber) {
@@ -45,18 +50,27 @@ self.addEventListener('push', function (event) {
                 body = 'Bill #' + billNumber + ' was updated';
             }
         }
+        actionTitle = 'View Bill';
     } else if (isVoid) {
         title = 'Invoice Voided';
         if (billNumber) {
             body = 'Bill #' + billNumber + ' was voided';
         }
+        actionTitle = 'View Sales';
+    } else if (isProductAdded) {
+        title = data.title || 'New Product Added';
+        actionTitle = 'View Products';
+    } else if (isLowStock) {
+        title = data.title || '⚠️ Low Stock Alert';
+        actionTitle = 'View Inventory';
     }
 
-    // Stable tag per sale/update so each event appears neatly in the Zain POS group
+    // Stable tag per event type
     var tag = data.tag || (billNumber ? ((rawType || 'notif') + '-' + billNumber) : (rawType ? (rawType + '-' + Date.now()) : undefined));
 
     // Deep link target URL
-    var targetUrl = (data.data && data.data.url) || data.url || (billNumber ? ('/sales?billNo=' + encodeURIComponent(billNumber)) : '/sales');
+    var defaultUrl = isProductAdded ? '/products' : (isLowStock ? '/inventory' : (billNumber ? ('/sales?billNo=' + encodeURIComponent(billNumber)) : '/sales'));
+    var targetUrl = (data.data && data.data.url) || data.url || defaultUrl;
 
     var options = {
         body: body,
@@ -72,7 +86,7 @@ self.addEventListener('push', function (event) {
         actions: [
             {
                 action: 'view',
-                title: 'View Bill'
+                title: actionTitle
             }
         ]
     };

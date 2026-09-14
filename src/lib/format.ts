@@ -1,10 +1,11 @@
 // Indian currency formatting utility
 export function formatIndianCurrency(amount: number): string {
-    // Format as Indian numbering system: 12,34,567.89
-    const isNegative = amount < 0;
-    const absAmount = Math.abs(amount);
+    const num = Number(amount);
+    const safeAmount = Number.isFinite(num) ? num : 0;
+    const isNegative = safeAmount < 0;
+    const absAmount = Math.abs(safeAmount);
 
-    const [integerPart, decimalPart] = absAmount.toFixed(2).split('.');
+    const [integerPart, decimalPart = '00'] = absAmount.toFixed(2).split('.');
 
     // Indian numbering: last 3 digits, then groups of 2
     let formatted = '';

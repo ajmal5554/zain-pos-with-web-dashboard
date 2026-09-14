@@ -13,7 +13,7 @@ webPush.setVapidDetails(vapidSubject, publicVapidKey, privateVapidKey);
 
 interface NotificationPayload {
     shopId: string;
-    type: 'sale' | 'invoice_deleted' | 'invoice_updated';
+    type: 'sale' | 'invoice_deleted' | 'invoice_updated' | 'product_added' | 'low_stock' | string;
     title: string;
     message: string;
     referenceId?: string;
@@ -48,18 +48,6 @@ export const notificationService = {
 
             // 3. Send Web Push
             // Find all subscriptions for this shop (conceptually, users in this shop)
-            // Since we don't have a direct Shop-User link in simple mode, 
-            // we might notify ALL users or filter if we had that link.
-            // For now, let's notify ALL admins/cashiers since it's likely single tenant per deployment 
-            // OR strictly filter by shopId if we assume multi-tenant.
-            // But wait, PushSubscription has userId. User doesn't have shopId.
-            // IF we assume single tenant, we notify all. 
-            // IF we strictly follow "shopId", we need to know which users belong to shopId.
-            // Given the current schema, let's assume all users with subscriptions should get it 
-            // OR maybe we can't filter by shopId effectively without a link.
-            // However, the user asked for `shopId` logic.
-            // I will fetch subscriptions for users.
-
             const subscriptions = await prisma.pushSubscription.findMany();
 
             const billNumber = metadata?.billNo;
@@ -69,6 +57,7 @@ export const notificationService = {
             let finalBody = message;
             let tag: string | undefined;
             let targetUrl = '/sales';
+            let actionTitle = 'View Details';
 
             if (type === 'sale') {
                 finalTitle = 'New Sale';
@@ -79,6 +68,7 @@ export const notificationService = {
                 }
                 tag = billNumber ? `sale-${billNumber}` : `sale-${referenceId || Date.now()}`;
                 targetUrl = billNumber ? `/sales?billNo=${encodeURIComponent(billNumber)}` : '/sales';
+                actionTitle = 'View Bill';
             } else if (type === 'invoice_updated') {
                 finalTitle = 'Invoice Updated';
                 if (billNumber && amount !== undefined && amount !== null) {
@@ -90,6 +80,7 @@ export const notificationService = {
                 }
                 tag = billNumber ? `invoice-update-${billNumber}` : `update-${referenceId || Date.now()}`;
                 targetUrl = billNumber ? `/sales?billNo=${encodeURIComponent(billNumber)}` : '/sales';
+                actionTitle = 'View Bill';
             } else if (type === 'invoice_deleted') {
                 finalTitle = 'Invoice Voided';
                 if (billNumber) {
@@ -97,8 +88,32 @@ export const notificationService = {
                 }
                 tag = billNumber ? `invoice-void-${billNumber}` : `void-${referenceId || Date.now()}`;
                 targetUrl = billNumber ? `/sales?billNo=${encodeURIComponent(billNumber)}` : '/sales';
+                actionTitle = 'View Sales';
+            } else if (type === 'product_added') {
+                finalTitle = title || 'New Product Added';
+                const pName = metadata?.name || metadata?.productName;
+                const pPrice = metadata?.sellingPrice !== undefined ? metadata.sellingPrice : metadata?.price;
+                if (pName && pPrice !== undefined && pPrice !== null) {
+                    finalBody = `${pName} • ₹${pPrice}`;
+                } else if (pName) {
+                    finalBody = `${pName} added to inventory`;
+                }
+                tag = `product-${referenceId || metadata?.productId || Date.now()}`;
+                targetUrl = '/products';
+                actionTitle = 'View Products';
+            } else if (type === 'low_stock') {
+                finalTitle = title || '⚠️ Low Stock Alert';
+                const pName = metadata?.productName || metadata?.name || 'Product';
+                const vInfo = metadata?.variantInfo ? ` (${metadata.variantInfo})` : '';
+                const stock = metadata?.stock ?? 0;
+                const minStock = metadata?.minStock ?? 5;
+                finalBody = `${pName}${vInfo}: only ${stock} left (Min: ${minStock})`;
+                tag = `lowstock-${referenceId || metadata?.variantId || Date.now()}`;
+                targetUrl = '/inventory';
+                actionTitle = 'View Inventory';
             } else {
                 targetUrl = '/activity';
+                actionTitle = 'View Activity';
             }
 
             const pushPayload = JSON.stringify({
@@ -118,7 +133,7 @@ export const notificationService = {
                 actions: [
                     {
                         action: 'view',
-                        title: 'View Bill'
+                        title: actionTitle
                     }
                 ]
             });
@@ -131,8 +146,16 @@ export const notificationService = {
                     keys: keysObj
                 };
 
+                const pushOptions = {
+                    TTL: 86400, // 24 hours
+                    urgency: 'high' as const,
+                    headers: {
+                        'Urgency': 'high'
+                    }
+                };
+
                 try {
-                    await webPush.sendNotification(pushConfig, pushPayload);
+                    await webPush.sendNotification(pushConfig, pushPayload, pushOptions);
                 } catch (error: any) {
                     if (error.statusCode === 410 || error.statusCode === 404) {
                         // Expired subscription, delete it

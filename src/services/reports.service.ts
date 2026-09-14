@@ -26,18 +26,34 @@ export const reportsService = {
             },
         });
 
-        const totalSales = sales.reduce((sum: number, sale: any): number => sum + sale.grandTotal, 0);
+        const totalExchangeCredit = sales.reduce((sum: number, sale: any): number => {
+            if (sale.payments && sale.payments.length > 0) {
+                return sum + sale.payments
+                    .filter((p: any) => (p.paymentMode || '').toUpperCase() === 'EXCHANGE_CREDIT')
+                    .reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
+            }
+            return sum;
+        }, 0);
+
+        // totalSales excludes exchange credit — only counts fresh revenue
+        const totalSales = sales.reduce((sum: number, sale: any): number => sum + sale.grandTotal, 0) - totalExchangeCredit;
         const totalTax = sales.reduce((sum: number, sale: any): number => sum + sale.taxAmount, 0);
         const totalDiscount = sales.reduce((sum: number, sale: any): number => sum + sale.discount, 0);
 
         const paymentBreakdown = sales.reduce((acc: Record<string, number>, sale: any): Record<string, number> => {
-            if (sale.paymentMethod === 'SPLIT' && sale.payments && sale.payments.length > 0) {
+            if (sale.payments && sale.payments.length > 0) {
+                // Use individual payment records — skip EXCHANGE_CREDIT from cash/upi/card totals
                 sale.payments.forEach((payment: any) => {
                     const mode = (payment.paymentMode || 'CASH').toUpperCase();
+                    if (mode === 'EXCHANGE_CREDIT' || mode === 'EXCHANGE') return; // exclude from payment breakdown
                     acc[mode] = (acc[mode] || 0) + Number(payment.amount || 0);
                 });
+            } else if (sale.paymentMethod === 'SPLIT') {
+                // Legacy split without payment records — shouldn't happen, but handle gracefully
+                acc['CASH'] = (acc['CASH'] || 0) + Number(sale.grandTotal || 0);
             } else {
                 const mode = (sale.paymentMethod || 'CASH').toUpperCase();
+                if (mode === 'EXCHANGE' || mode === 'EXCHANGE_CREDIT') return acc; // zero fresh collection
                 acc[mode] = (acc[mode] || 0) + Number(sale.grandTotal || 0);
             }
             return acc;
@@ -48,6 +64,7 @@ export const reportsService = {
             totalSales,
             totalTax,
             totalDiscount,
+            totalExchangeCredit,
             numberOfBills: sales.length,
             paymentBreakdown,
             sales,
@@ -80,17 +97,31 @@ export const reportsService = {
             },
         });
 
-        const totalSales = sales.reduce((sum: number, sale: any): number => sum + sale.grandTotal, 0);
+        const totalExchangeCredit = sales.reduce((sum: number, sale: any): number => {
+            if (sale.payments && sale.payments.length > 0) {
+                return sum + sale.payments
+                    .filter((p: any) => (p.paymentMode || '').toUpperCase() === 'EXCHANGE_CREDIT')
+                    .reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
+            }
+            return sum;
+        }, 0);
+
+        // totalSales excludes exchange credit — only counts fresh revenue
+        const totalSales = sales.reduce((sum: number, sale: any): number => sum + sale.grandTotal, 0) - totalExchangeCredit;
         const totalTax = sales.reduce((sum: number, sale: any): number => sum + sale.taxAmount, 0);
         const totalDiscount = sales.reduce((sum: number, sale: any): number => sum + sale.discount, 0);
 
-        // Daily breakdown
+        // Daily breakdown — exclude EXCHANGE_CREDIT from daily sales totals
         const dailyBreakdown = sales.reduce((acc: Record<number, any>, sale: any): Record<number, any> => {
             const day = new Date(sale.createdAt).getDate();
             if (!acc[day]) {
                 acc[day] = { sales: 0, count: 0 };
             }
-            acc[day].sales += sale.grandTotal;
+            // Subtract exchange credit from this sale's contribution
+            const saleExchangeCredit = (sale.payments || [])
+                .filter((p: any) => (p.paymentMode || '').toUpperCase() === 'EXCHANGE_CREDIT')
+                .reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
+            acc[day].sales += (sale.grandTotal - saleExchangeCredit);
             acc[day].count += 1;
             return acc;
         }, {} as Record<number, { sales: number; count: number }>);

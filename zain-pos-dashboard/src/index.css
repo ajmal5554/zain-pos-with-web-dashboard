@@ -77,6 +77,11 @@
   * {
     border-color: hsl(var(--border));
   }
+  html, body {
+    touch-action: pan-x pan-y;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
   body {
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));

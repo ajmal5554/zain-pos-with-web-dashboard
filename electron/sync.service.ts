@@ -52,8 +52,7 @@ class CloudSyncService {
             // Immediately sync in real-time (don't wait for batch)
             await this.syncSaleRealtime(sale);
         } catch (error) {
-            console.error('Failed to sync sale in real-time:', error);
-            // Fallback: Add to queue for retry
+            console.error('Failed to sync sale in real-time, queuing offline:', error);
             try {
                 await prisma.syncQueue.create({
                     data: {
@@ -69,22 +68,18 @@ class CloudSyncService {
         }
     }
 
-    // Real-time sync for immediate upload (no batching)
+    // Real-time sync for immediate upload
     async syncSaleRealtime(sale: any) {
         if (!this.apiUrl || !prisma || this.isRealtimeSyncing) return;
-        
         this.isRealtimeSyncing = true;
         
         try {
             console.log(`⚡ Real-time syncing sale ${sale.billNo}...`);
-            
-            // Send single sale to cloud
             await axios.post(`${this.apiUrl}/api/sync/sales`, { sales: [sale] }, {
                 headers: this.getSyncHeaders(),
-                timeout: 10000 // 10 second timeout
+                timeout: 10000
             });
 
-            // Mark sale as synced in local database
             await prisma.sale.update({
                 where: { id: sale.id },
                 data: { 
@@ -95,67 +90,370 @@ class CloudSyncService {
 
             console.log(`✅ Real-time sync completed for ${sale.billNo}`);
         } catch (error: any) {
-            console.error('Real-time sync failed:', error.message);
-            throw error; // Let caller handle fallback to queue
+            console.error('Real-time sale sync failed:', error.message);
+            throw error;
         } finally {
             this.isRealtimeSyncing = false;
         }
     }
 
-    // Process the Sync Queue
+    // Queue an exchange for sync
+    async queueExchange(exchange: any) {
+        if (!prisma) return;
+        try {
+            await this.syncExchangeRealtime(exchange);
+        } catch (error) {
+            console.error('Failed to sync exchange in real-time, queuing offline:', error);
+            try {
+                await prisma.syncQueue.create({
+                    data: {
+                        action: 'CREATE',
+                        model: 'Exchange',
+                        data: JSON.stringify(exchange),
+                        status: 'PENDING'
+                    }
+                });
+            } catch (queueError) {
+                console.error('Failed to queue exchange:', queueError);
+            }
+        }
+    }
+
+    async syncExchangeRealtime(exchange: any) {
+        if (!this.apiUrl || !prisma) return;
+        try {
+            console.log(`⚡ Real-time syncing exchange ${exchange.id}...`);
+            await axios.post(`${this.apiUrl}/api/sync/exchanges`, { exchanges: [exchange] }, {
+                headers: this.getSyncHeaders(),
+                timeout: 10000
+            });
+
+            await prisma.exchange.update({
+                where: { id: exchange.id },
+                data: { 
+                    isSynced: true,
+                    lastSyncedAt: new Date()
+                }
+            });
+            console.log(`✅ Real-time exchange sync completed for ${exchange.id}`);
+        } catch (error: any) {
+            console.error('Real-time exchange sync failed:', error.message);
+            throw error;
+        }
+    }
+
+    // Queue a refund for sync
+    async queueRefund(refund: any) {
+        if (!prisma) return;
+        try {
+            await this.syncRefundRealtime(refund);
+        } catch (error) {
+            console.error('Failed to sync refund in real-time, queuing offline:', error);
+            try {
+                await prisma.syncQueue.create({
+                    data: {
+                        action: 'CREATE',
+                        model: 'Refund',
+                        data: JSON.stringify(refund),
+                        status: 'PENDING'
+                    }
+                });
+            } catch (queueError) {
+                console.error('Failed to queue refund:', queueError);
+            }
+        }
+    }
+
+    async syncRefundRealtime(refund: any) {
+        if (!this.apiUrl || !prisma) return;
+        try {
+            console.log(`⚡ Real-time syncing refund ${refund.id}...`);
+            await axios.post(`${this.apiUrl}/api/sync/refunds`, { refunds: [refund] }, {
+                headers: this.getSyncHeaders(),
+                timeout: 10000
+            });
+
+            await prisma.refund.update({
+                where: { id: refund.id },
+                data: { 
+                    isSynced: true,
+                    lastSyncedAt: new Date()
+                }
+            });
+            console.log(`✅ Real-time refund sync completed for ${refund.id}`);
+        } catch (error: any) {
+            console.error('Real-time refund sync failed:', error.message);
+            throw error;
+        }
+    }
+
+    // Handshake: Fetch Cloud State
+    async getCloudStatus() {
+        if (!this.apiUrl) return null;
+        try {
+            const res = await axios.get(`${this.apiUrl}/api/sync/status`, {
+                headers: this.getSyncHeaders(),
+                timeout: 6000
+            });
+            return res.data;
+        } catch (err: any) {
+            console.warn('Could not fetch cloud sync status:', err.message);
+            return null;
+        }
+    }
+
+    // Verify candidate sales with cloud
+    async verifySales(sales: { id: string; billNo: string; status: string; updatedAt: any }[]) {
+        if (!this.apiUrl) return null;
+        try {
+            const res = await axios.post(`${this.apiUrl}/api/sync/verify-sales`, { sales }, {
+                headers: this.getSyncHeaders(),
+                timeout: 8000
+            });
+            return res.data;
+        } catch (err: any) {
+            console.warn('Could not verify sales with cloud:', err.message);
+            return null;
+        }
+    }
+
+    // Drain pending offline items across all models
+    async drainQueueInternal() {
+        if (!prisma || !this.apiUrl) return;
+        try {
+            const pending = await prisma.syncQueue.findMany({
+                where: { status: 'PENDING' },
+                take: 100
+            });
+
+            if (pending.length === 0) return;
+
+            console.log(`Processing ${pending.length} queued offline records...`);
+
+            const sales = pending.filter((i: any) => i.model === 'Sale').map((i: any) => JSON.parse(i.data));
+            const exchanges = pending.filter((i: any) => i.model === 'Exchange').map((i: any) => JSON.parse(i.data));
+            const refunds = pending.filter((i: any) => i.model === 'Refund').map((i: any) => JSON.parse(i.data));
+
+            if (sales.length > 0) {
+                await axios.post(`${this.apiUrl}/api/sync/sales`, { sales }, { headers: this.getSyncHeaders() });
+                const saleIds = sales.map((s: any) => s.id);
+                await prisma.sale.updateMany({
+                    where: { id: { in: saleIds } },
+                    data: { isSynced: true, lastSyncedAt: new Date() }
+                });
+            }
+
+            if (exchanges.length > 0) {
+                await axios.post(`${this.apiUrl}/api/sync/exchanges`, { exchanges }, { headers: this.getSyncHeaders() });
+                const exIds = exchanges.map((e: any) => e.id);
+                await prisma.exchange.updateMany({
+                    where: { id: { in: exIds } },
+                    data: { isSynced: true, lastSyncedAt: new Date() }
+                });
+            }
+
+            if (refunds.length > 0) {
+                await axios.post(`${this.apiUrl}/api/sync/refunds`, { refunds }, { headers: this.getSyncHeaders() });
+                const refIds = refunds.map((r: any) => r.id);
+                await prisma.refund.updateMany({
+                    where: { id: { in: refIds } },
+                    data: { isSynced: true, lastSyncedAt: new Date() }
+                });
+            }
+
+            const idsToDelete = pending.map((p: any) => p.id);
+            await prisma.syncQueue.deleteMany({
+                where: { id: { in: idsToDelete } }
+            });
+            console.log(`✅ Successfully drained ${idsToDelete.length} offline records.`);
+        } catch (error: any) {
+            console.error('Drain queue error:', error.message);
+        }
+    }
+
+    // Process the Sync Queue (background interval worker)
     async processQueue() {
         if (this.isSyncing || !this.apiUrl || !prisma) return;
+        this.isSyncing = true;
+        try {
+            await this.drainQueueInternal();
+        } finally {
+            this.isSyncing = false;
+        }
+    }
+
+    // Smart Verification & Delta Sync (Main sync function)
+    async verifyAndSync() {
+        if (!this.apiUrl || !prisma) {
+            return { success: false, error: 'Cloud API URL is not configured in Settings.' };
+        }
+        if (this.isSyncing) {
+            return { success: false, error: 'Sync already in progress.' };
+        }
 
         this.isSyncing = true;
-
         try {
-            // 1. Fetch sales pending sync
-            const pendingSales = await prisma.syncQueue.findMany({
+            console.log('⚡ [Smart Sync] Starting verification and delta sync...');
+
+            // 1. Flush offline queue first
+            await this.drainQueueInternal();
+
+            // 2. Fetch cloud status
+            const cloudStatus = await this.getCloudStatus();
+            console.log('⚡ [Smart Sync] Cloud Status:', cloudStatus ? 'Online' : 'Offline / Unavailable');
+
+            let salesCount = 0;
+            let productsCount = 0;
+            let exchangesCount = 0;
+            let refundsCount = 0;
+
+            // 3. Delta Sync: Products (only unsynced products or products with updated variant stock)
+            const unsyncedProducts = await prisma.product.findMany({
                 where: {
-                    status: 'PENDING',
-                    model: 'Sale'
+                    OR: [
+                        { isSynced: false },
+                        { variants: { some: { isSynced: false } } }
+                    ]
                 },
-                take: 10
+                include: { category: true, variants: true },
+                take: 100
             });
 
-            if (pendingSales.length === 0) {
-                this.isSyncing = false;
-                return;
+            if (unsyncedProducts.length > 0) {
+                console.log(`⚡ [Smart Sync] Syncing ${unsyncedProducts.length} unsynced products...`);
+                await this.syncInventory(unsyncedProducts);
+                const pIds = unsyncedProducts.map((p: any) => p.id);
+                await prisma.product.updateMany({
+                    where: { id: { in: pIds } },
+                    data: { isSynced: true, lastSyncedAt: new Date() }
+                });
+                await prisma.productVariant.updateMany({
+                    where: { productId: { in: pIds } },
+                    data: { isSynced: true, lastSyncedAt: new Date() }
+                });
+                productsCount += unsyncedProducts.length;
             }
 
-            console.log(`Processing ${pendingSales.length} queued sales...`);
-
-            // 2. Prepare payload
-            const sales = pendingSales.map((item: any) => JSON.parse(item.data));
-
-            // 3. Send to Cloud
-            await axios.post(`${this.apiUrl}/api/sync/sales`, { sales }, {
-                headers: this.getSyncHeaders()
+            // 4. Delta Sync: Sales & Voids
+            const unsyncedSales = await prisma.sale.findMany({
+                where: { isSynced: false },
+                include: {
+                    items: true,
+                    payments: true,
+                    user: { select: { id: true, username: true, name: true, role: true, isActive: true } }
+                },
+                take: 100,
+                orderBy: { createdAt: 'asc' }
             });
 
-            // 4. Mark as Synced (Delete from queue)
-            const ids = pendingSales.map((p: any) => p.id);
-            await prisma.syncQueue.deleteMany({
-                where: { id: { in: ids } }
+            const salesToSyncMap = new Map<string, any>(unsyncedSales.map((s: any) => [s.id, s]));
+
+            // Verify with cloud: inspect recent 50 sales for missing bills or status mismatches (e.g. offline voids)
+            const candidateSales = await prisma.sale.findMany({
+                select: { id: true, billNo: true, status: true, updatedAt: true },
+                orderBy: { createdAt: 'desc' },
+                take: 50
             });
 
-            console.log(`✅ Successfully synced ${ids.length} sales.`);
+            if (candidateSales.length > 0) {
+                const verification = await this.verifySales(candidateSales);
+                if (verification?.success) {
+                    const idsToFetch = [
+                        ...(verification.missingIds || []),
+                        ...(verification.statusMismatchIds || [])
+                    ].filter((id: string) => !salesToSyncMap.has(id));
 
-            // 5. Check if more items exist
-            const remaining = await prisma.syncQueue.count({ where: { status: 'PENDING' } });
-            if (remaining > 0) {
-                setTimeout(() => {
-                    this.isSyncing = false;
-                    this.processQueue();
-                }, 1000); // Process next batch after 1s
-                return;
+                    if (idsToFetch.length > 0) {
+                        console.log(`⚡ [Smart Sync] Cloud verification identified ${idsToFetch.length} missing/mismatched sales.`);
+                        const fullSales = await prisma.sale.findMany({
+                            where: { id: { in: idsToFetch } },
+                            include: {
+                                items: true,
+                                payments: true,
+                                user: { select: { id: true, username: true, name: true, role: true, isActive: true } }
+                            }
+                        });
+                        for (const s of fullSales) {
+                            salesToSyncMap.set(s.id, s);
+                        }
+                    }
+                }
             }
 
+            const finalSalesToSync = Array.from(salesToSyncMap.values());
+            if (finalSalesToSync.length > 0) {
+                console.log(`⚡ [Smart Sync] Syncing ${finalSalesToSync.length} sales/voids...`);
+                await axios.post(`${this.apiUrl}/api/sync/sales`, { sales: finalSalesToSync }, {
+                    headers: this.getSyncHeaders()
+                });
+
+                const syncedIds = finalSalesToSync.map((s: any) => s.id);
+                await prisma.sale.updateMany({
+                    where: { id: { in: syncedIds } },
+                    data: { isSynced: true, lastSyncedAt: new Date() }
+                });
+                salesCount += finalSalesToSync.length;
+            }
+
+            // 5. Delta Sync: Exchanges
+            const unsyncedExchanges = await prisma.exchange.findMany({
+                where: { isSynced: false },
+                include: { items: true, payments: true },
+                take: 50
+            });
+
+            if (unsyncedExchanges.length > 0) {
+                console.log(`⚡ [Smart Sync] Syncing ${unsyncedExchanges.length} exchanges...`);
+                await axios.post(`${this.apiUrl}/api/sync/exchanges`, { exchanges: unsyncedExchanges }, {
+                    headers: this.getSyncHeaders()
+                });
+
+                const exIds = unsyncedExchanges.map((e: any) => e.id);
+                await prisma.exchange.updateMany({
+                    where: { id: { in: exIds } },
+                    data: { isSynced: true, lastSyncedAt: new Date() }
+                });
+                exchangesCount += unsyncedExchanges.length;
+            }
+
+            // 6. Delta Sync: Refunds
+            const unsyncedRefunds = await prisma.refund.findMany({
+                where: { isSynced: false },
+                include: { items: true, payments: true },
+                take: 50
+            });
+
+            if (unsyncedRefunds.length > 0) {
+                console.log(`⚡ [Smart Sync] Syncing ${unsyncedRefunds.length} refunds...`);
+                await axios.post(`${this.apiUrl}/api/sync/refunds`, { refunds: unsyncedRefunds }, {
+                    headers: this.getSyncHeaders()
+                });
+
+                const refIds = unsyncedRefunds.map((r: any) => r.id);
+                await prisma.refund.updateMany({
+                    where: { id: { in: refIds } },
+                    data: { isSynced: true, lastSyncedAt: new Date() }
+                });
+                refundsCount += unsyncedRefunds.length;
+            }
+
+            const totalSynced = salesCount + productsCount + exchangesCount + refundsCount;
+            const message = totalSynced === 0
+                ? 'All data is fully synchronized with cloud.'
+                : `Synced: ${salesCount} sales/voids, ${productsCount} products, ${exchangesCount} exchanges, ${refundsCount} refunds.`;
+
+            console.log(`✅ [Smart Sync] Finished. ${message}`);
+            return {
+                success: true,
+                message,
+                salesSynced: salesCount,
+                productsSynced: productsCount,
+                exchangesSynced: exchangesCount,
+                refundsSynced: refundsCount
+            };
         } catch (error: any) {
-            console.error('Queue sync failed:', error.message);
-
-            // Optional: Increment retry count
-            // await prisma.syncQueue.updateMany({ ... })
+            console.error('[Smart Sync] Error during sync:', error.message);
+            return { success: false, error: error.message };
         } finally {
             this.isSyncing = false;
         }

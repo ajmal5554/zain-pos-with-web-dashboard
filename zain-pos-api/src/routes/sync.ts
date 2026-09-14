@@ -30,6 +30,98 @@ function requireSyncAuth(req: express.Request, res: express.Response, next: expr
 
 router.use(requireSyncAuth);
 
+// ---------------------------------------------------------
+// SYNC STATE & VERIFICATION ENDPOINTS
+// ---------------------------------------------------------
+
+// Returns cloud synchronization metadata for lightweight handshake
+const handleSyncStatus = async (_req: express.Request, res: express.Response) => {
+    try {
+        const [salesCount, latestSale, productsCount, latestProduct, exchangesCount, refundsCount, movementsCount] = await Promise.all([
+            prisma.sale.count(),
+            prisma.sale.findFirst({
+                orderBy: { updatedAt: 'desc' },
+                select: { id: true, billNo: true, updatedAt: true, status: true }
+            }),
+            prisma.product.count(),
+            prisma.product.findFirst({
+                orderBy: { updatedAt: 'desc' },
+                select: { id: true, updatedAt: true }
+            }),
+            prisma.exchange.count(),
+            prisma.refund.count(),
+            prisma.inventoryMovement.count()
+        ]);
+
+        return res.json({
+            success: true,
+            timestamp: new Date().toISOString(),
+            sales: {
+                count: salesCount,
+                latest: latestSale
+            },
+            products: {
+                count: productsCount,
+                latest: latestProduct
+            },
+            exchanges: {
+                count: exchangesCount
+            },
+            refunds: {
+                count: refundsCount
+            },
+            inventoryMovements: {
+                count: movementsCount
+            }
+        });
+    } catch (error: any) {
+        console.error('Error fetching sync status:', error);
+        return res.status(500).json({ error: error.message });
+    }
+};
+
+router.get('/status', handleSyncStatus);
+router.post('/status', handleSyncStatus);
+
+// Fast batch verification: POS sends candidate list of { id, billNo, status, updatedAt }
+// Cloud checks which are missing or have a status mismatch (e.g., voided offline)
+router.post('/verify-sales', async (req, res) => {
+    try {
+        const { sales } = req.body;
+        if (!Array.isArray(sales) || sales.length === 0) {
+            return res.json({ success: true, missingIds: [], statusMismatchIds: [] });
+        }
+
+        const ids = sales.map((s: any) => s.id).filter(Boolean);
+        const existingSales = await prisma.sale.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, status: true, updatedAt: true }
+        });
+
+        const existingMap = new Map(existingSales.map(s => [s.id, s]));
+        const missingIds: string[] = [];
+        const statusMismatchIds: string[] = [];
+
+        for (const localSale of sales) {
+            const cloudSale = existingMap.get(localSale.id);
+            if (!cloudSale) {
+                missingIds.push(localSale.id);
+            } else if (cloudSale.status !== localSale.status) {
+                statusMismatchIds.push(localSale.id);
+            }
+        }
+
+        return res.json({
+            success: true,
+            missingIds,
+            statusMismatchIds
+        });
+    } catch (error: any) {
+        console.error('Error in /verify-sales:', error);
+        return res.status(500).json({ error: error.message });
+    }
+});
+
 const asDate = (value: any) => {
     if (!value) return undefined;
     const parsed = new Date(value);
@@ -617,7 +709,9 @@ router.post('/inventory', async (req, res) => {
         const { products } = req.body;
         if (!Array.isArray(products)) return res.status(400).json({ error: 'Invalid data' });
 
-        console.log(`ðŸ“¦ Syncing ${products.length} products...`);
+        console.log(`📦 Syncing ${products.length} products...`);
+        const newProducts: any[] = [];
+
         for (const p of products) {
             // 1. Sync Category
             const category = await prisma.category.upsert({
@@ -628,8 +722,28 @@ router.post('/inventory', async (req, res) => {
 
             // 2. Sync Product by stable desktop ID when available.
             const productId = typeof p.id === 'string' && p.id.trim() ? p.id : undefined;
-            let product;
+            let existingProduct = null;
 
+            if (productId) {
+                existingProduct = await prisma.product.findUnique({ where: { id: productId } });
+            } else {
+                existingProduct = await prisma.product.findFirst({
+                    where: { name: p.name, categoryId: category.id }
+                });
+            }
+
+            const isBrandNew = !existingProduct;
+            if (isBrandNew) {
+                const firstVar = Array.isArray(p.variants) && p.variants.length > 0 ? p.variants[0] : null;
+                newProducts.push({
+                    id: productId || p.name,
+                    name: p.name,
+                    price: firstVar ? (firstVar.sellingPrice || firstVar.mrp || 0) : 0,
+                    category: p.category?.name || 'General'
+                });
+            }
+
+            let product;
             if (productId) {
                 product = await prisma.product.upsert({
                     where: { id: productId },
@@ -652,10 +766,6 @@ router.post('/inventory', async (req, res) => {
                     }
                 });
             } else {
-                const existingProduct = await prisma.product.findFirst({
-                    where: { name: p.name, categoryId: category.id }
-                });
-
                 product = existingProduct
                     ? await prisma.product.update({
                         where: { id: existingProduct.id },
@@ -713,6 +823,59 @@ router.post('/inventory', async (req, res) => {
                     }
                 });
             }
+        }
+
+        // Dispatch Push Notifications for New Products
+        try {
+            const { notificationService } = require('../services/notificationService');
+            const shopId = getShopId();
+
+            // New Product Alerts (guard against spamming on mass initial sync)
+            if (newProducts.length === 1) {
+                const np = newProducts[0];
+                const formattedPrice = np.price % 1 === 0 ? np.price.toFixed(0) : np.price.toFixed(2);
+                await notificationService.send({
+                    shopId,
+                    type: 'product_added',
+                    title: 'New Product Added',
+                    message: `${np.name} • ₹${formattedPrice}`,
+                    referenceId: np.id,
+                    metadata: {
+                        name: np.name,
+                        sellingPrice: np.price,
+                        category: np.category
+                    }
+                });
+                console.log(`📱 Product added notification: ${np.name}`);
+            } else if (newProducts.length > 1 && newProducts.length <= 3) {
+                for (const np of newProducts) {
+                    const formattedPrice = np.price % 1 === 0 ? np.price.toFixed(0) : np.price.toFixed(2);
+                    await notificationService.send({
+                        shopId,
+                        type: 'product_added',
+                        title: 'New Product Added',
+                        message: `${np.name} • ₹${formattedPrice}`,
+                        referenceId: np.id,
+                        metadata: {
+                            name: np.name,
+                            sellingPrice: np.price,
+                            category: np.category
+                        }
+                    });
+                }
+                console.log(`📱 ${newProducts.length} product added notifications sent.`);
+            } else if (newProducts.length > 3) {
+                await notificationService.send({
+                    shopId,
+                    type: 'product_added',
+                    title: 'New Products Added',
+                    message: `${newProducts.length} new products added to catalog`,
+                    metadata: { count: newProducts.length }
+                });
+                console.log(`📱 Batch product added notification: ${newProducts.length} products`);
+            }
+        } catch (notifErr) {
+            console.error('Inventory notification trigger error:', notifErr);
         }
 
         // Log the sync

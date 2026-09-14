@@ -14,6 +14,38 @@ const GST_RATE = 5;
 const GST_INCLUSIVE_FACTOR = 1 + GST_RATE / 100;
 const roundCurrency = (value: number) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 
+const ACTIVE_SALE_SESSION_KEY = 'pos-active-sale-session';
+
+interface ActiveSaleSession {
+    saleId: string;
+    billNo: string;
+    originalSaleData: any;
+    originalPaidAmount: number;
+    paidAmount: string;
+    discountAmount: string;
+    paymentMethod: 'CASH' | 'CARD' | 'UPI' | 'SPLIT';
+    splitAmounts: { CASH: number; CARD: number; UPI: number };
+    customerName: string;
+    isEditMode: boolean;
+    showPayment?: boolean;
+}
+
+const persistActiveSaleSession = (session: ActiveSaleSession) => {
+    try {
+        localStorage.setItem(ACTIVE_SALE_SESSION_KEY, JSON.stringify(session));
+    } catch (e) {
+        console.error('Failed to persist active sale session', e);
+    }
+};
+
+const clearActiveSaleSession = () => {
+    try {
+        localStorage.removeItem(ACTIVE_SALE_SESSION_KEY);
+    } catch (e) {
+        console.error('Failed to clear active sale session', e);
+    }
+};
+
 export const POS: React.FC = () => {
     const location = useLocation();
     const leaveWarningMessage = 'Navigating away will close the update option for this saved sale. You can still use refund/exchange later, but you will lose the direct update option now. Continue?';
@@ -96,13 +128,10 @@ export const POS: React.FC = () => {
             if (notificationTimerRef.current) {
                 clearTimeout(notificationTimerRef.current);
             }
-            // Preserve unfinished draft carts, but do not carry finalized/edit-loaded sales
-            // into a fresh POS session after leaving this screen.
-            if (currentSaleId) {
-                clearCart();
-            }
+            // Preserve cart items and active sale session across page navigation.
+            // A fresh cart is started only when the cashier explicitly clicks "+ NEW".
         };
-    }, [currentSaleId, clearCart]);
+    }, []);
 
     // Auto-sync paidAmount for non-cash payments when discount changes
     // CASH: let it stay (customer may over-pay and receive change)
@@ -233,6 +262,7 @@ export const POS: React.FC = () => {
     }, [currentSaleId, isEditMode, originalSaleData]);
 
     const releasePostSaveUpdateWindow = useCallback(() => {
+        clearActiveSaleSession();
         clearCart();
         setPaidAmount('');
         setDiscountAmount('');
@@ -250,11 +280,41 @@ export const POS: React.FC = () => {
     }, [clearCart]);
 
     useEffect(() => {
+        if (isEditMode && currentSaleId && originalSaleData) {
+            persistActiveSaleSession({
+                saleId: currentSaleId,
+                billNo,
+                originalSaleData,
+                originalPaidAmount,
+                paidAmount,
+                discountAmount,
+                paymentMethod,
+                splitAmounts,
+                customerName,
+                isEditMode: true,
+                showPayment,
+            });
+        }
+    }, [
+        isEditMode,
+        currentSaleId,
+        originalSaleData,
+        billNo,
+        originalPaidAmount,
+        paidAmount,
+        discountAmount,
+        paymentMethod,
+        splitAmounts,
+        customerName,
+        showPayment,
+    ]);
+
+    useEffect(() => {
         window.posLeaveGuard = {
-            isActive: () => hasPostSaveUpdateWindow,
+            isActive: () => hasDetectedChanges,
             confirmLeave: () => {
-                if (hasPostSaveUpdateWindow) {
-                    releasePostSaveUpdateWindow();
+                if (hasDetectedChanges) {
+                    return window.confirm('You have unsaved changes to this bill. Continue?');
                 }
                 return true;
             }
@@ -265,23 +325,23 @@ export const POS: React.FC = () => {
                 delete window.posLeaveGuard;
             }
         };
-    }, [hasPostSaveUpdateWindow, releasePostSaveUpdateWindow]);
+    }, [hasDetectedChanges]);
 
     useEffect(() => {
-        if (!hasPostSaveUpdateWindow) return;
+        if (!hasDetectedChanges) return;
 
         const handleBeforeUnload = (event: BeforeUnloadEvent) => {
             event.preventDefault();
-            event.returnValue = leaveWarningMessage;
-            return leaveWarningMessage;
+            event.returnValue = 'You have unsaved changes to this bill. Continue?';
+            return 'You have unsaved changes to this bill. Continue?';
         };
 
         window.addEventListener('beforeunload', handleBeforeUnload);
         return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-    }, [hasPostSaveUpdateWindow, leaveWarningMessage]);
+    }, [hasDetectedChanges]);
 
     const loadData = async () => {
-        // Check for sale in location state (Edit/Exchange mode)
+        // 1. Check for sale in location state (Edit/Exchange mode from Sales History)
         const saleToEdit = location.state?.sale;
         if (saleToEdit) {
             clearCart();
@@ -319,16 +379,76 @@ export const POS: React.FC = () => {
             setHasChanges(false);
 
             // Pre-fill split amounts if invoice is split-paid
+            const initialSplitAmounts = { CASH: 0, CARD: 0, UPI: 0 };
             if (saleToEdit.paymentMethod === 'SPLIT' && saleToEdit.payments?.length) {
-                setSplitAmounts({
-                    CASH: saleToEdit.payments.find((p: any) => p.paymentMode === 'CASH')?.amount || 0,
-                    UPI: saleToEdit.payments.find((p: any) => p.paymentMode === 'UPI')?.amount || 0,
-                    CARD: saleToEdit.payments.find((p: any) => p.paymentMode === 'CARD')?.amount || 0,
+                saleToEdit.payments.forEach((p: any) => {
+                    if (p.paymentMode && p.paymentMode in initialSplitAmounts) {
+                        initialSplitAmounts[p.paymentMode as keyof typeof initialSplitAmounts] = p.amount || 0;
+                    }
                 });
             }
+            setSplitAmounts(initialSplitAmounts);
+
+            persistActiveSaleSession({
+                saleId: saleToEdit.id,
+                billNo: saleToEdit.billNo,
+                originalSaleData: saleToEdit,
+                originalPaidAmount: saleToEdit.paidAmount || 0,
+                paidAmount: saleToEdit.paidAmount?.toString() || '',
+                discountAmount: saleToEdit.discount?.toString() || '',
+                paymentMethod: saleToEdit.paymentMethod || 'CASH',
+                splitAmounts: initialSplitAmounts,
+                customerName: saleToEdit.customerName || 'Walk-in Customer',
+                isEditMode: true
+            });
         } else {
-            // Only reset UI state if cart is empty (fresh session)
-            // If cart has items (from localStorage persist), keep them
+            // 2. Check if there is an active post-save / edit sale session to restore across navigation
+            const savedSessionStr = localStorage.getItem(ACTIVE_SALE_SESSION_KEY);
+            if (savedSessionStr) {
+                try {
+                    const session: ActiveSaleSession = JSON.parse(savedSessionStr);
+                    if (session && session.saleId && session.billNo) {
+                        setBillNo(session.billNo);
+                        setCurrentSaleId(session.saleId);
+                        setOriginalSaleData(session.originalSaleData);
+                        setOriginalPaidAmount(session.originalPaidAmount || 0);
+                        setPaidAmount(session.paidAmount || '');
+                        setDiscountAmount(session.discountAmount || '');
+                        setPaymentMethod(session.paymentMethod || 'CASH');
+                        setSplitAmounts(session.splitAmounts || { CASH: 0, CARD: 0, UPI: 0 });
+                        setCustomerName(session.customerName || 'Walk-in Customer');
+                        setShowPayment(session.showPayment ?? true);
+                        setIsEditMode(true);
+                        setHasChanges(false);
+
+                        // Ensure items are in cart; if cart was cleared, restore from original items
+                        if (useCartStore.getState().items.length === 0 && session.originalSaleData?.items?.length) {
+                            (session.originalSaleData.items || []).forEach((item: any) => {
+                                addItem({
+                                    variantId: item.variantId,
+                                    productName: item.productName,
+                                    variantInfo: item.variantInfo || '',
+                                    barcode: item.barcode || '',
+                                    quantity: item.quantity,
+                                    mrp: item.mrp || item.sellingPrice,
+                                    sellingPrice: item.sellingPrice,
+                                    discount: item.discount || 0,
+                                    taxRate: item.taxRate || 0,
+                                });
+                            });
+                        }
+
+                        await loadProducts();
+                        await loadShopSettings();
+                        return;
+                    }
+                } catch (e) {
+                    console.error('Failed to restore active sale session', e);
+                    clearActiveSaleSession();
+                }
+            }
+
+            // 3. Normal fresh session without an active edit session
             if (items.length === 0) {
                 setCurrentSaleId(null);
                 setOriginalPaidAmount(0);
@@ -606,6 +726,7 @@ export const POS: React.FC = () => {
     // };
 
     const handleNewSale = () => {
+        clearActiveSaleSession();
         clearCart();
         setPaidAmount('');
         setDiscountAmount('');
@@ -741,6 +862,19 @@ export const POS: React.FC = () => {
                     setOriginalPaidAmount(sale.paidAmount || 0);
                     setIsEditMode(true);
                     setHasChanges(false);
+                    persistActiveSaleSession({
+                        saleId: sale.id,
+                        billNo: sale.billNo,
+                        originalSaleData: sale,
+                        originalPaidAmount: sale.paidAmount || 0,
+                        paidAmount: (sale.paidAmount ?? '').toString(),
+                        discountAmount: (sale.discount ?? '').toString(),
+                        paymentMethod: sale.paymentMethod || 'CASH',
+                        splitAmounts: paymentMethod === 'SPLIT' ? splitAmounts : { CASH: 0, CARD: 0, UPI: 0 },
+                        customerName: sale.customerName || 'Walk-in Customer',
+                        isEditMode: true,
+                        showPayment: true,
+                    });
                     if (shouldPrint) {
                         await printReceipt(sale);
                     }
@@ -801,6 +935,19 @@ export const POS: React.FC = () => {
                 setOriginalPaidAmount(sale.paidAmount || 0);
                 setIsEditMode(true);
                 setHasChanges(false);
+                persistActiveSaleSession({
+                    saleId: sale.id,
+                    billNo: sale.billNo,
+                    originalSaleData: sale,
+                    originalPaidAmount: sale.paidAmount || 0,
+                    paidAmount: (sale.paidAmount ?? '').toString(),
+                    discountAmount: (sale.discount ?? '').toString(),
+                    paymentMethod: sale.paymentMethod || 'CASH',
+                    splitAmounts: paymentMethod === 'SPLIT' ? splitAmounts : { CASH: 0, CARD: 0, UPI: 0 },
+                    customerName: sale.customerName || 'Walk-in Customer',
+                    isEditMode: true,
+                    showPayment: true,
+                });
                 // Print receipt
                 if (shouldPrint) {
                     await printReceipt(sale);

@@ -39,4 +39,5 @@ prisma/dev.db-journal
 check-*.ts
 test-*.ts
 get-local-users.ts
+scratch/
 

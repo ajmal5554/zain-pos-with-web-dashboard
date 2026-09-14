@@ -197,6 +197,27 @@ router.post('/products', async (req: AuthRequest, res) => {
         }
     });
 
+    try {
+        const { notificationService } = require('../services/notificationService');
+        const firstPrice = product.variants?.[0]?.sellingPrice ?? 0;
+        const formattedPrice = firstPrice % 1 === 0 ? firstPrice.toFixed(0) : firstPrice.toFixed(2);
+        await notificationService.send({
+            shopId: 'main-shop',
+            type: 'product_added',
+            title: 'New Product Added',
+            message: `${product.name} • ₹${formattedPrice}`,
+            referenceId: product.id,
+            metadata: {
+                productId: product.id,
+                name: product.name,
+                sellingPrice: firstPrice,
+                category: product.category?.name
+            }
+        });
+    } catch (notifErr) {
+        console.error('Failed to dispatch product_added notification:', notifErr);
+    }
+
     res.status(201).json(product);
 });
 

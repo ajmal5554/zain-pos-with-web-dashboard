@@ -1299,6 +1299,17 @@ app.whenReady().then(async () => {
 
         createWindow();
 
+        // Initialize Network Status Service and auto-sync on reconnect
+        networkService = getNetworkStatusService(mainWindow || undefined);
+        let previousOnlineState = networkService.getStatus().online;
+        networkService.onChange((status) => {
+            if (!previousOnlineState && status.online) {
+                console.log('🌐 Internet connection restored! Triggering auto-sync...');
+                cloudSync.verifyAndSync().catch(err => console.error('Auto-sync on reconnect failed:', err.message));
+            }
+            previousOnlineState = status.online;
+        });
+
         app.on('activate', () => {
             if (BrowserWindow.getAllWindows().length === 0) {
                 createWindow();
@@ -1496,16 +1507,10 @@ async function runCloudSync() {
         cloudSync.setApiUrl(setting.value);
         await loadCloudSyncSecret();
 
-        const products = await prisma.product.findMany({
-            include: { category: true, variants: true }
-        });
-        const inventoryResult = await cloudSync.syncInventory(products);
-        assertCloudSyncStep(inventoryResult, 'Inventory sync');
+        const result = await cloudSync.verifyAndSync();
+        const auditSynced = await syncAuditDelta().catch(() => 0);
 
-        const salesSynced = await syncSalesDelta();
-        const auditSynced = await syncAuditDelta();
-
-        console.log(`Background Cloud Sync Complete (sales: ${salesSynced}, audit: ${auditSynced})`);
+        console.log(`Background Cloud Sync Complete:`, result?.message || result, `(audit: ${auditSynced})`);
     } catch (e) {
         console.error('Background Sync Failed:', e);
     }
@@ -1528,6 +1533,15 @@ ipcMain.handle('cloud:configure', async (_event, { intervalMinutes }) => {
     runCloudSync().catch((e) => console.error('Immediate cloud sync failed:', e));
     return { success: true };
 });
+
+let productSyncTimer: NodeJS.Timeout | null = null;
+function debouncedProductSync() {
+    if (productSyncTimer) clearTimeout(productSyncTimer);
+    productSyncTimer = setTimeout(() => {
+        cloudSync.verifyAndSync().catch(err => console.warn('Debounced product sync skipped:', err.message));
+    }, 4000);
+}
+
 // Secure database query handler with permission validation
 createSecureIpcHandler(
     'db:secureQuery',
@@ -1645,6 +1659,13 @@ createSecureIpcHandler(
         }
 
         const result = await (prisma as any)[model][method](args);
+
+        // Auto-sync products when created or updated
+        if (['create', 'update', 'updateMany', 'delete', 'upsert'].includes(method) &&
+            ['product', 'productVariant', 'category'].includes(model)) {
+            debouncedProductSync();
+        }
+
         return { success: true, data: stripPasswords(result) };
     },
     {
@@ -1796,7 +1817,7 @@ ipcMain.handle('sales:checkout', async (_event, saleData) => {
             for (const item of saleData.items) {
                 await tx.productVariant.update({
                     where: { id: item.variantId },
-                    data: { stock: { decrement: item.quantity } }
+                    data: { stock: { decrement: item.quantity }, isSynced: false }
                 });
 
                 await tx.inventoryMovement.create({
@@ -2059,7 +2080,7 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
                     // More items sold now -> reduce stock
                     await tx.productVariant.update({
                         where: { id: variantId },
-                        data: { stock: { decrement: delta } }
+                        data: { stock: { decrement: delta }, isSynced: false }
                     });
                     await tx.inventoryMovement.create({
                         data: {
@@ -2076,7 +2097,7 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
                     const restockQty = Math.abs(delta);
                     await tx.productVariant.update({
                         where: { id: variantId },
-                        data: { stock: { increment: restockQty } }
+                        data: { stock: { increment: restockQty }, isSynced: false }
                     });
                     await tx.inventoryMovement.create({
                         data: {
@@ -2368,16 +2389,20 @@ createSecureIpcHandler(
     'sales:exchange',
     PermissionMiddleware.editSale,
     async (_event, exchangeData: any, user) => {
+        let result: any;
         try {
-            return await prisma.$transaction(async (tx: any) => {
+            result = await prisma.$transaction(async (tx: any) => {
         try {
             const now = new Date();
             const sanitizedNotes = sanitizeString(exchangeData.notes, 500);
             const returnedItems = (exchangeData.items || []).filter((item: any) => item.returnedId && (item.returnedQty || 0) > 0);
             const newItems = (exchangeData.items || []).filter((item: any) => item.newId && (item.newQty || 0) > 0);
 
-            if (returnedItems.length === 0 && newItems.length === 0) {
-                throw new Error('Exchange must include returned items or replacement items.');
+            if (returnedItems.length === 0) {
+                throw new Error('Exchange requires at least one returned item.');
+            }
+            if (newItems.length === 0) {
+                throw new Error('Exchange requires at least one replacement item. For returns only, please process a Refund.');
             }
 
             const originalSale = await tx.sale.findUnique({
@@ -2600,7 +2625,7 @@ createSecureIpcHandler(
                 if (item.returnedId) {
                     await tx.productVariant.update({
                         where: { id: item.returnedId },
-                        data: { stock: { increment: item.returnedQty || 0 } }
+                        data: { stock: { increment: item.returnedQty || 0 }, isSynced: false }
                     });
                     await tx.inventoryMovement.create({
                         data: {
@@ -2619,7 +2644,7 @@ createSecureIpcHandler(
                 if (item.newId) {
                     await tx.productVariant.update({
                         where: { id: item.newId },
-                        data: { stock: { decrement: item.newQty || 0 } }
+                        data: { stock: { decrement: item.newQty || 0 }, isSynced: false }
                     });
                     await tx.inventoryMovement.create({
                         data: {
@@ -2639,24 +2664,28 @@ createSecureIpcHandler(
             const structuredReturnedItems = returnedItems.map((item: any) => {
                 const saleItem = originalSale.items.find((si: any) => si.variantId === item.returnedId);
                 const unitPrice = saleItem && saleItem.quantity > 0 ? (saleItem.total / saleItem.quantity) : 0;
+                const total = roundCurrency(unitPrice * (item.returnedQty || 1));
                 return {
                     name: saleItem?.productName || 'Item',
                     variant: saleItem?.variantInfo || '',
                     qty: item.returnedQty || 1,
                     rate: roundCurrency(unitPrice),
-                    total: roundCurrency(unitPrice * (item.returnedQty || 1))
+                    total,
+                    amount: total
                 };
             });
 
             const structuredReplacementItems = newItems.map((item: any) => {
                 const variant = replacementVariantById.get(item.newId);
                 const rate = variant?.sellingPrice || 0;
+                const total = roundCurrency(rate * (item.newQty || 1));
                 return {
                     name: variant?.product?.name || 'Item',
                     variant: `${variant?.size || ''} ${variant?.color || ''}`.trim(),
                     qty: item.newQty || 1,
                     rate: roundCurrency(rate),
-                    total: roundCurrency(rate * (item.newQty || 1))
+                    total,
+                    amount: total
                 };
             });
 
@@ -2697,7 +2726,23 @@ createSecureIpcHandler(
                 }
             });
 
-            return { success: true, data: { exchange, replacementSaleId: replacementSale?.id || null } };
+            const fullExchange = await tx.exchange.findUnique({
+                where: { id: exchange.id },
+                include: { items: true, payments: true }
+            });
+            const fullReplacementSale = replacementSale ? await tx.sale.findUnique({
+                where: { id: replacementSale.id },
+                include: { items: true, payments: true }
+            }) : null;
+
+            return {
+                success: true,
+                data: {
+                    exchange: fullExchange,
+                    replacementSale: fullReplacementSale,
+                    replacementSaleId: replacementSale?.id || null
+                }
+            };
         } catch (error: any) {
             console.error('Exchange failed:', error);
             throw error;
@@ -2707,6 +2752,16 @@ createSecureIpcHandler(
             console.error('sales:exchange transaction error:', error);
             return { success: false, error: error.message };
         }
+
+        if (result?.success && result?.data) {
+            if (result.data.replacementSale) {
+                cloudSync.queueSale(result.data.replacementSale).catch(err => console.error('Queue replacement sale error:', err));
+            }
+            if (result.data.exchange) {
+                cloudSync.queueExchange(result.data.exchange).catch(err => console.error('Queue exchange error:', err));
+            }
+        }
+        return result;
     },
     {
         extractUserId: (args: any) => args.userId
@@ -2875,8 +2930,9 @@ createSecureIpcHandler(
     'sales:refund',
     PermissionMiddleware.editSale,
     async (_event, refundData: any, user) => {
+        let result: any;
         try {
-            return await prisma.$transaction(async (tx: any) => {
+            result = await prisma.$transaction(async (tx: any) => {
         try {
             const now = new Date();
             const sanitizedReason = sanitizeString(refundData.reason, 500);
@@ -2971,6 +3027,10 @@ createSecureIpcHandler(
                     payments: {
                         create: refundPayments
                     }
+                },
+                include: {
+                    items: true,
+                    payments: true
                 }
             });
 
@@ -3038,6 +3098,11 @@ createSecureIpcHandler(
             console.error('sales:refund transaction error:', error);
             return { success: false, error: error.message };
         }
+
+        if (result?.success && result?.data) {
+            cloudSync.queueRefund(result.data).catch(err => console.error('Queue refund error:', err));
+        }
+        return result;
     },
     {
         extractUserId: (args: any) => args.userId
@@ -3070,7 +3135,7 @@ createSecureIpcHandler(
             for (const item of sale.items) {
                 await tx.productVariant.update({
                     where: { id: item.variantId },
-                    data: { stock: { increment: item.quantity } }
+                    data: { stock: { increment: item.quantity }, isSynced: false }
                 });
                 await tx.inventoryMovement.create({
                     data: {
@@ -4551,46 +4616,35 @@ createSecureIpcHandler(
 
 ipcMain.handle('cloud:syncNow', async () => {
     try {
-        console.log('🔄 Manual Sync Starting...');
+        console.log('🔄 Sync Now Starting (Smart Verification & Delta)...');
 
         // 1. Get Cloud URL from settings
         const setting = await prisma.setting.findUnique({ where: { key: 'CLOUD_API_URL' } });
         if (!setting || !setting.value) {
-            // Default to a known URL or alert user
             return { success: false, error: 'Cloud API URL not configured in Settings.' };
         }
 
         cloudSync.setApiUrl(setting.value);
         const syncSecret = await loadCloudSyncSecret();
         if (!syncSecret) {
-            return { success: false, error: 'Cloud sync secret not configured. Set CLOUD_SYNC_SECRET in the POS app or environment.' };
+            return { success: false, error: 'Cloud sync secret not configured. Set CLOUD_SYNC_SECRET in Settings or environment.' };
         }
 
-        // 2. Sync Settings (Store Info, etc.)
-        const allSettings = await prisma.setting.findMany();
-        const settingsResult = await cloudSync.syncSettings(allSettings);
-        assertCloudSyncStep(settingsResult, 'Settings sync');
+        // 2. Perform smart verification & delta sync
+        const syncResult = await cloudSync.verifyAndSync();
 
-        // 3. Sync Users
-        const users = await prisma.user.findMany();
-        const usersResult = await cloudSync.syncUsers(users);
-        assertCloudSyncStep(usersResult, 'Users sync');
+        // 3. Sync Audit delta
+        let auditSynced = 0;
+        try {
+            auditSynced = await syncAuditDelta();
+        } catch (auditErr: any) {
+            console.warn('Audit delta sync warning:', auditErr.message);
+        }
 
-        // 4. Fetch all products with relations
-        const products = await prisma.product.findMany({
-            include: {
-                category: true,
-                variants: true
-            }
-        });
-        const inventoryResult = await cloudSync.syncInventory(products);
-        assertCloudSyncStep(inventoryResult, 'Inventory sync');
-
-        // 5. Sync only unsynced/new sales and audit logs (cursor-based)
-        const salesSynced = await syncSalesDelta();
-        const auditSynced = await syncAuditDelta();
-
-        return { success: true, salesSynced, auditSynced };
+        return {
+            ...syncResult,
+            auditSynced
+        };
     } catch (error: any) {
         console.error('Manual sync failed:', error);
         return { success: false, error: error.message };

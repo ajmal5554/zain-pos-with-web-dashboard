@@ -24,6 +24,7 @@ import { ReceiptDesigner } from '../components/settings/ReceiptDesigner';
 import { LabelDesigner } from '../components/settings/LabelDesigner';
 import { db } from '../lib/db';
 import { useAuthStore } from '../store/authStore';
+import packageInfo from '../../package.json';
 
 type SettingsTab = 'general' | 'sync' | 'print' | 'data';
 
@@ -336,12 +337,15 @@ export const Settings: React.FC = () => {
 
             if (res.success) {
                 setSyncStatus('success');
+                showToast(res.message || 'Sync completed successfully!', 'success');
             } else {
                 setSyncStatus('error');
+                showToast(res.error || 'Sync failed', 'error');
                 console.error('Sync failed:', res.error);
             }
-        } catch (error) {
+        } catch (error: any) {
             setSyncStatus('error');
+            showToast(error.message || 'Sync failed', 'error');
             console.error('Sync error:', error);
         }
 
@@ -419,18 +423,16 @@ export const Settings: React.FC = () => {
 
     return (
         <div className="space-y-6">
-            <div className="flex justify-between items-center">
-                <h1 className="text-2xl font-bold">Settings</h1>
-                <div className="text-xs text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded">v3.0.4</div>
-            </div>
-
             <div className="bg-white dark:bg-dark-card border border-gray-200 dark:border-dark-border rounded-xl shadow-sm overflow-hidden flex flex-col">
                 {/* Tabs Header */}
-                <div className="flex border-b border-gray-200 dark:border-dark-border overflow-x-auto no-scrollbar">
-                    <TabButton id="general" label="Shop Info" icon={Monitor} />
-                    <TabButton id="sync" label="Cloud & Backup" icon={Globe} />
-                    <TabButton id="print" label="Printer & Design" icon={Printer} />
-                    <TabButton id="data" label="Data Tools" icon={Package} />
+                <div className="flex items-center justify-between border-b border-gray-200 dark:border-dark-border overflow-x-auto no-scrollbar">
+                    <div className="flex">
+                        <TabButton id="general" label="Shop Info" icon={Monitor} />
+                        <TabButton id="sync" label="Cloud & Backup" icon={Globe} />
+                        <TabButton id="print" label="Printer & Design" icon={Printer} />
+                        <TabButton id="data" label="Data Tools" icon={Package} />
+                    </div>
+                    <div className="text-xs text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded mr-6 shrink-0">v{packageInfo.version}</div>
                 </div>
 
                 {/* Tab Content */}

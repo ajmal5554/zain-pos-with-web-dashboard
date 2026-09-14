@@ -46,7 +46,7 @@ router.post('/login', async (req, res) => {
         const token = jwt.sign(
             { userId: user.id },
             process.env.JWT_SECRET!,
-            { expiresIn: '24h' }
+            { expiresIn: '365d' }
         );
 
         // Create audit log

@@ -218,13 +218,18 @@ function getPaymentBreakdown(sale: SaleRow): PaymentSummary {
     if (sale.payments && sale.payments.length > 0) {
         for (const p of sale.payments) {
             const mode = p.paymentMode.toUpperCase();
+            // Skip EXCHANGE_CREDIT/EXCHANGE — these are non-cash settlement, not fresh collection
+            if (mode === 'EXCHANGE_CREDIT' || mode === 'EXCHANGE') continue;
             if (mode === 'CASH') result.cash += p.amount;
             else if (mode === 'UPI') result.upi += p.amount;
             else if (mode === 'CARD') result.card += p.amount;
         }
     } else {
         const mode = sale.paymentMethod.toUpperCase();
-        if (mode === 'CASH') result.cash = sale.grandTotal;
+        // For legacy bills with paymentMethod='EXCHANGE', treat as zero fresh collection
+        if (mode === 'EXCHANGE' || mode === 'EXCHANGE_CREDIT') {
+            // No fresh cash/upi/card collected
+        } else if (mode === 'CASH') result.cash = sale.grandTotal;
         else if (mode === 'UPI') result.upi = sale.grandTotal;
         else if (mode === 'CARD') result.card = sale.grandTotal;
     }
@@ -526,15 +531,29 @@ function processSaleForReport(sale: SaleRow): SaleRow {
         };
     }
 
-    // It's an exchange replacement bill (e.g. #1840 or #1841)
+    // It's an exchange replacement bill
+    // Read EXCHANGE_CREDIT directly from payment records (new immutable architecture)
+    const exchangeCreditPayment = (sale.payments || []).find(
+        (p) => p.paymentMode.toUpperCase() === 'EXCHANGE_CREDIT'
+    );
+    const exchangeCreditFromPayment = exchangeCreditPayment ? Number(exchangeCreditPayment.amount || 0) : 0;
+
+    // getPaymentBreakdown already excludes EXCHANGE_CREDIT, so this gives fresh money only
     const payBreakdown = getPaymentBreakdown(sale);
     const freshPaid = payBreakdown.cash + payBreakdown.upi + payBreakdown.card;
 
+    // Determine the exchange credit amount:
+    // - New bills: read from the EXCHANGE_CREDIT payment record
+    // - Legacy bills: infer from grandTotal minus fresh payments
+    const exchangeCredit = exchangeCreditFromPayment > 0
+        ? exchangeCreditFromPayment
+        : Math.max(0, netSale.grandTotal - freshPaid);
+
     if (freshPaid <= 0.009) {
-        // Fully covered by exchange credit (e.g. #1840)
+        // Fully covered by exchange credit — zero revenue for reports
         return {
             ...netSale,
-            exchangeCredit: netSale.subtotal,
+            exchangeCredit: exchangeCredit,
             taxableValue: 0,
             cgst: 0,
             sgst: 0,
@@ -544,13 +563,14 @@ function processSaleForReport(sale: SaleRow): SaleRow {
                 ...it,
                 taxAmount: 0,
             })),
-            payments: [{ paymentMode: 'EXCHANGE_CREDIT', amount: netSale.subtotal }],
+            payments: [{ paymentMode: 'EXCHANGE_CREDIT', amount: exchangeCredit }],
         };
     }
 
-    // Partial exchange credit + fresh payment collected (e.g. #1841: 800 bill, 750 credit, 50 UPI)
-    const ratio = freshPaid / Math.max(netSale.grandTotal, 0.01);
+    // Partial exchange credit + fresh payment collected
+    // Report grandTotal = only the fresh money (what actually hit the cash drawer / bank)
     const netGrandTotal = parseFloat(freshPaid.toFixed(2));
+    const ratio = netGrandTotal / Math.max(netSale.grandTotal, 0.01);
 
     const netItems = (netSale.items || []).map((item) => {
         const itemTotal = parseFloat((item.total * ratio).toFixed(2));
@@ -569,7 +589,7 @@ function processSaleForReport(sale: SaleRow): SaleRow {
 
     return {
         ...netSale,
-        exchangeCredit: parseFloat((netSale.subtotal - freshPaid).toFixed(2)),
+        exchangeCredit: parseFloat(exchangeCredit.toFixed(2)),
         taxableValue: netTaxable,
         cgst: netCgst,
         sgst: netSgst,

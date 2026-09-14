@@ -155,16 +155,38 @@ export function NotificationBell() {
                                                 {notification.message}
                                             </p>
                                             <div className="flex items-center justify-between pt-2">
-                                                {notification.referenceId ? (
+                                                {notification.type === 'product_added' ? (
                                                     <Link
-                                                        to="/invoices"
+                                                        to="/products"
                                                         className="text-xs font-medium text-primary hover:underline flex items-center gap-1"
                                                         onClick={() => setIsOpen(false)}
                                                     >
-                                                        View record
+                                                        View Product
+                                                    </Link>
+                                                ) : notification.type === 'low_stock' ? (
+                                                    <Link
+                                                        to="/inventory"
+                                                        className="text-xs font-medium text-destructive hover:underline flex items-center gap-1"
+                                                        onClick={() => setIsOpen(false)}
+                                                    >
+                                                        View Inventory
+                                                    </Link>
+                                                ) : notification.referenceId ? (
+                                                    <Link
+                                                        to="/sales"
+                                                        className="text-xs font-medium text-primary hover:underline flex items-center gap-1"
+                                                        onClick={() => setIsOpen(false)}
+                                                    >
+                                                        View Bill
                                                     </Link>
                                                 ) : (
-                                                    <span className="text-xs text-muted-foreground">Activity</span>
+                                                    <Link
+                                                        to="/sales"
+                                                        className="text-xs font-medium text-muted-foreground hover:underline flex items-center gap-1"
+                                                        onClick={() => setIsOpen(false)}
+                                                    >
+                                                        Sales Activity
+                                                    </Link>
                                                 )}
                                                 {!notification.read && (
                                                     <Button

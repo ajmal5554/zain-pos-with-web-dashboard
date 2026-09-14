@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { Printer, Search, Trash2, Filter, Calendar as CalendarIcon, ChevronDown, ChevronUp, Tag, Banknote, CreditCard, QrCode } from 'lucide-react';
 import { Button } from '../components/ui/Button';
+import { ReplacementProductPicker } from '../components/sales/ReplacementProductPicker';
 import { Skeleton } from '../components/ui/Skeleton';
 import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
@@ -265,12 +266,13 @@ export const Sales: React.FC = () => {
                     include: { product: true }
                 });
 
-                const variantMap = new Map<string, { productName: string; variantInfo: string }>(
+                const variantMap = new Map<string, { productName: string; variantInfo: string; sellingPrice: number }>(
                     (variants || []).map((variant: any) => [
                         variant.id,
                         {
                             productName: variant.product?.name || 'Unknown Item',
-                            variantInfo: `${variant.size || ''} ${variant.color || ''}`.trim()
+                            variantInfo: `${variant.size || ''} ${variant.color || ''}`.trim(),
+                            sellingPrice: Number(variant.sellingPrice || 0)
                         }
                     ])
                 );
@@ -279,13 +281,19 @@ export const Sales: React.FC = () => {
                     ...sale,
                     exchanges: (sale.exchanges || []).map((exchange: any) => ({
                         ...exchange,
-                        items: (exchange.items || []).map((item: any) => ({
-                            ...item,
-                            returnedItemName: item.returnedItemId ? (variantMap.get(item.returnedItemId)?.productName || 'Returned Item') : null,
-                            returnedVariantInfo: item.returnedItemId ? (variantMap.get(item.returnedItemId)?.variantInfo || '') : '',
-                            newItemName: item.newItemId ? (variantMap.get(item.newItemId)?.productName || 'Added Item') : null,
-                            newVariantInfo: item.newItemId ? (variantMap.get(item.newItemId)?.variantInfo || '') : '',
-                        }))
+                        items: (exchange.items || []).map((item: any) => {
+                            const retVariant = item.returnedItemId ? variantMap.get(item.returnedItemId) : null;
+                            const newVariant = item.newItemId ? variantMap.get(item.newItemId) : null;
+                            return {
+                                ...item,
+                                returnedItemName: retVariant ? retVariant.productName : (item.returnedItemId ? 'Returned Item' : null),
+                                returnedVariantInfo: retVariant ? retVariant.variantInfo : '',
+                                returnedSellingPrice: retVariant ? retVariant.sellingPrice : null,
+                                newItemName: newVariant ? newVariant.productName : (item.newItemId ? 'Added Item' : null),
+                                newVariantInfo: newVariant ? newVariant.variantInfo : '',
+                                newSellingPrice: newVariant ? newVariant.sellingPrice : null,
+                            };
+                        })
                     }))
                 }));
             }
@@ -410,6 +418,17 @@ export const Sales: React.FC = () => {
     const submitExchange = async () => {
         if (!selectedSaleForAction) return;
 
+        const returns = returnItems.filter(ri => (ri.returnQty || 0) > 0);
+        if (returns.length === 0) {
+            showToast("Exchange requires at least one returned item. Please set return quantity in Step 1.", 'error');
+            return;
+        }
+
+        if (exchangeNewItems.length === 0) {
+            showToast("Exchange requires at least one replacement item. Please select replacement items in Step 2.", 'error');
+            return;
+        }
+
         const totalReturnedValue = returnItems.reduce((sum, it) => sum + getReturnValue(it, 'returnQty'), 0);
         const totalNewValue = exchangeNewItems.reduce((sum, it) => sum + (it.sellingPrice * it.quantity), 0);
         const difference = totalNewValue - totalReturnedValue;
@@ -503,6 +522,32 @@ export const Sales: React.FC = () => {
     const isSingleReturnItem = returnItems.length === 1;
     const exchangeSelectableProducts = allProducts.filter((p: any) => !!p?.product?.name);
 
+    const handleAddReplacementProduct = (variant: any) => {
+        setExchangeNewItems(prev => {
+            const existingIdx = prev.findIndex(ni => ni.variantId === variant.id);
+            if (existingIdx >= 0) {
+                return prev.map((item, idx) =>
+                    idx === existingIdx ? { ...item, quantity: item.quantity + 1 } : item
+                );
+            }
+            return [...prev, {
+                variantId: variant.id,
+                productName: variant.product.name,
+                variantInfo: `${variant.size || ''} ${variant.color || ''}`.trim(),
+                sellingPrice: variant.sellingPrice,
+                quantity: 1
+            }];
+        });
+    };
+
+    const replacementItemQuantities = useMemo(() => {
+        const map: Record<string, number> = {};
+        for (const item of exchangeNewItems) {
+            map[item.variantId] = item.quantity;
+        }
+        return map;
+    }, [exchangeNewItems]);
+
     const confirmVoid = async () => {
         if (!voidSaleId || !voidReason.trim()) return;
 
@@ -563,32 +608,49 @@ export const Sales: React.FC = () => {
         if (!selectedSaleForPaymentUpdate) return;
 
         const { method, cashAmount, upiAmount, cardAmount } = paymentEditData;
-        const totalAmount = selectedSaleForPaymentUpdate.grandTotal;
+        const sale = selectedSaleForPaymentUpdate;
 
-        let finalPayments = [];
-        let nextPaidAmount = totalAmount;
+        // For replacement bills, preserve the EXCHANGE_CREDIT payment record
+        const existingExchangeCredit = (sale.payments || []).find(
+            (p: any) => p.paymentMode === 'EXCHANGE_CREDIT'
+        );
+        const exchangeCreditAmount = existingExchangeCredit ? Number(existingExchangeCredit.amount || 0) : 0;
+        const isReplacement = isReplacementSale(sale) && exchangeCreditAmount > 0;
+
+        // The amount the user is assigning across cash/upi/card is only the fresh portion
+        const freshAmount = isReplacement ? (sale.grandTotal - exchangeCreditAmount) : sale.grandTotal;
+
+        let freshPayments: any[] = [];
+        let nextPaidAmount = freshAmount;
         let nextChangeAmount = 0;
+
         if (method === 'SPLIT') {
             const sum = (parseFloat(cashAmount) || 0) + (parseFloat(upiAmount) || 0) + (parseFloat(cardAmount) || 0);
-            if (Math.abs(sum - totalAmount) > 0.01) {
-                showToast(`Total must equal ${formatIndianCurrency(totalAmount)}. Current sum: ${formatIndianCurrency(sum)}`, 'warning');
+            if (Math.abs(sum - freshAmount) > 0.01) {
+                showToast(`Total must equal ${formatIndianCurrency(freshAmount)}. Current sum: ${formatIndianCurrency(sum)}`, 'warning');
                 return;
             }
             nextPaidAmount = sum;
-            if (parseFloat(cashAmount) > 0) finalPayments.push({ paymentMode: 'CASH', amount: parseFloat(cashAmount) });
-            if (parseFloat(upiAmount) > 0) finalPayments.push({ paymentMode: 'UPI', amount: parseFloat(upiAmount) });
-            if (parseFloat(cardAmount) > 0) finalPayments.push({ paymentMode: 'CARD', amount: parseFloat(cardAmount) });
+            if (parseFloat(cashAmount) > 0) freshPayments.push({ paymentMode: 'CASH', amount: parseFloat(cashAmount) });
+            if (parseFloat(upiAmount) > 0) freshPayments.push({ paymentMode: 'UPI', amount: parseFloat(upiAmount) });
+            if (parseFloat(cardAmount) > 0) freshPayments.push({ paymentMode: 'CARD', amount: parseFloat(cardAmount) });
         } else {
-            finalPayments = [{ paymentMode: method, amount: totalAmount }];
+            freshPayments = [{ paymentMode: method, amount: freshAmount }];
         }
+
+        // Final payments array: EXCHANGE_CREDIT (if replacement) + fresh payments
+        const finalPayments = [
+            ...(isReplacement ? [{ paymentMode: 'EXCHANGE_CREDIT', amount: exchangeCreditAmount }] : []),
+            ...freshPayments
+        ];
 
         try {
             setIsSavingPayment(true);
             const result = await window.electronAPI.sales.updatePayment({
-                saleId: selectedSaleForPaymentUpdate.id,
+                saleId: sale.id,
                 userId: user?.id,
                 paymentData: {
-                    paymentMethod: method,
+                    paymentMethod: isReplacement ? method : method,
                     paidAmount: nextPaidAmount,
                     changeAmount: nextChangeAmount,
                     payments: finalPayments
@@ -597,7 +659,7 @@ export const Sales: React.FC = () => {
 
             if (!result.success) throw new Error(result.error);
 
-            setSales(prev => prev.map(s => s.id === selectedSaleForPaymentUpdate.id ? {
+            setSales(prev => prev.map(s => s.id === sale.id ? {
                 ...s,
                 paymentMethod: result.data.paymentMethod,
                 paidAmount: result.data.paidAmount,
@@ -1112,12 +1174,17 @@ export const Sales: React.FC = () => {
                                                             const returnedItems = (exData?.returnedItems && exData.returnedItems.length > 0)
                                                                 ? exData.returnedItems
                                                                 : (sale.exchanges || []).flatMap((ex: any) =>
-                                                                    (ex.items || []).filter((ei: any) => ei.returnedItemId).map((ei: any) => ({
-                                                                        name: ei.returnedItemName || 'Returned Item',
-                                                                        variant: ei.returnedVariantInfo || '',
-                                                                        qty: ei.returnedQty || 1,
-                                                                        amount: Math.abs(ei.priceDiff || 0)
-                                                                    }))
+                                                                    (ex.items || []).filter((ei: any) => ei.returnedItemId).map((ei: any) => {
+                                                                        const qty = ei.returnedQty || 1;
+                                                                        // Use enriched sellingPrice first, then fall back to priceDiff
+                                                                        const unitPrice = ei.returnedSellingPrice || (ei.priceDiff != null ? Math.abs(Number(ei.priceDiff)) / qty : 0);
+                                                                        return {
+                                                                            name: ei.returnedItemName || 'Returned Item',
+                                                                            variant: ei.returnedVariantInfo || '',
+                                                                            qty,
+                                                                            amount: Math.round(unitPrice * qty * 100) / 100
+                                                                        };
+                                                                    })
                                                                 );
 
                                                             const replacementItems = (exData?.replacementItems && exData.replacementItems.length > 0)
@@ -1127,15 +1194,19 @@ export const Sales: React.FC = () => {
                                                                         name: it.productName,
                                                                         variant: it.variantInfo || '',
                                                                         qty: it.quantity,
-                                                                        amount: it.total || (it.sellingPrice * it.quantity)
+                                                                        amount: Number(it.total) || (Number(it.sellingPrice) * it.quantity) || 0
                                                                     }))
                                                                     : (sale.exchanges || []).flatMap((ex: any) =>
-                                                                        (ex.items || []).filter((ei: any) => ei.newItemId).map((ei: any) => ({
-                                                                            name: ei.newItemName || 'Added Item',
-                                                                            variant: ei.newVariantInfo || '',
-                                                                            qty: ei.newQty || 1,
-                                                                            amount: ei.priceDiff || 0
-                                                                        }))
+                                                                        (ex.items || []).filter((ei: any) => ei.newItemId).map((ei: any) => {
+                                                                            const qty = ei.newQty || 1;
+                                                                            const unitPrice = ei.newSellingPrice || (ei.priceDiff != null ? Number(ei.priceDiff) / qty : 0);
+                                                                            return {
+                                                                                name: ei.newItemName || 'Added Item',
+                                                                                variant: ei.newVariantInfo || '',
+                                                                                qty,
+                                                                                amount: Math.round(unitPrice * qty * 100) / 100
+                                                                            };
+                                                                        })
                                                                     )
                                                                 );
 
@@ -1193,7 +1264,7 @@ export const Sales: React.FC = () => {
                                                                                             </span>
                                                                                         </div>
                                                                                         <span className="font-mono font-bold text-rose-700 dark:text-rose-300">
-                                                                                            {formatIndianCurrency(item.amount)}
+                                                                                            {formatIndianCurrency(item.total ?? item.amount ?? (item.rate ? item.rate * (item.qty || 1) : 0))}
                                                                                         </span>
                                                                                     </div>
                                                                                 ))}
@@ -1224,7 +1295,7 @@ export const Sales: React.FC = () => {
                                                                                             </span>
                                                                                         </div>
                                                                                         <span className="font-mono font-bold text-emerald-700 dark:text-emerald-300">
-                                                                                            {formatIndianCurrency(item.amount)}
+                                                                                            {formatIndianCurrency(item.total ?? item.amount ?? (item.rate ? item.rate * (item.qty || 1) : 0))}
                                                                                         </span>
                                                                                     </div>
                                                                                 ))}
@@ -1285,7 +1356,8 @@ export const Sales: React.FC = () => {
                                                                         <div className="min-w-0">
                                                                             <div className="font-bold text-sm text-gray-900 dark:text-gray-100 truncate flex items-center gap-2">
                                                                                 {item.productName}
-                                                                                {activeQty <= 0 && <span className="text-[8px] bg-gray-200 text-gray-600 px-1 rounded">REMOVED</span>}
+                                                                                {returnedQty > 0 && returnedQty >= item.quantity && <span className="text-[8px] bg-amber-100 text-amber-700 px-1 rounded">EXCHANGED</span>}
+                                                                                {refundedQty > 0 && refundedQty >= item.quantity && returnedQty === 0 && <span className="text-[8px] bg-gray-200 text-gray-600 px-1 rounded">REFUNDED</span>}
                                                                             </div>
                                                                             <div className="text-[10px] text-gray-500 font-medium">
                                                                                 {item.variantInfo}
@@ -1293,11 +1365,11 @@ export const Sales: React.FC = () => {
                                                                         </div>
                                                                         <div className="text-right flex-shrink-0 ml-4">
                                                                             <div className={`text-xs font-black ${activeQty <= 0 ? 'text-gray-400' : 'text-primary-600'}`}>
-                                                                                {activeQty} / {item.quantity} × {formatIndianCurrency(item.sellingPrice)}
+                                                                                {item.quantity} × {formatIndianCurrency(item.sellingPrice)}
                                                                             </div>
                                                                             {(returnedQty > 0 || refundedQty > 0) && (
                                                                                 <div className="text-[9px] text-red-500 font-bold uppercase">
-                                                                                    {returnedQty > 0 ? `${returnedQty} Returned ` : ''}
+                                                                                    {returnedQty > 0 ? `${returnedQty} Exchanged ` : ''}
                                                                                     {refundedQty > 0 ? `${refundedQty} Refunded` : ''}
                                                                                 </div>
                                                                             )}
@@ -1305,26 +1377,6 @@ export const Sales: React.FC = () => {
                                                                     </div>
                                                                 );
                                                             })}
-
-                                                            {/* Show items added via exchange */}
-                                                            {(sale.exchanges || []).flatMap((ex: any) => ex.items || []).filter((ei: any) => ei.newItemId).map((newItem: any, idx: number) => (
-                                                                <div key={`new-${idx}`} className="flex justify-between items-center p-3 bg-green-50 dark:bg-green-900/10 rounded-lg border border-green-100 dark:border-green-900/30">
-                                                                    <div className="min-w-0">
-                                                                        <div className="font-bold text-sm text-green-800 dark:text-green-400 truncate flex items-center gap-2">
-                                                                            {newItem.newItemName || 'Added Item'}
-                                                                            <span className="text-[8px] bg-green-200 text-green-700 px-1 rounded">EXCHANGE</span>
-                                                                        </div>
-                                                                        <div className="text-[10px] text-green-600/70 font-medium">
-                                                                            {newItem.newVariantInfo ? `${newItem.newVariantInfo} | ` : ''}Qty: {newItem.newQty} | Price: {formatIndianCurrency(newItem.priceDiff / newItem.newQty)}
-                                                                        </div>
-                                                                    </div>
-                                                                    <div className="text-right flex-shrink-0 ml-4">
-                                                                        <div className="text-xs font-black text-green-600">
-                                                                            + {formatIndianCurrency(newItem.priceDiff)}
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                            ))}
                                                         </div>
 
                                                         {(() => {
@@ -1705,26 +1757,11 @@ export const Sales: React.FC = () => {
                                 <Plus className="w-3 h-3" /> Step 2: Replacement Items
                             </h4>
                             <div className="space-y-2">
-                                <select
-                                    className="w-full p-2 text-sm border-2 border-gray-100 rounded-lg outline-none focus:border-orange-400 h-10"
-                                    onChange={(e) => {
-                                        const variant = allProducts.find(p => p.id === e.target.value);
-                                        if (variant && !exchangeNewItems.find(ni => ni.variantId === variant.id)) {
-                                            setExchangeNewItems(prev => [...prev, {
-                                                variantId: variant.id,
-                                                productName: variant.product.name,
-                                                variantInfo: `${variant.size || ''} ${variant.color || ''}`.trim(),
-                                                sellingPrice: variant.sellingPrice,
-                                                quantity: 1
-                                            }]);
-                                        }
-                                    }}
-                                >
-                                    <option value="">Search & Select Product...</option>
-                                    {exchangeSelectableProducts.map(p => (
-                                        <option key={p.id} value={p.id}>{p.product.name} ({p.size} {p.color}) - ₹{p.sellingPrice}</option>
-                                    ))}
-                                </select>
+                                <ReplacementProductPicker
+                                    products={exchangeSelectableProducts}
+                                    onSelectProduct={handleAddReplacementProduct}
+                                    existingItemQuantities={replacementItemQuantities}
+                                />
                                 <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
                                     {exchangeNewItems.map((item, idx) => (
                                         <div key={idx} className="p-2 bg-orange-50/50 dark:bg-orange-900/10 border border-orange-100 dark:border-orange-900/30 rounded-lg flex justify-between items-center group">
@@ -1787,16 +1824,33 @@ export const Sales: React.FC = () => {
                         </div>
                     </div>
 
-                    <div className="flex justify-end gap-3 pt-2">
-                        <Button variant="secondary" onClick={() => setIsExchangeModalOpen(false)}>Cancel Workflow</Button>
-                        <Button
-                            variant="primary"
-                            className="px-10 font-bold bg-orange-600 hover:bg-orange-700 shadow-lg shadow-orange-100"
-                            disabled={exchangeNewItems.length === 0 && returnItems.every(it => it.returnQty === 0)}
-                            onClick={submitExchange}
-                        >
-                            Finalize Exchange
-                        </Button>
+                    <div className="flex flex-col sm:flex-row justify-between items-center gap-3 pt-2">
+                        <div className="text-xs">
+                            {returnItems.every(it => (it.returnQty || 0) === 0) ? (
+                                <span className="text-amber-600 dark:text-amber-400 font-medium">
+                                    ⚠️ Select at least 1 returned item (Step 1)
+                                </span>
+                            ) : exchangeNewItems.length === 0 ? (
+                                <span className="text-amber-600 dark:text-amber-400 font-medium">
+                                    ⚠️ Select at least 1 replacement item (Step 2)
+                                </span>
+                            ) : (
+                                <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                                    ✓ Ready to finalize exchange
+                                </span>
+                            )}
+                        </div>
+                        <div className="flex gap-3">
+                            <Button variant="secondary" onClick={() => setIsExchangeModalOpen(false)}>Cancel Workflow</Button>
+                            <Button
+                                variant="primary"
+                                className="px-10 font-bold bg-orange-600 hover:bg-orange-700 shadow-lg shadow-orange-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                disabled={exchangeNewItems.length === 0 || returnItems.every(it => (it.returnQty || 0) === 0)}
+                                onClick={submitExchange}
+                            >
+                                Finalize Exchange
+                            </Button>
+                        </div>
                     </div>
                 </div>
             </Modal>
@@ -1808,15 +1862,39 @@ export const Sales: React.FC = () => {
                 size="sm"
             >
                 <div className="space-y-6">
-                    <div className="bg-primary-50 dark:bg-primary-900/10 p-4 rounded-lg flex gap-3 items-start border border-primary-100 dark:border-primary-900/30">
-                        <CreditCard className="w-5 h-5 text-primary-600 mt-0.5" />
-                        <div>
-                            <p className="text-sm font-bold text-primary-800 dark:text-primary-400 uppercase">Change Payment Method</p>
-                            <p className="text-xs text-primary-700 dark:text-primary-500">
-                                Total Bill Amount: <span className="font-bold">{formatIndianCurrency(selectedSaleForPaymentUpdate?.grandTotal || 0)}</span>
-                            </p>
-                        </div>
-                    </div>
+                    {(() => {
+                        const saleForModal = selectedSaleForPaymentUpdate;
+                        const exchCreditPmt = (saleForModal?.payments || []).find((p: any) => p.paymentMode === 'EXCHANGE_CREDIT');
+                        const exchCreditAmt = exchCreditPmt ? Number(exchCreditPmt.amount || 0) : 0;
+                        const isRepl = isReplacementSale(saleForModal) && exchCreditAmt > 0;
+                        const freshAmt = isRepl ? (saleForModal.grandTotal - exchCreditAmt) : (saleForModal?.grandTotal || 0);
+
+                        return (
+                            <div className="bg-primary-50 dark:bg-primary-900/10 p-4 rounded-lg flex gap-3 items-start border border-primary-100 dark:border-primary-900/30">
+                                <CreditCard className="w-5 h-5 text-primary-600 mt-0.5" />
+                                <div>
+                                    <p className="text-sm font-bold text-primary-800 dark:text-primary-400 uppercase">Change Payment Method</p>
+                                    {isRepl ? (
+                                        <>
+                                            <p className="text-xs text-primary-700 dark:text-primary-500">
+                                                Bill Total: <span className="font-bold">{formatIndianCurrency(saleForModal.grandTotal)}</span>
+                                            </p>
+                                            <p className="text-xs text-amber-700 dark:text-amber-400 font-semibold">
+                                                Exchange Credit: -{formatIndianCurrency(exchCreditAmt)} (preserved)
+                                            </p>
+                                            <p className="text-xs text-emerald-700 dark:text-emerald-400 font-bold">
+                                                Fresh Amount to Assign: <span className="font-black">{formatIndianCurrency(freshAmt)}</span>
+                                            </p>
+                                        </>
+                                    ) : (
+                                        <p className="text-xs text-primary-700 dark:text-primary-500">
+                                            Total Bill Amount: <span className="font-bold">{formatIndianCurrency(saleForModal?.grandTotal || 0)}</span>
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })()}
 
                     <div className="grid grid-cols-2 gap-2">
                         {['CASH', 'UPI', 'CARD', 'SPLIT'].map((m) => (
@@ -1864,9 +1942,15 @@ export const Sales: React.FC = () => {
                                 </div>
                             </div>
 
-                            <div className={`mt-4 pt-3 border-t border-dashed flex justify-between items-center ${Math.abs(((parseFloat(paymentEditData.cashAmount) || 0) + (parseFloat(paymentEditData.upiAmount) || 0) + (parseFloat(paymentEditData.cardAmount) || 0)) - (selectedSaleForPaymentUpdate?.grandTotal || 0)) < 0.01
-                                ? 'border-green-200 text-green-600' : 'border-red-200 text-red-600'
-                                }`}>
+                            <div className={`mt-4 pt-3 border-t border-dashed flex justify-between items-center ${(() => {
+                                const saleM = selectedSaleForPaymentUpdate;
+                                const ecAmt = (saleM?.payments || []).find((p: any) => p.paymentMode === 'EXCHANGE_CREDIT');
+                                const ecVal = ecAmt ? Number(ecAmt.amount || 0) : 0;
+                                const isR = isReplacementSale(saleM) && ecVal > 0;
+                                const target = isR ? (saleM.grandTotal - ecVal) : (saleM?.grandTotal || 0);
+                                return Math.abs(((parseFloat(paymentEditData.cashAmount) || 0) + (parseFloat(paymentEditData.upiAmount) || 0) + (parseFloat(paymentEditData.cardAmount) || 0)) - target) < 0.01
+                                    ? 'border-green-200 text-green-600' : 'border-red-200 text-red-600';
+                            })()}`}>
                                 <span className="text-xs font-bold uppercase">Current Sum:</span>
                                 <span className="text-lg font-black">
                                     {formatIndianCurrency((parseFloat(paymentEditData.cashAmount) || 0) + (parseFloat(paymentEditData.upiAmount) || 0) + (parseFloat(paymentEditData.cardAmount) || 0))}
@@ -1880,7 +1964,16 @@ export const Sales: React.FC = () => {
                         <Button
                             variant="primary"
                             className="px-8 font-black uppercase"
-                            disabled={isSavingPayment || (paymentEditData.method === 'SPLIT' && Math.abs(((parseFloat(paymentEditData.cashAmount) || 0) + (parseFloat(paymentEditData.upiAmount) || 0) + (parseFloat(paymentEditData.cardAmount) || 0)) - (selectedSaleForPaymentUpdate?.grandTotal || 0)) > 0.01)}
+                            disabled={(() => {
+                                if (isSavingPayment) return true;
+                                if (paymentEditData.method !== 'SPLIT') return false;
+                                const saleM = selectedSaleForPaymentUpdate;
+                                const ecAmt = (saleM?.payments || []).find((p: any) => p.paymentMode === 'EXCHANGE_CREDIT');
+                                const ecVal = ecAmt ? Number(ecAmt.amount || 0) : 0;
+                                const isR = isReplacementSale(saleM) && ecVal > 0;
+                                const target = isR ? (saleM.grandTotal - ecVal) : (saleM?.grandTotal || 0);
+                                return Math.abs(((parseFloat(paymentEditData.cashAmount) || 0) + (parseFloat(paymentEditData.upiAmount) || 0) + (parseFloat(paymentEditData.cardAmount) || 0)) - target) > 0.01;
+                            })()}
                             onClick={submitPaymentUpdate}
                         >
                             {isSavingPayment ? 'Updating...' : 'Confirm Update'}

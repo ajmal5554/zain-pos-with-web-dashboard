@@ -7,7 +7,7 @@ import { API_URL } from '../lib/config';
 
 export interface Notification {
     id: string;
-    type: 'sale' | 'invoice_deleted' | 'invoice_updated';
+    type: 'sale' | 'invoice_deleted' | 'invoice_updated' | 'product_added' | 'low_stock' | string;
     title: string;
     message: string;
     read: boolean;
@@ -146,7 +146,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
             const soundUrl = notification.type === 'sale' ? '/sounds/cash-register.wav' : '/sounds/notification.mp3';
             const audio = new Audio(soundUrl);
             audio.play().catch(() => { });
-            toast(`${notification.title}: ${notification.message}`, { icon: '🛍️', duration: 5000 });
+            const toastIcon = notification.type === 'sale' ? '🛍️' : (notification.type === 'low_stock' ? '⚠️' : (notification.type === 'product_added' ? '📦' : (notification.type === 'invoice_deleted' ? '🚫' : '🔔')));
+            toast(`${notification.title}: ${notification.message}`, { icon: toastIcon, duration: 5000 });
             setNotifications(prev => [notification, ...prev]);
             setUnreadCount(prev => prev + 1);
         });
