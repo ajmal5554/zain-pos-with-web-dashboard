@@ -110,7 +110,7 @@ export default function SettingsPage() {
 
     if (loading) {
         return (
-            <div className="flex-1 space-y-4 pt-4 pb-12">
+            <div className="flex-1 space-y-4 pb-12">
                 <div className="flex items-center justify-between">
                     <div>
                         <h2 className="text-2xl font-bold tracking-tight">Settings</h2>
@@ -135,7 +135,7 @@ export default function SettingsPage() {
     }
 
     return (
-        <div className="flex flex-col flex-1 space-y-6 pt-4 pb-12 max-w-6xl mx-auto w-full">
+        <div className="flex flex-col flex-1 space-y-6 pb-12 max-w-6xl mx-auto w-full">
             <div>
                 <h2 className="text-2xl font-bold tracking-tight">Settings</h2>
                 <p className="text-muted-foreground text-sm">

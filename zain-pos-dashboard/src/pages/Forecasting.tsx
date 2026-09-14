@@ -117,7 +117,7 @@ export default function ForecastingPage() {
     }
 
     return (
-        <div className="flex-1 space-y-4 pt-4 pb-12">
+        <div className="flex-1 space-y-4 pb-12">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between">
                 <div>
                     <h2 className="text-2xl font-bold tracking-tight">Forecasting</h2>

@@ -90,7 +90,7 @@ export default function UsersPage() {
     }
 
     return (
-        <div className="flex-1 space-y-4 pt-4">
+        <div className="flex-1 space-y-4">
             <div className="flex items-center justify-between">
                 <div>
                     <h2 className="text-2xl font-bold tracking-tight">Users</h2>

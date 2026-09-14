@@ -481,7 +481,7 @@ export default function Reports() {
 
     if (loading || !report) {
         return (
-            <div className="flex-1 space-y-4 pt-4 w-full max-w-full min-w-0">
+            <div className="flex-1 space-y-4 w-full max-w-full min-w-0">
                 <div className="flex items-center justify-between gap-4 w-full">
                     <div>
                         <h2 className="text-xl sm:text-2xl font-bold tracking-tight">GST Reports</h2>

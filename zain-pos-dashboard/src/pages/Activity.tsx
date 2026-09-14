@@ -753,7 +753,7 @@ export default function ActivityPage() {
     };
 
     return (
-        <div className="flex-1 space-y-4 pt-4 pb-6 min-w-0">
+        <div className="flex-1 space-y-4 pb-6 min-w-0">
             {/* Header: Fixed top actions, no wrapping */}
             <div className="flex items-center justify-between gap-4 w-full">
                 <div>
