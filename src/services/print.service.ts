@@ -35,6 +35,10 @@ export interface ReceiptData {
     amount: number;
   }>;
   userName: string;
+  // Exchange/Replacement bill fields
+  isReplacementBill?: boolean;
+  originalBillNo?: string | number;
+  exchangeCreditAmount?: number;
 }
 
 export interface ReceiptPrinterConfig {
@@ -152,8 +156,9 @@ export function generateReceiptHtml(
         htmlContent += `${blockOpen}
           <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 11px; margin-bottom: 5px; ${styleStr}">
             <div style="text-align: left;">
-              <div>Bill No: ${data.billNo}</div>
+              <div>Bill No: ${data.billNo}${data.isReplacementBill ? ' <span style="font-size: 9px; border: 1px solid #000; padding: 0 3px; margin-left: 4px;">REPLACEMENT BILL</span>' : ''}</div>
               <div>Date: ${format(new Date(data.date), 'dd/MM/yyyy')}</div>
+              ${data.isReplacementBill && data.originalBillNo ? `<div style="font-size: 10px; margin-top: 2px;">Ref Orig Bill: #${data.originalBillNo}</div>` : ''}
             </div>
             <div style="text-align: right;">
               <div>Customer: ${data.customerName || 'Walk-in Customer'}</div>
@@ -202,6 +207,12 @@ export function generateReceiptHtml(
         const totalTax = (data.cgst || 0) + (data.sgst || 0);
         const afterDiscount = (data.subtotal || 0) - (data.discount || 0);
         const basicAmt = afterDiscount - totalTax;
+        const hasExchangeCredit = data.isReplacementBill && (data.exchangeCreditAmount || 0) > 0;
+        const exchangeCredit = data.exchangeCreditAmount || 0;
+        const netPaidToday = hasExchangeCredit ? (data.grandTotal - exchangeCredit) : data.grandTotal;
+        // Determine non-exchange payments for the footer breakdown
+        const freshPayments = (data.payments || []).filter(p => p.paymentMode !== 'EXCHANGE_CREDIT');
+
         htmlContent += `${blockOpen}
           <div style="${styleStr}; font-size: 11px;">
             <table style="width: 100%; font-size: inherit;">
@@ -211,17 +222,40 @@ export function generateReceiptHtml(
               <tr><td align="right">Taxable Amount (Excl. GST):</td><td align="right" width="80">${basicAmt.toFixed(2)}</td></tr>
               <tr><td align="right">CGST @2.5%:</td><td align="right" width="80">${(data.cgst || 0).toFixed(2)}</td></tr>
               <tr><td align="right">SGST @2.5%:</td><td align="right" width="80">${(data.sgst || 0).toFixed(2)}</td></tr>
-              <tr style="font-weight: bold; font-size: 14px; border-top: 1px dashed #000;">
-                <td align="right" style="padding: 5px 0;">NET AMOUNT:</td>
+              <tr style="font-weight: bold; font-size: 13px; border-top: 1px dashed #000;">
+                <td align="right" style="padding: 5px 0;">TOTAL:</td>
                 <td align="right" style="padding: 5px 0;">₹${data.grandTotal.toFixed(2)}</td>
               </tr>
+              ${hasExchangeCredit ? `
+              <tr>
+                <td align="right" style="padding: 2px 0;">Less Exchange Credit:</td>
+                <td align="right" style="padding: 2px 0;">-₹${exchangeCredit.toFixed(2)}</td>
+              </tr>
+              <tr style="font-weight: bold; font-size: 14px; border-top: 1px dashed #000;">
+                <td align="right" style="padding: 5px 0;">NET AMOUNT PAID:</td>
+                <td align="right" style="padding: 5px 0;">₹${Math.max(0, netPaidToday).toFixed(2)}</td>
+              </tr>
+              ` : ''}
+              ${!hasExchangeCredit ? `
               ${printerConfig.showPaidLine
                 ? (data.payments && data.payments.length > 1
                   ? data.payments.map(p => `<tr><td align="right">${p.paymentMode}:</td><td align="right">${p.amount.toFixed(2)}</td></tr>`).join('')
                   : `<tr><td align="right" style="padding-top: 5px;">Paid (${data.paymentMethod}):</td><td align="right" style="padding-top: 5px;">${data.paidAmount?.toFixed(2) || '0.00'}</td></tr>`)
                 : ''}
               ${printerConfig.showChangeLine ? `<tr><td align="right">Change:</td><td align="right">${data.changeAmount?.toFixed(2) || '0.00'}</td></tr>` : ''}
+              ` : ''}
             </table>
+            ${hasExchangeCredit ? `
+            <div style="border-top: 1px dashed #000; margin-top: 5px; padding-top: 5px; font-size: 11px;">
+              <div style="font-weight: bold; font-size: 10px; margin-bottom: 3px;">PAYMENT BREAKDOWN:</div>
+              <table style="width: 100%; font-size: inherit;">
+                <tr><td>Exchange Credit:</td><td align="right">₹${exchangeCredit.toFixed(2)}</td></tr>
+                ${freshPayments.map(p => `<tr><td>${p.paymentMode}:</td><td align="right">₹${p.amount.toFixed(2)}</td></tr>`).join('')}
+                ${freshPayments.length === 0 && netPaidToday > 0 ? `<tr><td>${data.paymentMethod}:</td><td align="right">₹${netPaidToday.toFixed(2)}</td></tr>` : ''}
+                ${netPaidToday <= 0 ? `<tr><td colspan="2" style="font-size: 10px;">No additional payment required</td></tr>` : ''}
+              </table>
+            </div>
+            ` : ''}
           </div>
         ${blockClose}`;
         break;

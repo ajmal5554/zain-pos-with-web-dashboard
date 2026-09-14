@@ -678,6 +678,15 @@ export const Sales: React.FC = () => {
     const handlePrintReceipt = async (sale: any) => {
         try {
             const receiptDate = toValidDate(sale.actualSaleDate) || toValidDate(sale.createdAt) || new Date();
+
+            // Detect replacement bill and extract exchange credit
+            const isReplBill = isReplacementSale(sale);
+            const exchCreditPmt = (sale.payments || []).find((p: any) => p.paymentMode === 'EXCHANGE_CREDIT');
+            const exchCreditAmt = exchCreditPmt ? Number(exchCreditPmt.amount || 0) : 0;
+            // Extract original bill number from remarks like "Replacement sale for Invoice #1234"
+            const origBillMatch = sale.remarks?.match(/Invoice #(\d+)/);
+            const origBillNo = origBillMatch?.[1] || '';
+
             const receiptData = {
                 billNo: sale.billNo,
                 date: receiptDate,
@@ -705,7 +714,15 @@ export const Sales: React.FC = () => {
                 paymentMethod: sale.paymentMethod,
                 paidAmount: sale.paidAmount,
                 changeAmount: sale.changeAmount,
+                payments: (sale.payments || []).map((p: any) => ({
+                    paymentMode: p.paymentMode,
+                    amount: Number(p.amount || 0),
+                })),
                 userName: sale.user?.name || 'Staff',
+                // Exchange/replacement bill fields
+                isReplacementBill: isReplBill && exchCreditAmt > 0,
+                originalBillNo: origBillNo,
+                exchangeCreditAmount: exchCreditAmt,
             };
 
             await printService.printReceipt(receiptData);
