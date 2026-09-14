@@ -181,18 +181,21 @@ function AppRoutes() {
 
 import { Toaster } from 'react-hot-toast';
 import { NotificationProvider } from './contexts/NotificationContext';
+import { ThemeProvider } from './contexts/ThemeContext';
 
 export default function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <NotificationProvider>
-          <DateFilterProvider>
-            <Toaster position="top-right" />
-            <AppRoutes />
-          </DateFilterProvider>
-        </NotificationProvider>
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <NotificationProvider>
+            <DateFilterProvider>
+              <Toaster position="top-right" />
+              <AppRoutes />
+            </DateFilterProvider>
+          </NotificationProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </BrowserRouter>
   );
 }

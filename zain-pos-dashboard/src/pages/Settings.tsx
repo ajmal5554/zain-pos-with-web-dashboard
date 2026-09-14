@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Save, Store, CreditCard, Printer, Cloud, RefreshCw, Database, Server } from 'lucide-react';
+import { Save, Store, CreditCard, Printer, Cloud, RefreshCw, Database, Server, Sparkles } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Button } from '@/components/ui/button';
 import { 
@@ -13,9 +13,12 @@ import { Input } from '@/components/ui/input';
 import { adminService, type AdminSetting } from '@/features/admin/services/admin.service';
 import { isDemoModeEnabled, demoSettings } from '@/lib/demo';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
+import { useTheme } from '@/contexts/ThemeContext';
 import { cn } from '@/lib/utils';
 
 const editableKeys = [
+    'APPEARANCE',
     'SHOP_SETTINGS',
     'PAYMENT_METHODS',
     'PRINTER_CONFIG',
@@ -27,6 +30,7 @@ const editableKeys = [
 type SettingKey = typeof editableKeys[number];
 
 const settingMeta: Record<SettingKey, { icon: React.ElementType, title: string, desc: string }> = {
+    APPEARANCE: { icon: Sparkles, title: 'Appearance & UI', desc: 'Personalize the visual theme, liquid glass aesthetics, and display modes.' },
     SHOP_SETTINGS: { icon: Store, title: 'Store Details', desc: 'Manage your store name, address, and contact info.' },
     PAYMENT_METHODS: { icon: CreditCard, title: 'Payment Options', desc: 'Configure accepted payment methods at checkout.' },
     PRINTER_CONFIG: { icon: Printer, title: 'Receipt Printer', desc: 'Setup physical receipt printer integrations.' },
@@ -45,11 +49,12 @@ function isJsonObj(str: string) {
 }
 
 export default function SettingsPage() {
+    const { isLiquidGlass, setIsLiquidGlass } = useTheme();
     const [settings, setSettings] = useState<AdminSetting[]>([]);
     const [drafts, setDrafts] = useState<Record<string, string>>({});
     const [loading, setLoading] = useState(true);
     const [savingKey, setSavingKey] = useState<string | null>(null);
-    const [activeTab, setActiveTab] = useState<SettingKey>('SHOP_SETTINGS');
+    const [activeTab, setActiveTab] = useState<SettingKey>('APPEARANCE');
 
     useEffect(() => {
         void loadSettings();
@@ -63,7 +68,8 @@ export default function SettingsPage() {
                 setDrafts(Object.fromEntries(demoSettings.map((s) => [s.key, s.value])));
                 return;
             }
-            const data = await adminService.getSettings([...editableKeys]);
+            const serverKeys = editableKeys.filter((k) => k !== 'APPEARANCE');
+            const data = await adminService.getSettings([...serverKeys]);
             setSettings(data);
             setDrafts(Object.fromEntries(data.map((setting) => [setting.key, setting.value])));
         } catch (error: any) {
@@ -76,6 +82,10 @@ export default function SettingsPage() {
     const settingsMap = useMemo(() => new Map(settings.map((setting) => [setting.key, setting])), [settings]);
 
     async function saveSetting(key: string) {
+        if (key === 'APPEARANCE') {
+            toast.success('Appearance preferences updated');
+            return;
+        }
         if (isDemoModeEnabled()) {
             toast.success('Simulation: Setting saved locally.');
             return;
@@ -139,7 +149,7 @@ export default function SettingsPage() {
             <div>
                 <h2 className="text-2xl font-bold tracking-tight">Settings</h2>
                 <p className="text-muted-foreground text-sm">
-                    Manage system configurations, billing, and integrations.
+                    Manage system configurations, appearance, and integrations.
                 </p>
             </div>
 
@@ -183,7 +193,71 @@ export default function SettingsPage() {
                             </div>
                         </CardHeader>
                         <CardContent className="p-6 md:p-8 space-y-8">
-                            {isJson ? (
+                            {activeTab === 'APPEARANCE' ? (
+                                <div className="space-y-6">
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-2xl border border-slate-200/80 bg-slate-50/50 dark:border-slate-800 dark:bg-slate-900/50 transition-all">
+                                        <div className="space-y-1">
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-semibold text-base">iOS Liquid Glass Theme</span>
+                                                {isLiquidGlass ? (
+                                                    <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded-full bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+                                                        Active
+                                                    </span>
+                                                ) : (
+                                                    <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded-full bg-slate-200/60 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                                                        Off
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <p className="text-sm text-muted-foreground max-w-xl">
+                                                Enable visionOS & iOS-inspired translucent acrylic glass surfaces, specular border highlights, and fluid ambient refractions across the entire dashboard.
+                                            </p>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            <span className="text-sm font-medium text-muted-foreground">
+                                                {isLiquidGlass ? 'Enabled' : 'Disabled'}
+                                            </span>
+                                            <Switch
+                                                checked={isLiquidGlass}
+                                                onCheckedChange={(val) => {
+                                                    setIsLiquidGlass(val);
+                                                    toast.success(val ? 'iOS Liquid Glass turned ON' : 'iOS Liquid Glass turned OFF');
+                                                }}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Live Theme Preview */}
+                                    <div className="p-6 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-background/50 space-y-4">
+                                        <div className="flex items-center justify-between">
+                                            <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                                                Live Theme Preview
+                                            </h4>
+                                            <span className="text-xs text-muted-foreground">
+                                                {isLiquidGlass ? 'Translucent glass active' : 'Classic solid mode active'}
+                                            </span>
+                                        </div>
+                                        <div className="grid sm:grid-cols-2 gap-4">
+                                            <div className="p-4 rounded-xl border bg-card text-card-foreground shadow-sm space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-sm font-semibold">Today's Sales</span>
+                                                    <Sparkles className="h-4 w-4 text-primary" />
+                                                </div>
+                                                <div className="text-2xl font-bold">₹1,725</div>
+                                                <p className="text-xs text-muted-foreground">Frosted glass refraction preview</p>
+                                            </div>
+                                            <div className="p-4 rounded-xl border bg-card text-card-foreground shadow-sm space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-sm font-semibold">Terminal Status</span>
+                                                    <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                                                </div>
+                                                <div className="text-2xl font-bold">Connected</div>
+                                                <p className="text-xs text-muted-foreground">Real-time sync active</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : isJson ? (
                                 <div className="space-y-6 max-w-2xl">
                                     {Object.entries(parsedObj).map(([fieldKey, fieldValue]) => {
                                         const labelName = fieldKey === fieldKey.toUpperCase() 
@@ -241,22 +315,24 @@ export default function SettingsPage() {
                                 </div>
                             )}
 
-                            <div className="flex items-center justify-between pt-6 border-t mt-8">
-                                <div className="text-xs text-muted-foreground">
-                                    {settingsMap.get(activeTab)?.updatedAt ? `Last saved on ${new Date(settingsMap.get(activeTab)!.updatedAt).toLocaleString()}` : 'Default configuration loaded'}
+                            {activeTab !== 'APPEARANCE' && (
+                                <div className="flex items-center justify-between pt-6 border-t mt-8">
+                                    <div className="text-xs text-muted-foreground">
+                                        {settingsMap.get(activeTab)?.updatedAt ? `Last saved on ${new Date(settingsMap.get(activeTab)!.updatedAt).toLocaleString()}` : 'Default configuration loaded'}
+                                    </div>
+                                    <Button 
+                                        onClick={() => void saveSetting(activeTab)} 
+                                        disabled={savingKey === activeTab}
+                                        className="min-w-[140px] font-semibold tracking-wide shadow-sm"
+                                    >
+                                        {savingKey === activeTab ? (
+                                            <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> Saving...</>
+                                        ) : (
+                                            <><Save className="mr-2 h-4 w-4" /> Save Changes</>
+                                        )}
+                                    </Button>
                                 </div>
-                                <Button 
-                                    onClick={() => void saveSetting(activeTab)} 
-                                    disabled={savingKey === activeTab}
-                                    className="min-w-[140px] font-semibold tracking-wide shadow-sm"
-                                >
-                                    {savingKey === activeTab ? (
-                                        <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> Saving...</>
-                                    ) : (
-                                        <><Save className="mr-2 h-4 w-4" /> Save Changes</>
-                                    )}
-                                </Button>
-                            </div>
+                            )}
                         </CardContent>
                     </Card>
                 </main>

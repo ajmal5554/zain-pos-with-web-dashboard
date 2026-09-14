@@ -1,8 +1,9 @@
-import { Sun, Moon } from 'lucide-react';
+import { Sun, Moon, Sparkles } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { DateRangePicker } from '@/components/shared/DateRangePicker';
 import { NotificationBell } from '@/components/notifications/NotificationBell';
+import { useTheme } from '@/contexts/ThemeContext';
 import { cn } from '@/lib/utils';
 
 interface HeaderProps {
@@ -13,6 +14,7 @@ interface HeaderProps {
 
 export function Header({ title, darkMode, setDarkMode }: HeaderProps) {
     const { user, isDemoMode, logout } = useAuth();
+    const { isLiquidGlass, toggleLiquidGlass } = useTheme();
 
     return (
         <header className="sticky top-0 z-30 flex h-14 items-center gap-4 border-b bg-background px-4 lg:h-[60px] lg:px-6">
@@ -33,8 +35,23 @@ export function Header({ title, darkMode, setDarkMode }: HeaderProps) {
                     )}
                 </div>
 
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2 sm:gap-3">
                     <NotificationBell />
+
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        title={isLiquidGlass ? "iOS Liquid Glass: ON (click to turn off)" : "iOS Liquid Glass: OFF (click to turn on)"}
+                        onClick={toggleLiquidGlass}
+                        className={cn(
+                            "rounded-full h-8 w-8 transition-all",
+                            isLiquidGlass 
+                                ? "text-indigo-600 bg-indigo-500/15 dark:text-indigo-300 dark:bg-indigo-400/20 shadow-sm" 
+                                : "text-muted-foreground hover:text-foreground"
+                        )}
+                    >
+                        <Sparkles className="h-4 w-4" />
+                    </Button>
 
                     <Button
                         variant="ghost"
