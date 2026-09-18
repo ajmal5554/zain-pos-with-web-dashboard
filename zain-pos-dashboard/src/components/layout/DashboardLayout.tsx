@@ -15,13 +15,18 @@ interface DashboardLayoutProps {
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
     const [sidebarOpen] = useState(true);
-    const [darkMode, setDarkMode] = useState(false);
+    const [darkMode, setDarkMode] = useState(() => {
+        const saved = localStorage.getItem('theme');
+        if (saved) return saved === 'dark';
+        return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    });
     const location = useLocation();
 
     // Dark Mode Effect & System Bar Sync
     useEffect(() => {
         const metaThemeColor = document.querySelector("meta[name='theme-color']");
         const metaColorScheme = document.querySelector("meta[name='color-scheme']");
+        localStorage.setItem('theme', darkMode ? 'dark' : 'light');
         if (darkMode) {
             document.documentElement.classList.add('dark');
             if (metaThemeColor) metaThemeColor.setAttribute('content', '#020617');
