@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import type { Invoice } from '@/features/invoices/services/invoice.service';
 import {
@@ -32,24 +33,21 @@ let cachedShopDetails = DEFAULT_SHOP_DETAILS;
 let settingsFetched = false;
 
 export function ThermalReceiptModal({ invoice, open, onClose, loading }: ThermalReceiptModalProps) {
-  // Sync Android / mobile status-bar (notification bar) color with the dark modal overlay
-  // This eliminates the jarring "big white block" at the top of the phone screen
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Escape key to dismiss
   useEffect(() => {
     if (!open) return;
-
-    const metaThemeColor = document.querySelector("meta[name='theme-color']");
-    const originalColor = metaThemeColor?.getAttribute('content') || '#ffffff';
-
-    if (metaThemeColor) {
-      metaThemeColor.setAttribute('content', '#090d16');
-    }
-
-    return () => {
-      if (metaThemeColor) {
-        metaThemeColor.setAttribute('content', originalColor);
-      }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
     };
-  }, [open]);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [open, onClose]);
 
   // Load custom settings once in background without blocking immediate render
   useEffect(() => {
@@ -148,15 +146,15 @@ export function ThermalReceiptModal({ invoice, open, onClose, loading }: Thermal
     };
   }, [invoice]);
 
-  if (!open || !invoice || !receiptData) return null;
+  if (!open || !invoice || !receiptData || !mounted) return null;
 
   // Filter out any logo block completely
   const filteredBlocks = cachedBlocks.filter((b) => b.type !== 'logo');
   const receiptInnerHtml = generateReceiptInnerHtml(receiptData, filteredBlocks, cachedPrinterConfig);
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto bg-slate-950/85 backdrop-blur-sm animate-in fade-in duration-150"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 overflow-y-auto bg-slate-950/85 backdrop-blur-sm animate-in fade-in duration-150"
       onClick={onClose}
     >
       {/* Clean Receipt Card (No buttons above it, no tear edge, no printer slot) */}
@@ -235,6 +233,7 @@ export function ThermalReceiptModal({ invoice, open, onClose, loading }: Thermal
           }
         }
       `}</style>
-    </div>
+    </div>,
+    document.body
   );
 }
