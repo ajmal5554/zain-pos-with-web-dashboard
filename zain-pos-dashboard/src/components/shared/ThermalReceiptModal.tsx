@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Printer, Copy, Check, X } from 'lucide-react';
+import { Printer, Copy, Check, X, RotateCcw } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import type { Invoice } from '@/features/invoices/services/invoice.service';
 import {
@@ -23,8 +23,7 @@ const DEFAULT_SHOP_DETAILS = {
   shopName: 'ZAIN GENTS PALACE',
   address: 'CHIRAMMAL TOWER, BEHIND CANARA BANK\nRAJA ROAD, NILESHWAR',
   phone: '9037106449, 7907026827',
-  gstin: '32PVGPS0686J1ZV',
-  logo: ''
+  gstin: '32PVGPS0686J1ZV'
 };
 
 export function ThermalReceiptModal({ invoice, open, onClose, loading }: ThermalReceiptModalProps) {
@@ -32,6 +31,17 @@ export function ThermalReceiptModal({ invoice, open, onClose, loading }: Thermal
   const [blocks, setBlocks] = useState<ReceiptBlock[]>(DEFAULT_RECEIPT_LAYOUT);
   const [printerConfig, setPrinterConfig] = useState<ReceiptPrinterConfig>(DEFAULT_RECEIPT_PRINTER_CONFIG);
   const [shopDetails, setShopDetails] = useState(DEFAULT_SHOP_DETAILS);
+  const [printKey, setPrintKey] = useState(0);
+  const [isPrinting, setIsPrinting] = useState(true);
+
+  // Trigger printer feed animation when opening or replaying
+  useEffect(() => {
+    if (open) {
+      setIsPrinting(true);
+      const timer = setTimeout(() => setIsPrinting(false), 1400);
+      return () => clearTimeout(timer);
+    }
+  }, [open, printKey]);
 
   // Fetch store configuration from admin settings if available
   useEffect(() => {
@@ -59,8 +69,7 @@ export function ThermalReceiptModal({ invoice, open, onClose, loading }: Thermal
                 shopName: parsed.shopName || parsed.name || prev.shopName,
                 address: parsed.address || parsed.branch || prev.address,
                 phone: parsed.phone || parsed.supportPhone || prev.phone,
-                gstin: parsed.gstin || prev.gstin,
-                logo: parsed.logo || prev.logo
+                gstin: parsed.gstin || prev.gstin
               }));
             }
           } catch { }
@@ -91,7 +100,11 @@ export function ThermalReceiptModal({ invoice, open, onClose, loading }: Thermal
     window.print();
   };
 
-  // Convert Invoice to POS ReceiptData exactly like POS Sales.tsx
+  const handleReplay = () => {
+    setPrintKey((prev) => prev + 1);
+  };
+
+  // Convert Invoice to POS ReceiptData (excluding any logo)
   const receiptData: ReceiptData | null = useMemo(() => {
     if (!invoice) return null;
 
@@ -120,7 +133,7 @@ export function ThermalReceiptModal({ invoice, open, onClose, loading }: Thermal
       shopAddress: shopDetails.address,
       shopPhone: shopDetails.phone,
       gstin: shopDetails.gstin,
-      logo: shopDetails.logo,
+      logo: '', // Explicitly no logo as requested
       customerName: invoice.customer?.name || 'Walk-in Customer',
       items: invoiceItems,
       subtotal: rawSubtotal,
@@ -144,36 +157,45 @@ export function ThermalReceiptModal({ invoice, open, onClose, loading }: Thermal
 
   if (!open || !invoice || !receiptData) return null;
 
-  // Generate exact inner HTML using POS app logic
-  const receiptInnerHtml = generateReceiptInnerHtml(receiptData, blocks, printerConfig);
+  // Filter out any logo block completely
+  const filteredBlocks = blocks.filter((b) => b.type !== 'logo');
+  const receiptInnerHtml = generateReceiptInnerHtml(receiptData, filteredBlocks, printerConfig);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 overflow-y-auto bg-slate-950/75 backdrop-blur-sm animate-in fade-in duration-200">
-      {/* Top Action Toolbar (Floating, non-printable) */}
-      <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 bg-slate-900/90 text-white px-4 py-2 rounded-full shadow-2xl border border-slate-700/60 backdrop-blur-md print:hidden">
-        <span className="text-xs font-mono font-medium text-slate-300 hidden sm:inline">
-          Receipt #{invoice.billNo}
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center p-3 sm:p-6 overflow-y-auto bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200">
+      {/* Top Floating Action Toolbar (Non-printable) */}
+      <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-1.5 sm:gap-2 bg-slate-900/95 text-white px-3.5 py-2 rounded-full shadow-2xl border border-slate-700/70 backdrop-blur-md print:hidden">
+        <span className="text-xs font-mono font-medium text-slate-300 hidden sm:inline mr-1">
+          Bill #{invoice.billNo}
         </span>
-        <span className="text-slate-500 hidden sm:inline">|</span>
         <button
           onClick={handlePrint}
-          className="flex items-center gap-1.5 px-3 py-1 bg-sky-500 hover:bg-sky-600 text-white text-xs font-semibold rounded-full transition-colors shadow-sm"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-500 hover:bg-sky-600 active:scale-95 text-white text-xs font-semibold rounded-full transition-all shadow-sm"
+          title="Print to thermal roll"
         >
           <Printer className="w-3.5 h-3.5" />
           <span>Print Bill</span>
         </button>
         <button
+          onClick={handleReplay}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 text-xs font-medium rounded-full transition-all"
+          title="Replay printer feed animation"
+        >
+          <RotateCcw className={`w-3.5 h-3.5 ${isPrinting ? 'animate-spin' : ''}`} />
+          <span className="hidden sm:inline">Feed</span>
+        </button>
+        <button
           onClick={handleCopy}
-          className="flex items-center gap-1.5 px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-full transition-colors"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 text-xs font-medium rounded-full transition-all"
           title="Copy Bill Number"
         >
           {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-          <span>{copied ? 'Copied' : 'Copy #'}</span>
+          <span className="hidden sm:inline">{copied ? 'Copied' : 'Copy'}</span>
         </button>
         <button
           onClick={onClose}
-          className="p-1 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-colors ml-1"
-          aria-label="Close receipt"
+          className="p-1.5 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-colors ml-1"
+          aria-label="Close"
         >
           <X className="w-4 h-4" />
         </button>
@@ -182,64 +204,111 @@ export function ThermalReceiptModal({ invoice, open, onClose, loading }: Thermal
       {/* Click backdrop to close */}
       <div className="fixed inset-0 -z-10" onClick={onClose} />
 
-      {/* THERMAL RECEIPT CONTAINER (Width matches POS 80mm thermal roll preview: ~320px) */}
-      <div
-        id="thermal-receipt-printable"
-        className="relative w-[320px] max-w-[92vw] my-auto pt-14 pb-8 transition-all"
-        style={{
-          filter: 'drop-shadow(0 20px 30px rgba(0,0,0,0.5)) drop-shadow(0 4px 6px rgba(0,0,0,0.25))'
-        }}
-      >
-        {/* TOP SERRATED TEAR EDGE */}
-        <div className="w-full h-3 select-none -mb-[1px] relative overflow-hidden receipt-tear-edge">
-          <svg className="w-full h-full block" preserveAspectRatio="none">
-            <defs>
-              <pattern id="thermal-tear-top" width="12" height="10" patternUnits="userSpaceOnUse">
-                <polygon points="0,10 6,0 12,10" fill="#ffffff" />
-              </pattern>
-            </defs>
-            <rect width="100%" height="100%" fill="url(#thermal-tear-top)" />
-          </svg>
-        </div>
-
-        {/* THERMAL PAPER BODY - EXACT POS PRINT HTML */}
-        <div
-          className="bg-white text-black px-4 py-3 shadow-inner"
-          style={{
-            fontFamily: printerConfig.fontFamily || 'sans-serif',
-            fontSize: '13px',
-            color: '#000000',
-            lineHeight: 1.3
-          }}
-        >
-          {loading ? (
-            <div className="py-12 text-center text-gray-500 italic animate-pulse">
-              Loading bill details...
+      {/* PRINTER STAGE: The receipt feeds out from the dispenser slot at the bottom */}
+      <div className="relative flex flex-col items-center justify-center my-auto pt-14 pb-4">
+        
+        {/* Paper Masking Container */}
+        <div className="relative overflow-hidden pb-1 max-w-[92vw]">
+          
+          {/* THERMAL RECEIPT PAPER */}
+          <div
+            key={printKey}
+            id="thermal-receipt-printable"
+            className="receipt-feed-animation relative w-[310px] sm:w-[325px] max-w-full origin-bottom"
+            style={{
+              filter: 'drop-shadow(0 15px 25px rgba(0,0,0,0.5)) drop-shadow(0 4px 6px rgba(0,0,0,0.25))'
+            }}
+          >
+            {/* TOP OF RECEIPT: Smooth, flat horizontal edge with rounded corners (No tear on top) */}
+            <div className="bg-white rounded-t-2xl pt-4 pb-1 px-4 sm:px-5 text-black">
+              {loading ? (
+                <div className="py-12 text-center text-gray-500 italic animate-pulse font-sans text-xs">
+                  Loading bill details...
+                </div>
+              ) : (
+                <div
+                  className="receipt-pos-body select-text"
+                  dangerouslySetInnerHTML={{ __html: receiptInnerHtml }}
+                />
+              )}
             </div>
-          ) : (
-            <div
-              className="receipt-pos-body"
-              dangerouslySetInnerHTML={{ __html: receiptInnerHtml }}
-            />
-          )}
+
+            {/* BOTTOM OF RECEIPT: Jagged triangular sawtooth tear edge (Matching reference photo) */}
+            <div className="w-full h-3.5 select-none -mt-[1px] relative overflow-hidden receipt-tear-edge">
+              <svg className="w-full h-full block" preserveAspectRatio="none">
+                <defs>
+                  <pattern id="thermal-tear-bottom" width="18" height="14" patternUnits="userSpaceOnUse">
+                    <polygon points="0,0 9,14 18,0" fill="#ffffff" />
+                  </pattern>
+                </defs>
+                <rect width="100%" height="100%" fill="url(#thermal-tear-bottom)" />
+              </svg>
+            </div>
+          </div>
         </div>
 
-        {/* BOTTOM SERRATED TEAR EDGE */}
-        <div className="w-full h-3 select-none -mt-[1px] relative overflow-hidden receipt-tear-edge">
-          <svg className="w-full h-full block" preserveAspectRatio="none">
-            <defs>
-              <pattern id="thermal-tear-bottom" width="12" height="10" patternUnits="userSpaceOnUse">
-                <polygon points="0,0 6,10 12,0" fill="#ffffff" />
-              </pattern>
-            </defs>
-            <rect width="100%" height="100%" fill="url(#thermal-tear-bottom)" />
-          </svg>
+        {/* PRINTER DISPENSER SLOT AT THE BOTTOM (Where the paper emerges from) */}
+        <div className="w-[335px] sm:w-[350px] max-w-[96vw] -mt-1 relative z-20 flex flex-col items-center select-none print:hidden">
+          <div className="w-full h-7 bg-gradient-to-b from-neutral-800 via-neutral-900 to-black rounded-lg border border-neutral-700/80 shadow-2xl flex items-center justify-between px-3">
+            {/* Dispenser Slit */}
+            <div className="flex-1 h-1.5 bg-black rounded-full border-t border-neutral-800 shadow-inner mr-3" />
+            
+            {/* Status LED */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className={`w-2 h-2 rounded-full ${isPrinting ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'} shadow-sm`} />
+              <span className="text-[9px] font-mono uppercase tracking-widest text-neutral-400 font-bold">
+                {isPrinting ? 'PRINTING...' : 'DISPENSED'}
+              </span>
+            </div>
+          </div>
         </div>
+
       </div>
 
-      {/* Exact Thermal Print Styles matching Desktop POS */}
+      {/* Animation & Print CSS */}
       <style>{`
+        /* Realistic Printer Feed Animation: emerges upwards from the bottom slot */
+        @keyframes receiptFeedUp {
+          0% {
+            transform: translateY(100%);
+            opacity: 0.6;
+          }
+          20% {
+            transform: translateY(70%);
+            opacity: 1;
+          }
+          45% {
+            transform: translateY(40%);
+          }
+          70% {
+            transform: translateY(18%);
+          }
+          90% {
+            transform: translateY(0);
+          }
+          95% {
+            /* Subtle cutter blade release bounce */
+            transform: translateY(-4px);
+          }
+          100% {
+            transform: translateY(0);
+            opacity: 1;
+          }
+        }
+
+        .receipt-feed-animation {
+          animation: receiptFeedUp 1.35s cubic-bezier(0.25, 1, 0.35, 1) forwards;
+          will-change: transform;
+        }
+
+        /* Screen typography matching POS print service */
         @media screen {
+          .receipt-pos-body {
+            font-family: ${printerConfig.fontFamily || 'sans-serif'};
+            font-size: 13px;
+            color: #000000;
+            line-height: 1.3;
+          }
           .receipt-pos-body * {
             color: #000000 !important;
           }
@@ -252,12 +321,11 @@ export function ThermalReceiptModal({ invoice, open, onClose, loading }: Thermal
           }
         }
 
+        /* Direct Print rules */
         @media print {
-          /* Hide whole app */
           body * {
             visibility: hidden !important;
           }
-          /* Show only the thermal receipt */
           #thermal-receipt-printable, #thermal-receipt-printable * {
             visibility: visible !important;
           }
@@ -272,6 +340,8 @@ export function ThermalReceiptModal({ invoice, open, onClose, loading }: Thermal
             background: #ffffff !important;
             filter: none !important;
             box-shadow: none !important;
+            animation: none !important;
+            transform: none !important;
           }
           .receipt-tear-edge {
             display: none !important;
