@@ -339,42 +339,103 @@ function buildTaxSlabs(salesList: SaleRow[]): TaxSlabSummary[] {
     const slabMap = new Map<number, TaxSlabSummary>();
 
     for (const sale of salesList) {
-        const saleSubtotal = Number(sale.subtotal || 0);
-        const saleDiscount = Number(sale.discount || 0);
+        const saleTaxable = Number(sale.taxableValue !== undefined ? sale.taxableValue : (sale.subtotal - sale.discount));
+        const saleTax = Number(sale.taxAmount || 0);
+        const saleCgst = Number(sale.cgst || 0);
+        const saleSgst = Number(sale.sgst || 0);
 
-        for (const item of sale.items || []) {
-            const rate = item.taxRate;
-            const lineGross = Number(item.total ?? ((Number(item.sellingPrice || 0) * Number(item.quantity || 0)) - Number(item.discount || 0)));
-            const discountShare = saleSubtotal > 0 ? (lineGross / saleSubtotal) : 0;
-            const lineNet = Math.max(0, lineGross - (saleDiscount * discountShare));
-            const taxableValue = parseFloat((lineNet / (1 + rate / 100)).toFixed(2));
-            const taxAmount = parseFloat((lineNet - taxableValue).toFixed(2));
-            const cgst = parseFloat((taxAmount / 2).toFixed(2));
-            const sgst = parseFloat((taxAmount / 2).toFixed(2));
+        if (saleTaxable <= 0.009 && saleTax <= 0.009) {
+            continue;
+        }
 
-            const existing = slabMap.get(rate);
-            if (existing) {
-                existing.taxableValue += taxableValue;
-                existing.cgst += cgst;
-                existing.sgst += sgst;
-                existing.totalTax += taxAmount;
-            } else {
-                slabMap.set(rate, { rate, taxableValue, cgst, sgst, totalTax: taxAmount });
+        const items = (sale.items || []).filter((it) => Number(it.total || 0) > 0 || Number(it.taxAmount || 0) > 0);
+        if (items.length === 0) {
+            const defaultRate = 5;
+            const existing = slabMap.get(defaultRate) || { rate: defaultRate, taxableValue: 0, cgst: 0, sgst: 0, totalTax: 0 };
+            existing.taxableValue += saleTaxable;
+            existing.cgst += saleCgst;
+            existing.sgst += saleSgst;
+            existing.totalTax += saleTax;
+            slabMap.set(defaultRate, existing);
+            continue;
+        }
+
+        // Group items in this sale by tax rate
+        const rateGroups = new Map<number, { rate: number; lineTotal: number; taxAmount: number }>();
+        let sumLineTotal = 0;
+
+        for (const item of items) {
+            const rate = Number(item.taxRate || 0);
+            const lineTotal = Number(item.total || 0);
+            const taxAmount = Number(item.taxAmount || 0);
+            sumLineTotal += lineTotal;
+
+            const grp = rateGroups.get(rate) || { rate, lineTotal: 0, taxAmount: 0 };
+            grp.lineTotal += lineTotal;
+            grp.taxAmount += taxAmount;
+            rateGroups.set(rate, grp);
+        }
+
+        const groups = Array.from(rateGroups.values());
+        if (groups.length === 1) {
+            const rate = groups[0].rate;
+            const existing = slabMap.get(rate) || { rate, taxableValue: 0, cgst: 0, sgst: 0, totalTax: 0 };
+            existing.taxableValue += saleTaxable;
+            existing.cgst += saleCgst;
+            existing.sgst += saleSgst;
+            existing.totalTax += saleTax;
+            slabMap.set(rate, existing);
+        } else {
+            let allocatedTaxable = 0;
+            let allocatedCgst = 0;
+            let allocatedSgst = 0;
+            let allocatedTax = 0;
+
+            for (let i = 0; i < groups.length; i++) {
+                const grp = groups[i];
+                const isLast = i === groups.length - 1;
+                const weight = sumLineTotal > 0 ? (grp.lineTotal / sumLineTotal) : (1 / groups.length);
+
+                const grpTaxable = isLast ? (saleTaxable - allocatedTaxable) : parseFloat((saleTaxable * weight).toFixed(2));
+                const grpCgst = isLast ? (saleCgst - allocatedCgst) : parseFloat((saleCgst * weight).toFixed(2));
+                const grpSgst = isLast ? (saleSgst - allocatedSgst) : parseFloat((saleSgst * weight).toFixed(2));
+                const grpTax = isLast ? (saleTax - allocatedTax) : parseFloat((saleTax * weight).toFixed(2));
+
+                allocatedTaxable += grpTaxable;
+                allocatedCgst += grpCgst;
+                allocatedSgst += grpSgst;
+                allocatedTax += grpTax;
+
+                const existing = slabMap.get(grp.rate) || { rate: grp.rate, taxableValue: 0, cgst: 0, sgst: 0, totalTax: 0 };
+                existing.taxableValue += grpTaxable;
+                existing.cgst += grpCgst;
+                existing.sgst += grpSgst;
+                existing.totalTax += grpTax;
+                slabMap.set(grp.rate, existing);
             }
         }
     }
 
-    return Array.from(slabMap.values()).sort((a, b) => a.rate - b.rate);
+    return Array.from(slabMap.values())
+        .map((s) => ({
+            rate: s.rate,
+            taxableValue: parseFloat(s.taxableValue.toFixed(2)),
+            cgst: parseFloat(s.cgst.toFixed(2)),
+            sgst: parseFloat(s.sgst.toFixed(2)),
+            totalTax: parseFloat(s.totalTax.toFixed(2)),
+        }))
+        .sort((a, b) => a.rate - b.rate);
 }
 
 function buildHsnSummary(items: SaleItemRow[]): HsnSummary[] {
     const hsnMap = new Map<string, HsnSummary>();
 
     for (const item of items) {
+        const amountWithTax = Number(item.total !== undefined ? item.total : (Number(item.sellingPrice || 0) * Number(item.quantity || 0) - Number(item.discount || 0)));
+        if (amountWithTax <= 0.009) continue;
+
         const hsn = item.variant?.product?.hsn || 'N/A';
-        // Tax-inclusive pricing: Extract tax from the after-discount amount
-        const amountWithTax = item.sellingPrice * item.quantity - item.discount;
-        const taxAmount = (amountWithTax * item.taxRate) / (100 + item.taxRate);
+        const taxAmount = Number(item.taxAmount !== undefined ? item.taxAmount : (amountWithTax * item.taxRate) / (100 + item.taxRate));
         const taxableValue = amountWithTax - taxAmount;
         const cgst = taxAmount / 2;
         const sgst = taxAmount / 2;
@@ -516,7 +577,9 @@ function compareBillNos(a: string, b: string): number {
 }
 
 function isReplacementSale(sale: SaleRow): boolean {
-    return sale.paymentMethod === 'EXCHANGE' || (sale.remarks || '').includes('Replacement sale for Invoice');
+    return sale.paymentMethod === 'EXCHANGE' ||
+           (sale.remarks || '').includes('Replacement sale for Invoice') ||
+           (sale.payments || []).some((p) => p.paymentMode.toUpperCase() === 'EXCHANGE_CREDIT');
 }
 
 function processSaleForReport(sale: SaleRow): SaleRow {
@@ -536,11 +599,19 @@ function processSaleForReport(sale: SaleRow): SaleRow {
     const exchangeCreditPayment = (sale.payments || []).find(
         (p) => p.paymentMode.toUpperCase() === 'EXCHANGE_CREDIT'
     );
-    const exchangeCreditFromPayment = exchangeCreditPayment ? Number(exchangeCreditPayment.amount || 0) : 0;
+    let exchangeCreditFromPayment = exchangeCreditPayment ? Number(exchangeCreditPayment.amount || 0) : 0;
+
+    // Fallback: If not in payment record, extract from remarks (e.g. "Credit: Rs.700.00")
+    if (exchangeCreditFromPayment <= 0 && sale.remarks) {
+        const creditMatch = sale.remarks.match(/Credit:\s*(?:Rs\.|₹)?\s*([\d.]+)/i);
+        if (creditMatch) {
+            exchangeCreditFromPayment = parseFloat(creditMatch[1]);
+        }
+    }
 
     // getPaymentBreakdown already excludes EXCHANGE_CREDIT, so this gives fresh money only
     const payBreakdown = getPaymentBreakdown(sale);
-    const freshPaid = payBreakdown.cash + payBreakdown.upi + payBreakdown.card;
+    let freshPaid = payBreakdown.cash + payBreakdown.upi + payBreakdown.card;
 
     // Determine the exchange credit amount:
     // - New bills: read from the EXCHANGE_CREDIT payment record
@@ -548,6 +619,11 @@ function processSaleForReport(sale: SaleRow): SaleRow {
     const exchangeCredit = exchangeCreditFromPayment > 0
         ? exchangeCreditFromPayment
         : Math.max(0, netSale.grandTotal - freshPaid);
+
+    // If exchangeCredit was determined and freshPaid was not properly netted in payment records (e.g. legacy bug):
+    if (exchangeCredit > 0 && freshPaid > netSale.grandTotal - exchangeCredit + 0.009) {
+        freshPaid = Math.max(0, netSale.grandTotal - exchangeCredit);
+    }
 
     if (freshPaid <= 0.009) {
         // Fully covered by exchange credit — zero revenue for reports
@@ -561,7 +637,10 @@ function processSaleForReport(sale: SaleRow): SaleRow {
             grandTotal: 0,
             items: (netSale.items || []).map((it) => ({
                 ...it,
+                sellingPrice: 0,
+                discount: 0,
                 taxAmount: 0,
+                total: 0,
             })),
             payments: [{ paymentMode: 'EXCHANGE_CREDIT', amount: exchangeCredit }],
         };
@@ -575,8 +654,11 @@ function processSaleForReport(sale: SaleRow): SaleRow {
     const netItems = (netSale.items || []).map((item) => {
         const itemTotal = parseFloat((item.total * ratio).toFixed(2));
         const itemTax = item.taxRate > 0 ? parseFloat(((itemTotal * item.taxRate) / (100 + item.taxRate)).toFixed(2)) : 0;
+        const itemSellingPrice = item.quantity > 0 ? parseFloat((itemTotal / item.quantity).toFixed(2)) : itemTotal;
         return {
             ...item,
+            sellingPrice: itemSellingPrice,
+            discount: parseFloat(((item.discount || 0) * ratio).toFixed(2)),
             taxAmount: itemTax,
             total: itemTotal,
         };
@@ -587,6 +669,15 @@ function processSaleForReport(sale: SaleRow): SaleRow {
     const netSgst = parseFloat((netTax / 2).toFixed(2));
     const netTaxable = parseFloat((netGrandTotal - netTax).toFixed(2));
 
+    // Ensure payments reflected match freshPaid
+    const effectivePayments = (freshPaid < (payBreakdown.cash + payBreakdown.upi + payBreakdown.card) - 0.009)
+        ? [{ paymentMode: (sale.paymentMethod || 'CASH').toUpperCase(), amount: freshPaid }]
+        : [
+            { paymentMode: 'CASH', amount: payBreakdown.cash },
+            { paymentMode: 'UPI', amount: payBreakdown.upi },
+            { paymentMode: 'CARD', amount: payBreakdown.card },
+        ].filter((p) => p.amount > 0);
+
     return {
         ...netSale,
         exchangeCredit: parseFloat(exchangeCredit.toFixed(2)),
@@ -596,11 +687,7 @@ function processSaleForReport(sale: SaleRow): SaleRow {
         taxAmount: netTax,
         grandTotal: netGrandTotal,
         items: netItems,
-        payments: [
-            { paymentMode: 'CASH', amount: payBreakdown.cash },
-            { paymentMode: 'UPI', amount: payBreakdown.upi },
-            { paymentMode: 'CARD', amount: payBreakdown.card },
-        ].filter((p) => p.amount > 0),
+        payments: effectivePayments,
     };
 }
 
@@ -1688,9 +1775,9 @@ export const Reports: React.FC = () => {
                                                     return displayedSales.map((sale) => {
                                                         const pb = getPaymentBreakdown(sale);
                                                         const payModes: string[] = [];
-                                                        if (pb.cash > 0) payModes.push(`Cash: ${formatIndianCurrency(pb.cash)}`);
-                                                        if (pb.upi > 0) payModes.push(`UPI: ${formatIndianCurrency(pb.upi)}`);
-                                                        if (pb.card > 0) payModes.push(`Card: ${formatIndianCurrency(pb.card)}`);
+                                                        if (pb.cash > 0) payModes.push('Cash');
+                                                        if (pb.upi > 0) payModes.push('UPI');
+                                                        if (pb.card > 0) payModes.push('Card');
                                                         if (payModes.length === 0 && (sale.exchangeCredit || 0) > 0) {
                                                             payModes.push('Exchange Credit');
                                                         }
@@ -1736,9 +1823,7 @@ export const Reports: React.FC = () => {
                                                     <td className="py-2 px-3 text-right">{formatIndianCurrency(a.cgst)}</td>
                                                     <td className="py-2 px-3 text-right">{formatIndianCurrency(a.sgst)}</td>
                                                     <td className="py-2 px-3 text-right">{formatIndianCurrency(a.grandTotal)}</td>
-                                                    <td className="py-2 px-3 text-center text-xs text-emerald-700 dark:text-emerald-400">
-                                                        {a.payment.upi > 0 ? `UPI: ${formatIndianCurrency(a.payment.upi)}` : ''}
-                                                    </td>
+                                                    <td className="py-2 px-3 text-center text-xs text-gray-400 font-semibold">-</td>
                                                 </tr>
                                             </tfoot>
                                         </table>
@@ -1784,9 +1869,12 @@ export const Reports: React.FC = () => {
                                                 {sortedReplacementSales.map((sale) => {
                                                     const pb = getPaymentBreakdown(sale);
                                                     const payModes: string[] = [];
-                                                    if (pb.cash > 0) payModes.push(`Cash: ${formatIndianCurrency(pb.cash)}`);
-                                                    if (pb.upi > 0) payModes.push(`UPI: ${formatIndianCurrency(pb.upi)}`);
-                                                    if (pb.card > 0) payModes.push(`Card: ${formatIndianCurrency(pb.card)}`);
+                                                    if (pb.cash > 0) payModes.push('Cash');
+                                                    if (pb.upi > 0) payModes.push('UPI');
+                                                    if (pb.card > 0) payModes.push('Card');
+                                                    if (payModes.length === 0 && (sale.exchangeCredit || 0) > 0) {
+                                                        payModes.push('Exchange Credit');
+                                                    }
 
                                                     return (
                                                         <tr key={sale.id} className="border-b dark:border-gray-700/50 hover:bg-amber-50/30 dark:hover:bg-amber-950/10">

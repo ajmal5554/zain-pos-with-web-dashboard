@@ -1,22 +1,45 @@
 import api from '@/lib/api';
 
+export interface InvoiceItem {
+    id?: string;
+    quantity: number;
+    mrp?: number;
+    sellingPrice: number;
+    discount?: number;
+    taxRate?: number;
+    total?: number;
+    product: {
+        name: string;
+    };
+}
+
+export interface InvoicePayment {
+    paymentMode: string;
+    amount: number;
+}
+
 export interface Invoice {
     id: string;
     billNo: string | number;
     total: number;
+    subtotal?: number;
+    discount?: number;
+    taxAmount?: number;
+    cgst?: number;
+    sgst?: number;
+    paymentMethod?: string;
+    paidAmount?: number;
+    changeAmount?: number;
+    status?: string;
+    cashierName?: string;
+    payments?: InvoicePayment[];
     createdAt: string;
     customer: {
         name: string;
         phone: string;
     };
     itemCount: number; // always present (from list query)
-    items: Array<{    // populated only on detail fetch (GET /invoices/:id)
-        quantity: number;
-        sellingPrice: number;
-        product: {
-            name: string;
-        };
-    }>;
+    items: InvoiceItem[]; // populated on detail fetch (GET /invoices/:id)
 }
 
 export interface InvoiceParams {

@@ -11,15 +11,8 @@ import {
   Card, 
   CardContent 
 } from '@/components/ui/card';
-import { 
-  Dialog, 
-  DialogContent, 
-  DialogDescription, 
-  DialogFooter, 
-  DialogHeader, 
-  DialogTitle 
-} from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
+import { ThermalReceiptModal } from '@/components/shared/ThermalReceiptModal';
 import { useDateFilter } from '@/contexts/DateFilterContext';
 import api from '@/lib/api';
 import { demoInvoices, getDemoInvoicesPage, isDemoModeEnabled } from '@/lib/demo';
@@ -373,73 +366,12 @@ export default function Sales() {
                 />
             </div>
 
-            <Dialog open={!!selectedInvoice} onOpenChange={(open) => !open && handleCloseModal()}>
-                <DialogContent className="sm:max-w-xl rounded-2xl">
-                    {selectedInvoice && (
-                        <>
-                            <DialogHeader>
-                                <div className="flex justify-between items-start mb-2">
-                                     <div className="h-10 w-10 justify-center rounded-xl border bg-muted flex items-center text-muted-foreground shadow-sm">
-                                         <Receipt className="h-5 w-5" />
-                                     </div>
-                                     <Badge variant="default" className="bg-emerald-500 hover:bg-emerald-600 font-normal">Paid</Badge>
-                                </div>
-                                <DialogTitle className="text-xl">Bill #{selectedInvoice.billNo}</DialogTitle>
-                                <DialogDescription>
-                                    Billed on {new Date(selectedInvoice.createdAt).toLocaleString('en-IN')}
-                                </DialogDescription>
-                            </DialogHeader>
-
-                            <div className="py-4 space-y-6">
-                                <div className="flex justify-between gap-4">
-                                    <div className="space-y-1">
-                                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Customer Details</p>
-                                        <p className="font-semibold text-slate-900 dark:text-slate-100">{selectedInvoice.customer.name}</p>
-                                        <p className="text-sm text-muted-foreground">{selectedInvoice.customer.phone}</p>
-                                    </div>
-                                    <div className="text-right space-y-1">
-                                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Total Amount</p>
-                                        <p className="text-2xl font-bold text-sky-600 dark:text-sky-400">{formatCurrency(selectedInvoice.total)}</p>
-                                    </div>
-                                </div>
-
-                                <div className="rounded-xl border p-4 space-y-4 max-h-[40vh] overflow-y-auto border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/20">
-                                    {modalLoading ? (
-                                        <div className="text-center text-muted-foreground py-8 animate-pulse text-sm">Loading sale details...</div>
-                                    ) : (
-                                        <>
-                                            {selectedInvoice.items?.map((item, idx) => (
-                                                <div key={idx} className="flex justify-between items-center pb-2.5 border-b last:border-0 last:pb-0 border-slate-100 dark:border-slate-800">
-                                                     <div>
-                                                         <p className="font-medium text-sm text-slate-800 dark:text-slate-200">{item.product.name}</p>
-                                                         <p className="text-xs text-muted-foreground mt-0.5">Quantity: {item.quantity}</p>
-                                                     </div>
-                                                     <div className="font-semibold text-sm text-slate-900 dark:text-slate-100">
-                                                         {formatCurrency(item.sellingPrice * item.quantity)}
-                                                     </div>
-                                                </div>
-                                            ))}
-                                            {(!selectedInvoice.items || selectedInvoice.items.length === 0) && (
-                                                <p className="text-center text-muted-foreground text-sm py-4">Custom Item / Generic POS Entry</p>
-                                            )}
-                                        </>
-                                    )}
-                                </div>
-                            </div>
-
-                            <DialogFooter className="flex-col sm:flex-row gap-2">
-                                <Button variant="outline" className="w-full sm:w-auto h-10 rounded-xl" onClick={() => setSelectedInvoice(null)}>
-                                    Close
-                                </Button>
-                                <Button className="w-full sm:w-auto h-10 rounded-xl font-semibold">
-                                    <Printer className="mr-2 h-4 w-4" />
-                                    Print Bill
-                                </Button>
-                            </DialogFooter>
-                        </>
-                    )}
-                </DialogContent>
-            </Dialog>
+            <ThermalReceiptModal
+                invoice={selectedInvoice}
+                open={!!selectedInvoice}
+                onClose={handleCloseModal}
+                loading={modalLoading}
+            />
         </div>
     );
 }

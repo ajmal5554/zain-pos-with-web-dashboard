@@ -118,17 +118,29 @@ export const Sales: React.FC = () => {
     const getEffectiveLineTotal = (item: any) => {
         const explicitTotal = Number(item?.total ?? 0);
         if (explicitTotal > 0) return explicitTotal;
-        return Number(item?.sellingPrice || 0) * Number(item?.quantity || 0);
+        return Number(item?.sellingPrice || 0) * Number(item?.quantity || 0) - Number(item?.discount || 0);
     };
 
-    const getEffectiveUnitAmount = (item: any) => {
+    const getEffectiveUnitAmount = (item: any, sale?: any) => {
         const baseQty = Number(item?.quantity || 0);
         if (baseQty <= 0) return Number(item?.sellingPrice || 0);
-        return getEffectiveLineTotal(item) / baseQty;
+        const lineTotal = getEffectiveLineTotal(item);
+
+        const currentSale = sale || selectedSaleForAction;
+        if (currentSale) {
+            const allItems = currentSale.items || [];
+            const sumRawLines = allItems.reduce((sum: number, it: any) => sum + getEffectiveLineTotal(it), 0);
+            const grandTotal = Number(currentSale.grandTotal || 0);
+            if (grandTotal > 0 && sumRawLines > grandTotal && sumRawLines > 0) {
+                const lineNetPaid = lineTotal * (grandTotal / sumRawLines);
+                return Math.round((lineNetPaid / baseQty + Number.EPSILON) * 100) / 100;
+            }
+        }
+        return Math.round((lineTotal / baseQty + Number.EPSILON) * 100) / 100;
     };
 
-    const getReturnValue = (item: any, qtyKey: 'returnQty' | 'refundQty') =>
-        getEffectiveUnitAmount(item) * Number(item?.[qtyKey] || 0);
+    const getReturnValue = (item: any, qtyKey: 'returnQty' | 'refundQty', sale?: any) =>
+        getEffectiveUnitAmount(item, sale) * Number(item?.[qtyKey] || 0);
 
     // New stats states for entire filtered range
     const [totalMatchedRevenue, setTotalMatchedRevenue] = useState(0);
@@ -226,7 +238,7 @@ export const Sales: React.FC = () => {
                 ];
             }
 
-            const [data, totalStats, totalCount] = await Promise.all([
+            const [data, totalStats, totalCount, exchangeCreditStats] = await Promise.all([
                 db.sales.findMany({
                     where,
                     include: {
@@ -248,7 +260,14 @@ export const Sales: React.FC = () => {
                 db.sales.aggregate({
                     where,
                     _count: { id: true }
-                })
+                }),
+                db.invoicePayments.aggregate({
+                    where: {
+                        paymentMode: 'EXCHANGE_CREDIT',
+                        sale: { ...where, status: { not: 'VOIDED' } }
+                    },
+                    _sum: { amount: true }
+                }).catch(() => ({ _sum: { amount: 0 } }))
             ]);
 
             const exchangeVariantIds = Array.from(new Set(
@@ -298,7 +317,11 @@ export const Sales: React.FC = () => {
                 }));
             }
 
-            setTotalMatchedRevenue(totalStats._sum.grandTotal || 0);
+            const grossRevenue = Number(totalStats._sum.grandTotal || 0);
+            const totalExchangeCredit = Number(exchangeCreditStats?._sum?.amount || 0);
+            const netFreshRevenue = Math.max(0, grossRevenue - totalExchangeCredit);
+
+            setTotalMatchedRevenue(netFreshRevenue);
             setTotalMatchedBills(totalStats._count.id || 0);
             setTotalRecords(totalCount._count.id || 0);
             setSales(enrichedSales);
@@ -459,7 +482,7 @@ export const Sales: React.FC = () => {
                 items: [...returns, ...news],
                 payments: [{
                     paymentMode: replacementPaymentMethod,
-                    amount: difference
+                    amount: Math.max(0, difference)
                 }]
             };
 
@@ -1094,7 +1117,16 @@ export const Sales: React.FC = () => {
                                                 </span>
                                             </td>
                                             <td className={`font-black text-gray-900 dark:text-gray-100 ${sale.status === 'VOIDED' ? 'line-through text-gray-400' : ''}`}>
-                                                {formatIndianCurrency(sale.grandTotal)}
+                                                {(() => {
+                                                    const isRepl = isReplacementSale(sale);
+                                                    const exchCreditPmt = (sale.payments || []).find((p: any) => p.paymentMode === 'EXCHANGE_CREDIT');
+                                                    const exchCreditAmt = exchCreditPmt ? Number(exchCreditPmt.amount || 0) : 0;
+                                                    if (isRepl && exchCreditAmt > 0) {
+                                                        const freshPaid = Math.max(0, Number(sale.grandTotal || 0) - exchCreditAmt);
+                                                        return formatIndianCurrency(freshPaid);
+                                                    }
+                                                    return formatIndianCurrency(sale.grandTotal);
+                                                })()}
                                             </td>
                                             <td>
                                                 {(() => {
@@ -1193,8 +1225,8 @@ export const Sales: React.FC = () => {
                                                                 : (sale.exchanges || []).flatMap((ex: any) =>
                                                                     (ex.items || []).filter((ei: any) => ei.returnedItemId).map((ei: any) => {
                                                                         const qty = ei.returnedQty || 1;
-                                                                        // Use enriched sellingPrice first, then fall back to priceDiff
-                                                                        const unitPrice = ei.returnedSellingPrice || (ei.priceDiff != null ? Math.abs(Number(ei.priceDiff)) / qty : 0);
+                                                                        // Prioritize recorded priceDiff (actual credit given), then fall back to sellingPrice
+                                                                        const unitPrice = (ei.priceDiff != null && Number(ei.priceDiff) !== 0 ? Math.abs(Number(ei.priceDiff)) / qty : 0) || ei.returnedSellingPrice || 0;
                                                                         return {
                                                                             name: ei.returnedItemName || 'Returned Item',
                                                                             variant: ei.returnedVariantInfo || '',
@@ -1672,7 +1704,9 @@ export const Sales: React.FC = () => {
                                 </div>
                                 <div className="flex items-center gap-4">
                                     <div className="text-right">
-                                        <div className="text-xs font-bold text-gray-400">Price: {formatIndianCurrency(item.sellingPrice)}</div>
+                                        <div className="text-xs font-bold text-gray-500">
+                                            Refund per unit: <span className="text-gray-800 dark:text-gray-200 font-bold">{formatIndianCurrency(getEffectiveUnitAmount(item, selectedSaleForAction))}</span>
+                                        </div>
                                         <div className="text-[10px] text-gray-500">Max Qty: {item.quantity}</div>
                                     </div>
                                     <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-900 p-1 rounded-lg border border-gray-200 dark:border-gray-700">
@@ -1752,19 +1786,32 @@ export const Sales: React.FC = () => {
                                 <Undo2 className="w-3 h-3" /> {isSingleReturnItem ? 'Step 1: Returned Item (Auto-Selected)' : 'Step 1: Returned Items'}
                             </h4>
                             <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-                                {returnItems.map((item, idx) => (
-                                    <div key={idx} className="p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:border-orange-300">
-                                        <div className="font-bold text-sm truncate">{item.productName}</div>
-                                        <div className="flex justify-between items-center mt-2">
-                                            <span className="text-[10px] text-gray-500 font-bold uppercase tracking-tight">{item.variantInfo}</span>
-                                            <div className="flex items-center gap-2 bg-gray-50 p-1 rounded-md border border-gray-100">
-                                                <button onClick={() => setReturnItems(prev => prev.map((it, i) => i === idx ? { ...it, returnQty: Math.max(0, it.returnQty - 1) } : it))} className="p-0.5 hover:bg-white rounded"><Minus className="w-3 h-3" /></button>
-                                                <span className="w-4 text-center text-xs font-bold">{item.returnQty}</span>
-                                                <button onClick={() => setReturnItems(prev => prev.map((it, i) => i === idx ? { ...it, returnQty: Math.min(it.quantity, it.returnQty + 1) } : it))} className="p-0.5 hover:bg-white rounded"><Plus className="w-3 h-3" /></button>
+                                {returnItems.map((item, idx) => {
+                                    const netUnit = getEffectiveUnitAmount(item, selectedSaleForAction);
+                                    const originalRate = Number(item.sellingPrice || item.mrp || 0);
+                                    const hasDiscount = originalRate > netUnit;
+                                    return (
+                                        <div key={idx} className="p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:border-orange-300">
+                                            <div className="font-bold text-sm truncate">{item.productName}</div>
+                                            <div className="text-[11px] text-gray-500 mt-0.5">
+                                                Credit per unit: <span className="font-bold text-gray-800 dark:text-gray-200">{formatIndianCurrency(netUnit)}</span>
+                                                {hasDiscount && (
+                                                    <span className="text-[10px] text-emerald-600 font-medium ml-1">
+                                                        (Net paid after {formatIndianCurrency(originalRate - netUnit)} disc)
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div className="flex justify-between items-center mt-2">
+                                                <span className="text-[10px] text-gray-500 font-bold uppercase tracking-tight">{item.variantInfo}</span>
+                                                <div className="flex items-center gap-2 bg-gray-50 p-1 rounded-md border border-gray-100">
+                                                    <button onClick={() => setReturnItems(prev => prev.map((it, i) => i === idx ? { ...it, returnQty: Math.max(0, it.returnQty - 1) } : it))} className="p-0.5 hover:bg-white rounded"><Minus className="w-3 h-3" /></button>
+                                                    <span className="w-4 text-center text-xs font-bold">{item.returnQty}</span>
+                                                    <button onClick={() => setReturnItems(prev => prev.map((it, i) => i === idx ? { ...it, returnQty: Math.min(it.quantity, it.returnQty + 1) } : it))} className="p-0.5 hover:bg-white rounded"><Plus className="w-3 h-3" /></button>
+                                                </div>
                                             </div>
                                         </div>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         </div>
 

@@ -154,14 +154,14 @@ export function generateReceiptHtml(
         break;
       case 'bill_info':
         htmlContent += `${blockOpen}
-          <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 11px; margin-bottom: 5px; ${styleStr}">
-            <div style="text-align: left;">
-              <div>Bill No: ${data.billNo}${data.isReplacementBill ? ' <span style="font-size: 9px; border: 1px solid #000; padding: 0 3px; margin-left: 4px;">REPLACEMENT BILL</span>' : ''}</div>
+          <div style="font-weight: bold; font-size: 11px; margin-bottom: 5px; ${styleStr}">
+            <div style="display: flex; justify-content: space-between; align-items: baseline;">
+              <div>Bill No: ${data.billNo}${data.isReplacementBill ? ' (REPLACEMENT)' : ''}</div>
               <div>Date: ${format(new Date(data.date), 'dd/MM/yyyy')}</div>
-              ${data.isReplacementBill && data.originalBillNo ? `<div style="font-size: 10px; margin-top: 2px;">Ref Orig Bill: #${data.originalBillNo}</div>` : ''}
             </div>
-            <div style="text-align: right;">
+            <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 2px;">
               <div>Customer: ${data.customerName || 'Walk-in Customer'}</div>
+              ${data.isReplacementBill && data.originalBillNo ? `<div>Ref Orig Bill: #${data.originalBillNo}</div>` : ''}
             </div>
           </div>
         ${blockClose}`;

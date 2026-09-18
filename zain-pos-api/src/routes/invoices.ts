@@ -190,7 +190,9 @@ router.get('/:id', async (req, res) => {
         const sale = await prisma.sale.findUnique({
             where: { id },
             include: {
-                items: true
+                items: true,
+                user: { select: { name: true } },
+                payments: true
             }
         });
 
@@ -202,14 +204,30 @@ router.get('/:id', async (req, res) => {
             id: sale.id,
             billNo: sale.billNo,
             total: sale.grandTotal,
+            subtotal: sale.subtotal,
+            discount: sale.discount,
+            taxAmount: sale.taxAmount,
+            cgst: sale.cgst,
+            sgst: sale.sgst,
+            paymentMethod: sale.paymentMethod,
+            paidAmount: sale.paidAmount,
+            changeAmount: sale.changeAmount,
+            status: sale.status,
+            cashierName: sale.user?.name || 'Staff',
+            payments: sale.payments?.map(p => ({ paymentMode: p.paymentMode, amount: p.amount })),
             createdAt: sale.actualSaleDate || sale.createdAt,
             customer: {
                 name: sale.customerName || 'Walk-in Customer',
                 phone: sale.customerPhone || 'N/A'
             },
             items: sale.items.map(i => ({
+                id: i.id,
                 quantity: i.quantity,
+                mrp: i.mrp,
                 sellingPrice: i.sellingPrice,
+                discount: i.discount,
+                taxRate: i.taxRate,
+                total: i.total,
                 product: {
                     name: i.productName + (i.variantInfo ? ` (${i.variantInfo})` : '')
                 }

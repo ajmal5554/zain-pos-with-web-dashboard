@@ -389,12 +389,12 @@ export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ printerSetting
 
             case 'bill_info':
                 return (
-                    <div className="flex justify-between font-bold text-[10px]">
-                        <div className="text-left">
+                    <div className="font-bold text-[10px]">
+                        <div className="flex justify-between">
                             <div>Bill No: 1172</div>
                             <div>Date: {new Date().toLocaleDateString('en-GB')}</div>
                         </div>
-                        <div className="text-right">
+                        <div className="flex justify-between mt-0.5">
                             <div>Customer: Walk-in Customer</div>
                         </div>
                     </div>

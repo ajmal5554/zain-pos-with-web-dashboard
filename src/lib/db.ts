@@ -82,6 +82,11 @@ class DatabaseService {
         aggregate: (args: any) => this.execute('saleItem', 'aggregate', args),
     };
 
+    invoicePayments = {
+        findMany: (args?: any) => this.execute('invoicePayment', 'findMany', args),
+        aggregate: (args: any) => this.execute('invoicePayment', 'aggregate', args),
+    };
+
     auditLogs = {
         create: (args: any) => this.execute('auditLog', 'create', args),
         findMany: (args?: any) => this.execute('auditLog', 'findMany', args),

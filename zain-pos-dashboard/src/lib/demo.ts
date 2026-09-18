@@ -102,24 +102,44 @@ export const demoInvoices: Invoice[] = [
         id: 'inv-1',
         billNo: 'A-1021',
         total: 2400,
+        subtotal: 2400,
+        discount: 0,
+        taxAmount: 114.28,
+        cgst: 57.14,
+        sgst: 57.14,
+        paymentMethod: 'UPI',
+        paidAmount: 2400,
+        changeAmount: 0,
+        status: 'COMPLETED',
+        cashierName: 'Ajmal',
         createdAt: new Date().toISOString(),
         customer: { name: 'Arun Menon', phone: '9876543210' },
         itemCount: 2,
         items: [
-            { quantity: 1, sellingPrice: 1500, product: { name: 'Premium Linen Shirt' } },
-            { quantity: 1, sellingPrice: 900, product: { name: 'Leather Belt' } }
+            { quantity: 1, sellingPrice: 1500, mrp: 1500, discount: 0, taxRate: 5, total: 1500, product: { name: 'Premium Linen Shirt (L)' } },
+            { quantity: 1, sellingPrice: 900, mrp: 999, discount: 99, taxRate: 5, total: 900, product: { name: 'Pure Leather Belt' } }
         ]
     },
     {
         id: 'inv-2',
         billNo: 'A-1022',
         total: 1980,
+        subtotal: 1980,
+        discount: 0,
+        taxAmount: 94.28,
+        cgst: 47.14,
+        sgst: 47.14,
+        paymentMethod: 'CASH',
+        paidAmount: 2000,
+        changeAmount: 20,
+        status: 'COMPLETED',
+        cashierName: 'Ajmal',
         createdAt: new Date(Date.now() - 3600_000).toISOString(),
         customer: { name: 'Rahul Iyer', phone: '9988776655' },
         itemCount: 2,
         items: [
-            { quantity: 1, sellingPrice: 800, product: { name: 'Casual Polo' } },
-            { quantity: 1, sellingPrice: 1180, product: { name: 'Slim Fit Trousers' } }
+            { quantity: 1, sellingPrice: 800, mrp: 899, discount: 99, taxRate: 5, total: 800, product: { name: 'Casual Cotton Polo (M)' } },
+            { quantity: 1, sellingPrice: 1180, mrp: 1299, discount: 119, taxRate: 5, total: 1180, product: { name: 'Slim Fit Formal Trousers' } }
         ]
     }
 ];

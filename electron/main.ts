@@ -1596,6 +1596,8 @@ createSecureIpcHandler(
             'sale.groupBy': PermissionMiddleware.viewReports,
             'saleItem.findMany': PermissionMiddleware.authenticated,
             'saleItem.aggregate': PermissionMiddleware.viewReports,
+            'invoicePayment.findMany': PermissionMiddleware.authenticated,
+            'invoicePayment.aggregate': PermissionMiddleware.viewReports,
 
             // Audit logs (admin only)
             'auditLog.findMany': PermissionMiddleware.adminOnly,
@@ -2384,6 +2386,31 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
     return result;
 });
 
+// Helper to compute actual net paid unit price for an item, accounting for discounts
+function getSaleItemNetUnitPrice(saleItem: any, sale: any): number {
+    const qty = Number(saleItem?.quantity || 1);
+    if (qty <= 0) return 0;
+
+    let lineTotal = Number(saleItem?.total || 0);
+    if (lineTotal <= 0) {
+        lineTotal = Number(saleItem?.sellingPrice || 0) * qty - Number(saleItem?.discount || 0);
+    }
+
+    const allItems = sale?.items || [];
+    const sumRawLines = allItems.reduce((sum: number, it: any) => {
+        const raw = Number(it.total || 0);
+        return sum + (raw > 0 ? raw : (Number(it.sellingPrice || 0) * Number(it.quantity || 1) - Number(it.discount || 0)));
+    }, 0);
+
+    const grandTotal = Number(sale?.grandTotal || 0);
+    if (grandTotal > 0 && sumRawLines > grandTotal && sumRawLines > 0) {
+        const lineNetPaid = lineTotal * (grandTotal / sumRawLines);
+        return roundCurrency(lineNetPaid / qty);
+    }
+
+    return roundCurrency(lineTotal / qty);
+}
+
 // Professional Exchange Handler
 createSecureIpcHandler(
     'sales:exchange',
@@ -2432,9 +2459,7 @@ createSecureIpcHandler(
                 if (!saleItem) {
                     throw new Error(`Returned item not found in original invoice: ${item.returnedId}`);
                 }
-                const lineUnitValue = saleItem.quantity > 0
-                    ? Number(saleItem.total || 0) / Number(saleItem.quantity || 1)
-                    : 0;
+                const lineUnitValue = getSaleItemNetUnitPrice(saleItem, originalSale);
                 return sum + (lineUnitValue * Number(item.returnedQty || 0));
             }, 0);
 
@@ -2663,7 +2688,7 @@ createSecureIpcHandler(
             // 7. Log Activity
             const structuredReturnedItems = returnedItems.map((item: any) => {
                 const saleItem = originalSale.items.find((si: any) => si.variantId === item.returnedId);
-                const unitPrice = saleItem && saleItem.quantity > 0 ? (saleItem.total / saleItem.quantity) : 0;
+                const unitPrice = saleItem ? getSaleItemNetUnitPrice(saleItem, originalSale) : 0;
                 const total = roundCurrency(unitPrice * (item.returnedQty || 1));
                 return {
                     name: saleItem?.productName || 'Item',
@@ -2978,9 +3003,7 @@ createSecureIpcHandler(
                     throw new Error(`Refund qty exceeds refundable qty for ${saleItem.productName}`);
                 }
 
-                const unitAmount = saleItem.quantity > 0
-                    ? Number(saleItem.total || 0) / Number(saleItem.quantity || 1)
-                    : 0;
+                const unitAmount = getSaleItemNetUnitPrice(saleItem, originalSale);
                 const expectedAmount = roundCurrency(unitAmount * item.qty);
                 if (roundCurrency(item.amount) !== expectedAmount) {
                     throw new Error(`Refund amount mismatch for ${saleItem.productName}`);
