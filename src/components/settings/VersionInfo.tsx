@@ -19,7 +19,14 @@ interface Release {
 
 const RELEASES: Release[] = [
     {
-        version: '3.0.63', title: 'Single-Item Product Management & MRP/Price Column', date: '29 October 2026', isCurrent: true,
+        version: '3.0.64', title: 'Faster Product Catalogue Loading', date: '29 October 2026', isCurrent: true,
+        changes: [
+            { type: 'improvement', title: 'Lightweight Product List Data', description: 'The Products list now loads the first barcode and garment details with database-aggregated stock and preparation summaries instead of transferring every variant; opening Edit still loads the full product details.' },
+            { type: 'improvement', title: 'Concurrent Category Load and Debounced Search', description: 'Categories load alongside the product list, catalogue search waits briefly for typing to stop, and existing results stay visible while a refresh runs.' },
+        ],
+    },
+    {
+        version: '3.0.63', title: 'Single-Item Product Management & MRP/Price Column', date: '29 October 2026',
         changes: [
             { type: 'feature', title: 'Dedicated MRP / Selling Price Column', description: 'Added a dedicated MRP / Price column in the products table showing the selling price in bold and MRP with strikethrough when discounted, replacing the redundant "Status & Details" column.' },
             { type: 'improvement', title: 'Streamlined Single-Item Architecture', description: 'Removed nested variant options, multi-variant cards, and variant buttons from the product page and modal, unifying product creation and editing into a clean single-item workflow matching retail operations.' },
