@@ -64,6 +64,7 @@ class DatabaseService {
     customers = {
         findUnique: (args: any) => this.execute('customer', 'findUnique', args),
         findMany: (args?: any) => this.execute('customer', 'findMany', args),
+        count: (args?: any) => this.execute('customer', 'count', args),
         create: (args: any) => this.execute('customer', 'create', args),
         update: (args: any) => this.execute('customer', 'update', args),
         delete: (args: any) => this.execute('customer', 'delete', args),

@@ -8,28 +8,31 @@ import {
     FileText,
     Settings,
     LogOut,
-    Moon,
-    Sun,
     Menu,
     X,
     Activity,
     UserCog,
     Shield,
-    BrainCircuit,
+    TrendingUp,
     Receipt,
+    Wallet,
+    Calendar,
+    Shirt,
+    Truck,
+    Banknote,
+    BarChart3,
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 import { NetworkStatus } from '../NetworkStatus';
 import appIcon from '/icon.png';
 
-type PermissionKey = 'permViewReports' | 'permViewInsights' | 'permManageProducts' | 'permViewSales' | 'permViewGstReports' | 'permManageUsers' | 'permEditSettings';
+type PermissionKey = 'permViewReports' | 'permViewInsights' | 'permManageProducts' | 'permViewSales' | 'permViewGstReports' | 'permManageUsers' | 'permEditSettings' | 'permManageCashDrawer' | 'permManageInventory';
 type ShopBrand = {
     shopName: string;
     logo: string;
 };
 
 export const MainLayout: React.FC = () => {
-    const [darkMode, setDarkMode] = React.useState(false);
     const [sidebarOpen, setSidebarOpen] = React.useState(true);
     const [shopBrand, setShopBrand] = React.useState<ShopBrand>({
         shopName: 'Zain POS',
@@ -75,6 +78,7 @@ export const MainLayout: React.FC = () => {
                             permBulkUpdate: true,
                             permBackDateSale: true,
                             permViewInsights: true,
+                            permManageCashDrawer: true,
                             maxDiscount: true,
                         }
                     },
@@ -113,6 +117,7 @@ export const MainLayout: React.FC = () => {
                         permBulkUpdate: user.permBulkUpdate,
                         permBackDateSale: user.permBackDateSale,
                         permViewInsights: user.permViewInsights,
+                        permManageCashDrawer: user.permManageCashDrawer,
                         maxDiscount: user.maxDiscount
                     });
 
@@ -137,6 +142,7 @@ export const MainLayout: React.FC = () => {
                         permBulkUpdate: freshUser.permBulkUpdate,
                         permBackDateSale: freshUser.permBackDateSale,
                         permViewInsights: freshUser.permViewInsights,
+                        permManageCashDrawer: freshUser.permManageCashDrawer,
                         maxDiscount: freshUser.maxDiscount
                     });
 
@@ -165,12 +171,8 @@ export const MainLayout: React.FC = () => {
     }, [user?.id]);
 
     React.useEffect(() => {
-        if (darkMode) {
-            document.documentElement.classList.add('dark');
-        } else {
-            document.documentElement.classList.remove('dark');
-        }
-    }, [darkMode]);
+        document.documentElement.classList.remove('dark');
+    }, []);
 
     React.useEffect(() => {
         const loadShopBrand = async () => {
@@ -218,10 +220,15 @@ export const MainLayout: React.FC = () => {
     }> = [
         { path: '/', icon: LayoutDashboard, label: 'Dashboard', adminOnly: true, requiredPerm: 'permViewReports' },
         { path: '/pos', icon: ShoppingCart, label: 'Point of Sale' },
-        { path: '/forecasting', icon: BrainCircuit, label: 'AI Forecaster', adminOnly: true, requiredPerm: 'permViewInsights' },
-        { path: '/products', icon: Package, label: 'Products', adminOnly: true, requiredPerm: 'permManageProducts' },
+        { path: '/forecasting', icon: TrendingUp, label: 'Sales Forecasting', adminOnly: true, requiredPerm: 'permViewInsights' },
+        { path: '/products', icon: Shirt, label: 'Products', adminOnly: true, requiredPerm: 'permManageProducts' },
+        { path: '/purchases', icon: Truck, label: 'Purchases', adminOnly: true, requiredPerm: 'permManageInventory' },
+        { path: '/stock', icon: Package, label: 'Stock', adminOnly: true, requiredPerm: 'permManageInventory' },
         { path: '/customers', icon: Users, label: 'Customers' },
         { path: '/sales', icon: Receipt, label: 'Sales History', adminOnly: true, requiredPerm: 'permViewSales' },
+        { path: '/profit', icon: BarChart3, label: 'Profit & Analysis', adminOnly: true },
+        { path: '/expenses', icon: Banknote, label: 'Expenses', adminOnly: true, requiredPerm: 'permManageCashDrawer' },
+        { path: '/cash-drawer', icon: Wallet, label: 'Cash Register', adminOnly: true, requiredPerm: 'permManageCashDrawer' },
         { path: '/reports', icon: FileText, label: 'GST Reports', adminOnly: true, requiredPerm: 'permViewGstReports' },
         { path: '/users', icon: UserCog, label: 'User Management', adminOnly: true, requiredPerm: 'permManageUsers' },
         { path: '/permissions', icon: Shield, label: 'User Permissions', adminOnly: true, requiredPerm: 'permManageUsers' },
@@ -239,12 +246,17 @@ export const MainLayout: React.FC = () => {
         <div className="flex h-full bg-gray-50 dark:bg-dark-bg">
             {/* Sidebar */}
             <aside
-                className={`${sidebarOpen ? 'w-52' : 'w-16'
-                    } bg-white dark:bg-dark-card border-r border-gray-200 dark:border-dark-border transition-[width] duration-300 ease-in-out overflow-hidden flex flex-col`}
+                className={`${
+                    sidebarOpen ? 'w-52' : 'w-16'
+                } bg-white dark:bg-dark-card border-r border-gray-200 dark:border-dark-border transition-[width] duration-300 ease-in-out overflow-hidden flex flex-col flex-shrink-0 will-change-[width]`}
             >
-                {/* Logo */}
-                <div className={`h-16 flex items-center border-b border-gray-200 dark:border-dark-border ${sidebarOpen ? 'justify-between px-3' : 'justify-center px-0'}`}>
-                    <div className={`overflow-hidden transition-all duration-200 ease-in-out ${sidebarOpen ? 'max-w-[172px] opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'}`}>
+                {/* Logo & Toggle */}
+                <div className={`h-16 flex items-center ${sidebarOpen ? 'justify-between px-3' : 'justify-center px-2'} border-b border-gray-200 dark:border-dark-border`}>
+                    <div
+                        className={`flex items-center overflow-hidden transition-all duration-300 ease-in-out ${
+                            sidebarOpen ? 'max-w-[140px] opacity-100' : 'max-w-0 opacity-0 pointer-events-none'
+                        }`}
+                    >
                         <div className="flex items-center gap-2.5 whitespace-nowrap">
                             <img
                                 src={appIcon}
@@ -258,14 +270,15 @@ export const MainLayout: React.FC = () => {
                     </div>
                     <button
                         onClick={() => setSidebarOpen(!sidebarOpen)}
-                        className={`${sidebarOpen ? 'p-2' : 'h-10 w-10 flex items-center justify-center mx-auto'} hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg`}
+                        className="w-10 h-10 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg flex-shrink-0 transition-colors duration-200"
+                        title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
                     >
-                        {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+                        {sidebarOpen ? <X className="w-5 h-5 text-gray-600 dark:text-gray-300" /> : <Menu className="w-5 h-5 text-gray-600 dark:text-gray-300" />}
                     </button>
                 </div>
 
                 {/* Navigation */}
-                <nav className={`flex-1 space-y-1 overflow-y-auto ${sidebarOpen ? 'p-3' : 'px-0 py-3'}`}>
+                <nav className={`flex-1 space-y-1 overflow-y-auto ${!sidebarOpen ? 'no-scrollbar px-2.5' : 'px-3'} pt-3 pb-8`}>
                     {filteredMenuItems.map((item) => {
                         const Icon = item.icon;
                         const isActive = location.pathname === item.path;
@@ -274,11 +287,19 @@ export const MainLayout: React.FC = () => {
                             <Link
                                 key={item.path}
                                 to={item.path}
-                                className={`${isActive ? 'sidebar-link-active' : 'sidebar-link'} ${sidebarOpen ? '' : 'mx-auto h-10 w-10 justify-center gap-0 px-0'}`}
+                                className={`${isActive ? 'sidebar-link-active' : 'sidebar-link'} ${
+                                    !sidebarOpen ? 'justify-center !px-0' : ''
+                                }`}
                                 title={!sidebarOpen ? item.label : ''}
                             >
                                 <Icon className="w-5 h-5 flex-shrink-0" />
-                                <span className={`overflow-hidden whitespace-nowrap transition-all duration-200 ease-in-out ${sidebarOpen ? 'max-w-[140px] opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'}`}>
+                                <span
+                                    className={`whitespace-nowrap overflow-hidden transition-all duration-300 ease-in-out ${
+                                        sidebarOpen
+                                            ? 'max-w-[140px] opacity-100 ml-3'
+                                            : 'max-w-0 opacity-0 ml-0 pointer-events-none'
+                                    }`}
+                                >
                                     {item.label}
                                 </span>
                             </Link>
@@ -287,24 +308,36 @@ export const MainLayout: React.FC = () => {
                 </nav>
 
                 {/* User info */}
-                <div className={`border-t border-gray-200 dark:border-dark-border ${sidebarOpen ? 'p-4' : 'px-0 py-4 flex flex-col items-center'}`}>
-                    <div className={`overflow-hidden transition-all duration-200 ease-in-out ${sidebarOpen ? 'max-h-16 opacity-100 mb-3' : 'max-h-0 opacity-0 mb-0'}`}>
-                        <div className="pl-3">
-                            <p className="text-sm font-semibold text-gray-900 dark:text-white">
+                <div className={`border-t border-gray-200 dark:border-dark-border ${!sidebarOpen ? 'p-2.5' : 'p-3'}`}>
+                    <div
+                        className={`overflow-hidden transition-all duration-300 ease-in-out ${
+                            sidebarOpen ? 'max-h-16 opacity-100 mb-2' : 'max-h-0 opacity-0 mb-0 pointer-events-none'
+                        }`}
+                    >
+                        <div className="px-2.5 py-1 whitespace-nowrap">
+                            <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
                                 {user?.name}
                             </p>
-                            <p className="text-xs text-gray-600 dark:text-gray-400">
+                            <p className="text-xs text-gray-600 dark:text-gray-400 truncate">
                                 {user?.role}
                             </p>
                         </div>
                     </div>
                     <button
                         onClick={handleLogout}
-                        className={`sidebar-link text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 ${sidebarOpen ? 'w-full' : 'mx-auto h-10 w-10 justify-center gap-0 px-0'}`}
+                        className={`w-full h-10 flex items-center ${
+                            !sidebarOpen ? 'justify-center !px-0' : 'px-2.5'
+                        } rounded-xl text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors duration-200`}
                         title={!sidebarOpen ? 'Logout' : ''}
                     >
                         <LogOut className="w-5 h-5 flex-shrink-0" />
-                        <span className={`overflow-hidden whitespace-nowrap transition-all duration-200 ease-in-out ${sidebarOpen ? 'max-w-[140px] opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'}`}>
+                        <span
+                            className={`whitespace-nowrap overflow-hidden transition-all duration-300 ease-in-out ${
+                                sidebarOpen
+                                    ? 'max-w-[140px] opacity-100 ml-3'
+                                    : 'max-w-0 opacity-0 ml-0 pointer-events-none'
+                            }`}
+                        >
                             Logout
                         </span>
                     </button>
@@ -315,36 +348,42 @@ export const MainLayout: React.FC = () => {
             <div className="flex-1 flex flex-col overflow-hidden">
                 {/* Header */}
                 <header className="h-16 bg-white dark:bg-dark-card border-b border-gray-200 dark:border-dark-border flex items-center justify-between px-6">
-                    <div>
+                    <div className="flex items-center gap-3">
                         <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
                             {menuItems.find((item) => item.path === location.pathname)?.label ||
                                 'Dashboard'}
                         </h2>
+                        {location.pathname === '/cash-drawer' && (
+                            <span className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-medium text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-2.5 py-1 rounded-lg border border-gray-200 dark:border-gray-700">
+                                <Calendar className="w-3.5 h-3.5 text-indigo-500" />
+                                {new Date().toLocaleDateString('en-IN', {
+                                    weekday: 'short',
+                                    day: '2-digit',
+                                    month: 'short',
+                                    year: 'numeric',
+                                })}
+                            </span>
+                        )}
                     </div>
 
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-3">
                         {/* Network Status Indicator */}
                         <NetworkStatus />
-
-                        <button
-                            onClick={() => setDarkMode(!darkMode)}
-                            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
-                            title={darkMode ? 'Light mode' : 'Dark mode'}
-                        >
-                            {darkMode ? (
-                                <Sun className="w-5 h-5" />
-                            ) : (
-                                <Moon className="w-5 h-5" />
-                            )}
-                        </button>
                     </div>
                 </header>
 
-                {/* Page content — POS gets zero padding and hidden overflow (manages its own layout) */}
-                <main className={`flex-1 ${location.pathname === '/pos' ? 'overflow-hidden p-0' : 'overflow-y-auto p-6'}`}>
+                {/* Page content */}
+                <main className={`flex-1 ${
+                    location.pathname === '/pos'
+                        ? 'overflow-hidden p-0'
+                        : 'overflow-y-auto p-6'
+                }`}>
                     <Outlet />
                 </main>
             </div>
         </div>
     );
 };
+
+
+

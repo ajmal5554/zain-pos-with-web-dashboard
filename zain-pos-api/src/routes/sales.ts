@@ -142,7 +142,7 @@ router.get('/daily', async (req, res) => {
 
         sales.forEach(sale => {
             const effectiveDate = sale.actualSaleDate ?? sale.createdAt;
-            const date = effectiveDate.toISOString().split('T')[0];
+            const date = new Date(effectiveDate.getTime() + 330 * 60 * 1000).toISOString().split('T')[0];
             if (!dailySales[date]) {
                 dailySales[date] = { date, sales: 0, orders: 0 };
             }
@@ -151,7 +151,7 @@ router.get('/daily', async (req, res) => {
         });
 
         // Fill gaps if needed (optional, keeping simple for now)
-        res.json(Object.values(dailySales));
+        res.json(Object.values(dailySales).sort((a, b) => a.date.localeCompare(b.date)));
     } catch (error) {
         console.error('Daily sales error:', error);
         res.status(500).json({ error: 'Failed to fetch daily sales' });

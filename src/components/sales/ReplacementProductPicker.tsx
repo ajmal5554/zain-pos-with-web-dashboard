@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Search, X, Check, Barcode, Package, ChevronDown } from 'lucide-react';
 import { formatIndianCurrency } from '../../lib/format';
+import { showToast } from '../ui/Toast';
+import { formatVariantDescription } from '../../lib/catalogueDescription';
 
 export interface ProductVariantItem {
     id: string;
@@ -10,6 +12,7 @@ export interface ProductVariantItem {
     sellingPrice: number;
     size?: string;
     color?: string;
+    isPrepared?: boolean;
     product: {
         name: string;
         category?: string;
@@ -103,7 +106,8 @@ export const ReplacementProductPicker: React.FC<ReplacementProductPickerProps> =
                 continue;
             }
 
-            const combinedText = `${name} ${size} ${color} ${barcode} ${sku} ${price}`;
+            const description = formatVariantDescription(p.product?.name || '', p).toLowerCase();
+            const combinedText = `${description} ${name} ${size} ${color} ${barcode} ${sku} ${price}`;
             const matchesAll = queryTokens.every(token => combinedText.includes(token));
 
             if (matchesAll) {
@@ -172,6 +176,10 @@ export const ReplacementProductPicker: React.FC<ReplacementProductPickerProps> =
     }, []);
 
     const handleSelect = useCallback((variant: ProductVariantItem) => {
+        if (variant.isPrepared) {
+            showToast('Stock conversion pending for this item. Cannot be sold until converted.', 'warning');
+            return;
+        }
         onSelectProduct(variant);
         setSearchQuery('');
         setIsOpen(false);
@@ -352,7 +360,7 @@ export const ReplacementProductPicker: React.FC<ReplacementProductPickerProps> =
                                     const isHighlighted = idx === highlightedIndex;
                                     const addedQty = existingItemQuantities[p.id] || 0;
                                     const isAlreadyAdded = addedQty > 0;
-                                    const variantDetails = [p.size, p.color].filter(Boolean).join(' • ');
+                                    const variantDetails = formatVariantDescription(p.product?.name || '', p);
 
                                     return (
                                         <div
@@ -370,9 +378,14 @@ export const ReplacementProductPicker: React.FC<ReplacementProductPickerProps> =
                                         >
                                             <div className="min-w-0 flex-1 pr-3">
                                                 <div className="flex items-center gap-2 flex-wrap">
-                                                    <span className="font-bold text-xs text-gray-900 dark:text-white truncate">
-                                                        {p.product?.name}
+                                                    <span className="font-bold text-xs text-gray-900 dark:text-white truncate" title={variantDetails}>
+                                                        {variantDetails}
                                                     </span>
+                                                    {p.isPrepared && (
+                                                        <span className="inline-flex items-center px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300">
+                                                            Conversion Pending
+                                                        </span>
+                                                    )}
                                                     {isAlreadyAdded && (
                                                         <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300">
                                                             <Check className="w-2.5 h-2.5" /> Added (x{addedQty})
@@ -380,11 +393,6 @@ export const ReplacementProductPicker: React.FC<ReplacementProductPickerProps> =
                                                     )}
                                                 </div>
                                                 <div className="flex items-center flex-wrap gap-1.5 mt-1">
-                                                    {variantDetails && (
-                                                        <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
-                                                            {variantDetails}
-                                                        </span>
-                                                    )}
                                                     {p.barcode && (
                                                         <span className="inline-flex items-center gap-1 text-[10px] text-gray-400 dark:text-gray-400 font-mono">
                                                             <Barcode className="w-2.5 h-2.5" /> {p.barcode}

@@ -21,11 +21,55 @@ export interface CustomerResponse {
     };
 }
 
+export interface CustomerStats {
+    total: number;
+    repeatBuyers: number;
+    totalRevenue: number;
+    gstinCount: number;
+}
+
+export interface CustomerDetailResponse {
+    customer: Customer;
+    sales: Array<{
+        id: string;
+        billNo: string;
+        grandTotal: number;
+        status: string;
+        paymentMethod: string;
+        createdAt: string;
+    }>;
+}
+
 export const customerService = {
-    async getCustomers(page = 1, limit = 10, search = ''): Promise<CustomerResponse> {
+    async getCustomers(page = 1, limit = 10, search = '', sortBy = 'newest'): Promise<CustomerResponse> {
         const response = await api.get('/customers', {
-            params: { page, limit, search }
+            params: { page, limit, search, sortBy }
         });
+        return response.data;
+    },
+
+    async getCustomerStats(): Promise<CustomerStats> {
+        const response = await api.get('/customers/stats');
+        return response.data;
+    },
+
+    async getCustomer(id: string): Promise<CustomerDetailResponse> {
+        const response = await api.get(`/customers/${id}`);
+        return response.data;
+    },
+
+    async createCustomer(data: { name: string; phone?: string; email?: string; address?: string; gstin?: string }): Promise<Customer> {
+        const response = await api.post('/customers', data);
+        return response.data;
+    },
+
+    async updateCustomer(id: string, data: { name: string; phone?: string; email?: string; address?: string; gstin?: string }): Promise<Customer> {
+        const response = await api.put(`/customers/${id}`, data);
+        return response.data;
+    },
+
+    async deleteCustomer(id: string): Promise<{ success: boolean; message: string }> {
+        const response = await api.delete(`/customers/${id}`);
         return response.data;
     }
 };

@@ -24,6 +24,7 @@ interface User {
     permBulkUpdate: boolean;
     permBackDateSale: boolean;
     permViewInsights: boolean;
+    permManageCashDrawer?: boolean;
     maxDiscount: number;
 }
 
@@ -38,5 +39,8 @@ export const useAuthStore = create<AuthState>((set) => ({
     user: null,
     isAuthenticated: false,
     login: (user) => set({ user, isAuthenticated: true }),
-    logout: () => set({ user: null, isAuthenticated: false }),
+    logout: () => {
+        void window.electronAPI?.auth?.logout?.().catch(() => undefined);
+        set({ user: null, isAuthenticated: false });
+    },
 }));

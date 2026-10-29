@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -9,42 +9,11 @@ import { Input } from '../ui/Input';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { useAuthStore } from '../../store/authStore';
 
-// --- Types ---
-export interface LabelBlock {
-    id: string;
-    type: 'shop_name' | 'product_name' | 'price' | 'barcode' | 'product_code' | 'meta_row' | 'text' | 'divider' | 'spacer';
-    content?: string;
-    styles: {
-        align?: 'left' | 'center' | 'right';
-        fontSize?: number;
-        bold?: boolean;
-        marginTop?: number;
-        marginBottom?: number;
-        height?: number; // for barcode height or spacer
-    };
-    visible: boolean;
-}
-
-const DEFAULT_LABEL_LAYOUT: LabelBlock[] = [
-    { id: '1', type: 'shop_name', styles: { align: 'left', fontSize: 10, bold: true, marginBottom: 0 }, visible: true },
-    { id: '2', type: 'product_name', styles: { align: 'left', fontSize: 8, bold: false, marginBottom: 2 }, visible: true },
-    { id: '3', type: 'barcode', styles: { align: 'left', height: 45, marginBottom: 0 }, visible: true },
-    { id: '4', type: 'text', content: '4649350', styles: { align: 'left', fontSize: 8, bold: false, marginBottom: 0 }, visible: true },
-    { id: '5', type: 'price', styles: { align: 'left', fontSize: 12, bold: true, marginBottom: 0 }, visible: true },
-];
-
-const DEFAULT_STICKER_CONFIG = {
-    width: 40,
-    height: 26,
-    perRow: 2,
-    gapX: 1,
-    gapY: 0,
-    marginLeft: 6,
-    marginTop: 0,
-    contentScale: 70,
-    rowDelayMs: 1200
-};
-
+import { DEFAULT_LABEL_LAYOUT, DEFAULT_STICKER_CONFIG, restoreLegacyLabelCode, validateLabelLayout, validateStickerConfig, labelOverflow, labelContentHeight } from '../../lib/labelTemplate';
+import type { LabelBlock } from '../../lib/labelTemplate';
+export type { LabelBlock } from '../../lib/labelTemplate';
+import { LabelStickerPreview } from '../ui/LabelStickerPreview';
+import { showToast } from '../ui/Toast';
 // --- Sortable Item Component ---
 const SortableBlock = ({ block, onRemove, onEdit, isSelected }: any) => {
     const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: block.id });
@@ -106,83 +75,45 @@ export const LabelDesigner: React.FC = () => {
         useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
     );
 
+    const [loading, setLoading] = useState(true);
+    const requestId = useRef(0);
+    const savingRef = useRef(false);
+    const baseline = useRef<{ expectedLayout: string | null; expectedConfig: string | null }>({ expectedLayout: null, expectedConfig: null });
+    const allowed = Boolean(user && user.isActive !== false && (user.role === 'ADMIN' || user.permEditSettings));
     useEffect(() => {
-        loadLayout();
-        loadShopDetails();
-        loadStickerConfig();
-    }, []);
-
-    const loadStickerConfig = async () => {
-        try {
-            const res = await window.electronAPI.settings.get({ key: 'STICKER_PRINT_CONFIG' });
-            if (res?.success && res.data) {
-                setStickConfig({ ...DEFAULT_STICKER_CONFIG, ...JSON.parse(res.data as string) });
-            } else if (!res?.success) {
-                console.warn('Failed to load sticker config:', res?.error);
-            }
-        } catch (e) {
-            console.error('Error loading sticker config:', e);
-        }
-    };
-
-    const loadShopDetails = async () => {
-        try {
-            const result = await window.electronAPI.settings.get({ key: 'SHOP_SETTINGS' });
-            if (result?.success && result.data) {
-                setShopDetails(JSON.parse(result.data as string));
-            }
-        } catch (error) {
-            console.error("Failed to load shop settings", error);
-        }
-    };
-
+        if (allowed) void loadLayout();
+        return () => { requestId.current++; };
+    }, [user?.id, allowed]);
     const loadLayout = async () => {
+        const request = ++requestId.current;
+        setLoading(true); setLoadError('');
         try {
-            setLoadError('');
-            const result = await window.electronAPI.settings.get({ key: 'LABEL_LAYOUT' });
-            if (result?.success && result.data) {
-                setBlocks(JSON.parse(result.data as string));
-            } else if (!result?.success) {
-                const errorMsg = result?.error || 'Unknown error';
-                setLoadError(`Failed to load layout: ${errorMsg}`);
-                console.error('Failed to load layout:', errorMsg);
-            }
-        } catch (error: any) {
-            const errorMsg = error?.message || 'Unknown error';
-            setLoadError(`Error loading layout: ${errorMsg}`);
-            console.error("Failed to load layout", error);
-        }
+            const results = await Promise.all(['LABEL_LAYOUT', 'SHOP_SETTINGS', 'STICKER_PRINT_CONFIG'].map(key => window.electronAPI.settings.get({ key, userId: user?.id })));
+            const failed = results.find(result => !result?.success);
+            if (failed) throw new Error(failed.error || 'Could not load saved label settings.');
+            const [layout, shop, calibration] = results;
+            const nextBlocks = restoreLegacyLabelCode(layout.data ? JSON.parse(layout.data as string) : DEFAULT_LABEL_LAYOUT);
+            const nextConfig = validateStickerConfig(calibration.data ? JSON.parse(calibration.data as string) : DEFAULT_STICKER_CONFIG);
+            const nextShop = shop.data ? JSON.parse(shop.data as string) : { shopName: 'Zain POS' };
+            if (!nextShop || typeof nextShop !== 'object' || Array.isArray(nextShop)) throw new Error('Invalid shop settings.');
+            if (request !== requestId.current) return;
+            setBlocks(nextBlocks); setStickConfig(nextConfig); setShopDetails({ shopName: String(nextShop.shopName || 'Zain POS') }); setSelectedId(null);
+            baseline.current = { expectedLayout: layout.data as string || null, expectedConfig: calibration.data as string || null };
+        } catch (error) { if (request === requestId.current) setLoadError((error as Error).message || 'Could not load label settings.'); }
+        finally { if (request === requestId.current) setLoading(false); }
     };
-
     const handleSave = async () => {
-        setSaving(true);
+        if (!allowed || loading || loadError || savingRef.current) return;
+        savingRef.current = true; setSaving(true);
         try {
-            const userId = user?.id || 'default-user';
-            const results = await Promise.all([
-                window.electronAPI.settings.set({
-                    key: 'LABEL_LAYOUT',
-                    value: JSON.stringify(blocks),
-                    userId
-                }),
-                window.electronAPI.settings.set({
-                    key: 'STICKER_PRINT_CONFIG',
-                    value: JSON.stringify(stickConfig),
-                    userId
-                })
-            ]);
-            const failed = results.find((result: { success?: boolean; error?: string }) => !result?.success);
-            if (failed) {
-                throw new Error(failed.error || 'Failed to save settings');
-            }
-            alert('Label layout and printer calibration saved!');
-        } catch (error) {
-            console.error('Failed to save settings:', error);
-            alert('Failed to save settings');
-        } finally {
-            setSaving(false);
-        }
+            const nextBlocks = validateLabelLayout(blocks), nextConfig = validateStickerConfig(stickConfig);
+            const result = await window.electronAPI.settings.saveLabelTemplate({ blocks: nextBlocks, config: nextConfig, ...baseline.current });
+            if (!result?.success || !result.data) throw new Error(result?.error || 'Could not confirm saved label settings. Retry the same save.');
+            baseline.current = { expectedLayout: result.data.layoutValue, expectedConfig: result.data.configValue };
+            showToast('Label layout and printer calibration saved.', 'success');
+        } catch (error) { showToast((error as Error).message || 'Failed to save label settings.', 'error'); }
+        finally { savingRef.current = false; setSaving(false); }
     };
-
     const handleDragEnd = (event: any) => {
         const { active, over } = event;
 
@@ -231,13 +162,15 @@ export const LabelDesigner: React.FC = () => {
             a.click();
 
             URL.revokeObjectURL(url);
-            alert('✅ Template exported successfully!');
+            showToast('Template exported.', 'success');
         } catch (error) {
-            alert(`❌ Failed to export template: ${(error as Error).message}`);
+            showToast((error as Error).message || 'Failed to export template.', 'error');
         }
     };
 
     const handleImportTemplate = () => {
+        if (loading || savingRef.current || loadError) return;
+        const importRequest = requestId.current;
         const input = document.createElement('input');
         input.type = 'file';
         input.accept = '.json';
@@ -245,9 +178,11 @@ export const LabelDesigner: React.FC = () => {
         input.onchange = async (e) => {
             const file = (e.target as HTMLInputElement).files?.[0];
             if (!file) return;
+            if (file.size > 1024 * 1024) { showToast('Template files must be smaller than 1 MB.', 'error'); return; }
 
             try {
                 const text = await file.text();
+                if (importRequest !== requestId.current || savingRef.current) return;
                 const template = JSON.parse(text);
 
                 // Validate template structure
@@ -260,13 +195,15 @@ export const LabelDesigner: React.FC = () => {
                 }
 
                 // Apply template
-                setBlocks(template.blocks);
-                setStickConfig({ ...DEFAULT_STICKER_CONFIG, ...template.stickConfig });
+                const importedBlocks = restoreLegacyLabelCode(template.blocks);
+                const importedConfig = validateStickerConfig(template.stickConfig);
+                setBlocks(importedBlocks);
+                setStickConfig(importedConfig);
                 setSelectedId(null);
 
-                alert(`✅ Template imported successfully!\nName: ${template.name || 'Untitled'}\nCreated: ${template.createdAt ? new Date(template.createdAt).toLocaleDateString() : 'Unknown'}`);
+                showToast('Template imported. Review the preview, then save to apply it.', 'success');
             } catch (error) {
-                alert(`❌ Failed to import template: ${(error as Error).message}`);
+                showToast((error as Error).message || 'Failed to import template.', 'error');
             }
         };
 
@@ -275,10 +212,10 @@ export const LabelDesigner: React.FC = () => {
 
     const addBlock = (type: LabelBlock['type']) => {
         const newBlock: LabelBlock = {
-            id: Date.now().toString(),
+            id: crypto.randomUUID(),
             type,
             content: '',
-            styles: { align: 'center', fontSize: 10, bold: false, marginTop: 0, marginBottom: 0 },
+            styles: { align: 'center', fontSize: 10, bold: false, marginTop: 0, marginBottom: 0, ...(type === 'barcode' ? { height: 30 } : type === 'spacer' ? { height: 10 } : {}) },
             visible: true
         };
         setBlocks([...blocks, newBlock]);
@@ -316,8 +253,9 @@ export const LabelDesigner: React.FC = () => {
     const curX = anchorX + stickConfig.marginLeft;
     const curY = anchorY + stickConfig.marginTop;
 
+    if (!allowed) return <p className="text-sm text-gray-500">You need settings access to edit label templates.</p>;
     return (
-        <div className="flex flex-col gap-6">
+        <div className="flex flex-col gap-6" onWheelCapture={event => { const target = event.target; if (target instanceof HTMLInputElement && target.type === 'number' && document.activeElement === target) target.blur(); }}>
             {/* Load Error Alert */}
             {loadError && (
                 <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-400">
@@ -326,16 +264,17 @@ export const LabelDesigner: React.FC = () => {
                         <div>
                             <p className="font-semibold">Failed to Load Template</p>
                             <p className="text-xs mt-1">{loadError}</p>
-                            <p className="text-xs mt-1 text-red-600 dark:text-red-500">Using default layout. Your changes will save as new template.</p>
+                            <p className="text-xs mt-1 text-red-600 dark:text-red-500">Saving is disabled until the saved settings load successfully.</p><Button variant="outline" size="sm" onClick={() => { void loadLayout(); }}>Retry loading saved settings</Button>
                         </div>
                     </div>
                 </div>
             )}
 
+            {loading && <p role="status">Loading saved label settings…</p>}
             {/* Main Designer Area */}
-            <div className="flex h-[calc(100vh-320px)] min-h-[500px] gap-4">
+            <fieldset disabled={loading || saving || Boolean(loadError)} className="flex h-[calc(100vh-320px)] min-h-[500px] gap-4 min-w-0">
                 {/* LEFT: Tools */}
-                <div className="w-80 flex flex-col gap-4 bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg border border-gray-200 dark:border-gray-700">
+                <div className="w-80 shrink-0 flex flex-col gap-4 bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg border border-gray-200 dark:border-gray-700">
                     <div>
                         <h3 className="text-xs font-bold uppercase text-gray-500 mb-2">Add Elements</h3>
                         <div className="grid grid-cols-2 gap-2">
@@ -343,6 +282,7 @@ export const LabelDesigner: React.FC = () => {
                             <Button variant="secondary" size="sm" onClick={() => addBlock('product_name')} className="justify-start text-xs">Product Name</Button>
                             <Button variant="secondary" size="sm" onClick={() => addBlock('price')} className="justify-start text-xs">Price</Button>
                             <Button variant="secondary" size="sm" onClick={() => addBlock('barcode')} className="justify-start text-xs">Barcode</Button>
+                            <Button variant="secondary" size="sm" onClick={() => addBlock('product_code')} className="justify-start text-xs">Product Code</Button>
                             <Button variant="secondary" size="sm" onClick={() => addBlock('meta_row')} className="justify-start text-xs">Code | Price</Button>
                             <Button variant="secondary" size="sm" onClick={() => addBlock('text')} className="justify-start text-xs">Custom Text</Button>
                             <Button variant="secondary" size="sm" onClick={() => addBlock('divider')} className="justify-start text-xs">Divider</Button>
@@ -370,62 +310,25 @@ export const LabelDesigner: React.FC = () => {
                     </div>
                 </div>
 
-                {/* MIDDLE: Preview Canvas */}
-                <div className="flex-1 bg-gray-100 dark:bg-gray-900 flex justify-center items-center p-8 overflow-y-auto">
-                    <div
-                        className="bg-white text-black shadow-lg relative overflow-hidden flex flex-col"
-                        style={{
-                            width: '380px',
-                            height: '190px',
-                            padding: '10px',
-                            fontFamily: 'Arial, sans-serif'
-                        }}
-                    >
-                        {blocks.map(block => (
-                            <div
-                                key={block.id}
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    setSelectedId(block.id);
-                                }}
-                                className={`cursor-pointer hover:bg-blue-500/10 ${selectedId === block.id ? 'ring-1 ring-blue-500' : ''}`}
-                                style={{
-                                    textAlign: block.styles.align,
-                                    fontSize: `${(block.styles.fontSize || 10) * 2}px`,
-                                    fontWeight: block.styles.bold ? 'bold' : 'normal',
-                                    marginTop: `${(block.styles.marginTop || 0) * 2}px`,
-                                    marginBottom: `${(block.styles.marginBottom || 0) * 2}px`,
-                                    display: block.visible ? 'block' : 'none',
-                                    lineHeight: 1.1
-                                }}
-                            >
-                                {block.type === 'shop_name' && (block.content || shopDetails.shopName || "ZAIN GENTS PALACE")}
-                                {block.type === 'product_name' && (block.content || "Shirt 750")}
-                                {block.type === 'price' && "Rs.750.00"}
-                                {block.type === 'product_code' && "ABC-1234"}
-                                {block.type === 'text' && (block.content || '4649350')}
-                                {block.type === 'barcode' && <div className="bg-gray-200 w-full flex items-center justify-center text-[10px]" style={{ height: (block.styles.height || 30) * 1.5 }}>|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||</div>}
-                                {block.type === 'meta_row' && (
-                                    <div className="flex justify-between w-full">
-                                        <span>4649350</span>
-                                        <span>Rs.750.00</span>
-                                    </div>
-                                )}
-                                {block.type === 'divider' && <div className="border-t border-black my-1"></div>}
-                                {block.type === 'spacer' && <div style={{ height: (block.styles.height || 10) }}></div>}
-                            </div>
-                        ))}
+                {/* Same physical dimensions, scale and barcode renderer as the print modal. */}
+                <div className="flex-1 min-w-0 relative bg-gray-100 dark:bg-gray-900 flex flex-col gap-4 justify-center items-center p-6 overflow-auto">
+                    <div style={{ width: `${stickConfig.width * 2}mm`, height: `${stickConfig.height * 2}mm`, flexShrink: 0 }}>
+                        <div style={{ transform: 'scale(2)', transformOrigin: 'top left' }}>
+                            <LabelStickerPreview blocks={blocks} config={stickConfig} shopName={shopDetails.shopName} productName="Shirt 750" code="4649350" mrp={750} selectedId={selectedId} onSelect={setSelectedId} />
+                        </div>
                     </div>
-                    <div className="absolute bottom-4 text-xs text-gray-400">Preview Scaled 2x</div>
+                    <p className="text-xs text-gray-500">2× preview · {stickConfig.width} × {stickConfig.height} mm · content {stickConfig.contentScale}%</p>
+                    <p className="text-xs text-gray-500">Sample: Shirt 750 · code 4649350. Printing uses the selected item's actual code.</p>
+                    {blocks.some(block => block.visible && block.type === 'barcode') && !blocks.some(block => block.visible && (block.type === 'product_code' || block.type === 'meta_row')) && <div role="alert" className="text-xs text-amber-700 bg-amber-50 rounded-lg p-3">The readable code is missing or hidden.<Button size="sm" variant="outline" className="mt-2" onClick={() => { const code = blocks.find(block => block.type === 'product_code') || { ...DEFAULT_LABEL_LAYOUT[3], id: crypto.randomUUID() }; const next = blocks.filter(block => block.id !== code.id); next.splice(next.findIndex(block => block.type === 'barcode') + 1, 0, { ...code, visible: true }); setBlocks(next); }}>Restore code below barcode</Button></div>}
+                    {labelOverflow(blocks, stickConfig) && <div role="alert" className="text-xs text-amber-700 bg-amber-50 rounded-lg p-3">Content exceeds the label height and may be clipped. Reduce font size, barcode height or content scale.<Button size="sm" variant="outline" className="mt-2" onClick={() => setStickConfig(previous => ({ ...previous, contentScale: Math.max(10, Math.floor((previous.height - 2) * 96 / 25.4 / labelContentHeight(blocks) * 100)) }))}>Fit content to height</Button></div>}
                 </div>
-
                 {/* RIGHT: Properties */}
-                <div className="w-72 bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg border border-gray-200 dark:border-gray-700">
+                <div className="w-72 shrink-0 overflow-y-auto bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg border border-gray-200 dark:border-gray-700">
                     <div className="flex justify-between items-center mb-4">
                         <h3 className="text-lg font-bold">Properties</h3>
                         <div className="flex gap-1">
                             <Button size="sm" variant="secondary" onClick={handleReset} title="Reset to Default"><RotateCcw className="w-4 h-4" /></Button>
-                            <Button size="sm" onClick={handleSave} disabled={saving}>{saving ? 'Saving...' : 'Save Layout'}</Button>
+                            <Button size="sm" onClick={handleSave} disabled={saving || loading || Boolean(loadError) || !allowed}>{saving ? 'Saving...' : 'Save Layout'}</Button>
                         </div>
                     </div>
 
@@ -478,6 +381,7 @@ export const LabelDesigner: React.FC = () => {
                             </div>
 
                             {/* Custom Text Content */}
+                            {selectedBlock.type === 'product_code' && <p className="text-xs text-gray-500">Prints the actual barcode number for each item, including leading zeros. No fixed text is needed.</p>}
                             {(selectedBlock.type === 'text' || selectedBlock.type === 'shop_name' || selectedBlock.type === 'product_name') && (
                                 <div>
                                     <label className="text-xs font-bold text-gray-500 uppercase">Content</label>
@@ -490,10 +394,10 @@ export const LabelDesigner: React.FC = () => {
                             )}
 
                             {/* Barcode Height */}
-                            {selectedBlock.type === 'barcode' && (
+                            {(selectedBlock.type === 'barcode' || selectedBlock.type === 'spacer') && (
                                 <div>
-                                    <label className="text-xs font-bold text-gray-500 uppercase">Height</label>
-                                    <Input type="number" value={selectedBlock.styles.height || 30} onChange={(e) => updateSelectedBlock({ height: parseInt(e.target.value) })} />
+                                    <label className="text-xs font-bold text-gray-500 uppercase">Height (px)</label>
+                                    <Input type="number" min="1" max="300" value={selectedBlock.styles.height || (selectedBlock.type === 'spacer' ? 10 : 30)} onChange={(e) => updateSelectedBlock({ height: Number(e.target.value) })} />
                                 </div>
                             )}
 
@@ -522,10 +426,10 @@ export const LabelDesigner: React.FC = () => {
                         </div>
                     )}
                 </div>
-            </div>
+            </fieldset>
 
             {/* Bottom Calibration Panel */}
-            <div className="p-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <fieldset disabled={loading || saving || Boolean(loadError)} className="p-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm animate-in fade-in slide-in-from-bottom-4 duration-500 min-w-0">
                 <div className="grid grid-cols-1 xl:grid-cols-[240px_minmax(0,1fr)] gap-6 items-start">
                     <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/20 p-4">
                         <h4 className="text-sm font-black text-gray-500 uppercase mb-2 flex items-center gap-2 tracking-wide">
@@ -556,10 +460,11 @@ export const LabelDesigner: React.FC = () => {
                             <h5 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-3">Spacing & Offsets</h5>
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                 <Input label="Gap X" type="number" value={stickConfig.gapX} onChange={e => setStickConfig({ ...stickConfig, gapX: Number(e.target.value) })} />
-                                <Input label="Gap Y" type="number" value={stickConfig.gapY} onChange={e => setStickConfig({ ...stickConfig, gapY: Number(e.target.value) })} />
+                                <Input label="Preview row gap (mm)" type="number" value={stickConfig.gapY} onChange={e => setStickConfig({ ...stickConfig, gapY: Number(e.target.value) })} />
                                 <Input label="Margin L" type="number" value={stickConfig.marginLeft} onChange={e => setStickConfig({ ...stickConfig, marginLeft: Number(e.target.value) })} />
                                 <Input label="Margin T" type="number" value={stickConfig.marginTop} onChange={e => setStickConfig({ ...stickConfig, marginTop: Number(e.target.value) })} />
                             </div>
+                            <p className="text-xs text-gray-500 mt-2">Printing sends one row at a time. Physical vertical label gaps and feed are controlled by the printer driver; preview row gap only spaces the on-screen rows.</p>
                         </div>
                     </div>
                 </div>
@@ -724,18 +629,17 @@ export const LabelDesigner: React.FC = () => {
                         </div>
                     </div>
                 </div>
-            </div>
+            </fieldset>
 
             <ConfirmDialog
                 isOpen={showResetConfirm}
                 title="Reset Label Layout"
-                message="Are you sure you want to reset to the default layout? All unsaved modifications will be lost."
+                message="Restore the standard elements, including the code below the barcode? Saved printer dimensions and calibration will be kept. Click Save Layout afterwards to apply it."
                 confirmText="Reset Layout"
                 confirmVariant="warning"
                 onClose={() => setShowResetConfirm(false)}
                 onConfirm={() => {
                     setBlocks(DEFAULT_LABEL_LAYOUT);
-                    setStickConfig(DEFAULT_STICKER_CONFIG);
                     setSelectedId(null);
                     setShowResetConfirm(false);
                 }}

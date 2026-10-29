@@ -29,6 +29,7 @@ export interface UserPermissions {
     permBulkUpdate?: boolean;
     permBackDateSale?: boolean;
     permViewInsights?: boolean;
+    permManageCashDrawer?: boolean;
 
     // Limits
     maxDiscount?: number;
@@ -396,6 +397,12 @@ export const PermissionMiddleware = {
         resource: 'inventory'
     }),
 
+    // Stock / Inventory management
+    manageInventory: PermissionService.createPermissionMiddleware(['permManageInventory'], {
+        action: 'manage-inventory',
+        resource: 'inventory'
+    }),
+
     // Reports and data
     viewReports: PermissionService.createPermissionMiddleware(['permViewReports'], {
         action: 'view-reports',
@@ -421,6 +428,12 @@ export const PermissionMiddleware = {
     // Admin only operations
     adminOnly: PermissionService.createPermissionMiddleware('admin-only', {
         action: 'admin-operation'
+    }),
+
+    // Cash Drawer / Daily Register Management
+    manageCashDrawer: PermissionService.createPermissionMiddleware(['permManageCashDrawer'], {
+        action: 'manage-cash-drawer',
+        resource: 'cash-register'
     }),
 
     // Any authenticated user

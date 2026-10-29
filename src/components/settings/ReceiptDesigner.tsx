@@ -7,6 +7,7 @@ import { GripVertical, Trash2, Type, Image as ImageIcon, Layout, AlignLeft, Alig
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
+import { showToast } from '../ui/Toast';
 import { DEFAULT_RECEIPT_PRINTER_CONFIG, generateReceiptHtml, type ReceiptData, type ReceiptPrinterConfig } from '../../services/print.service';
 import { useAuthStore } from '../../store/authStore';
 
@@ -30,6 +31,9 @@ export interface ReceiptBlock {
         showVariantInfo?: boolean;
         tableHeaderBold?: boolean;
         tableRowBold?: boolean;
+        showRate?: boolean;
+        showRateSubline?: boolean;
+        showMRP?: boolean;
         fontFamily?: string;
     };
     visible: boolean;
@@ -140,17 +144,18 @@ export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ printerSetting
             gstin: shopDetails.gstin || '',
             customerName: 'Walk-in',
             items: [
-                { name: 'Sample Item', variantInfo: 'Size M', quantity: 1, mrp: 140, rate: 135, discount: 0, taxRate: 5, total: 135 },
+                { name: 'S K C Cotton Shirt', categoryName: 'Shirts', variantInfo: 'Size L', quantity: 2, mrp: 750, rate: 700, discount: 0, taxRate: 5, total: 1400 },
+                { name: 'Denim Jeans Pant', categoryName: 'Jeans', variantInfo: 'Size 32', quantity: 1, mrp: 1100, rate: 1000, discount: 0, taxRate: 5, total: 1000 },
             ],
-            subtotal: 135,
+            subtotal: 2400,
             discount: 0,
-            cgst: 3.21,
-            sgst: 3.21,
-            grandTotal: 135,
+            cgst: 57.14,
+            sgst: 57.14,
+            grandTotal: 2400,
             paymentMethod: 'CASH',
-            paidAmount: 135,
+            paidAmount: 2400,
             changeAmount: 0,
-            payments: [{ paymentMode: 'CASH', amount: 135 }],
+            payments: [{ paymentMode: 'CASH', amount: 2400 }],
             userName: 'Admin',
             logo: (shopDetails as any).logo || '',
         };
@@ -215,10 +220,15 @@ export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ printerSetting
             if (!result?.success) {
                 throw new Error(result?.error || 'Failed to save layout');
             }
-            alert('Layout saved successfully!');
+            await window.electronAPI.settings.set({
+                key: 'PRINTER_CONFIG',
+                value: JSON.stringify(printerConfig),
+                userId
+            });
+            showToast('Receipt layout & settings saved successfully!', 'success');
         } catch (error) {
             console.error('Failed to save layout:', error);
-            alert('Failed to save layout');
+            showToast('Failed to save layout', 'error');
         } finally {
             setSaving(false);
         }
@@ -302,9 +312,9 @@ export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ printerSetting
                     setPrinterConfig({ ...DEFAULT_RECEIPT_PRINTER_CONFIG, ...template.printerConfig });
                 }
                 setSelectedBlock(null);
-                alert('Template imported successfully!');
+                showToast('Template imported successfully!', 'success');
             } catch (error) {
-                alert(`Failed to import template: ${(error as Error).message}`);
+                showToast(`Failed to import template: ${(error as Error).message}`, 'error');
             }
         };
 
@@ -335,6 +345,9 @@ export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ printerSetting
             'showVariantInfo' in updates ||
             'tableHeaderBold' in updates ||
             'tableRowBold' in updates ||
+            'showRate' in updates ||
+            'showRateSubline' in updates ||
+            'showMRP' in updates ||
             'fontFamily' in updates
         ) {
             updatedBlock = { ...selectedBlock, styles: { ...selectedBlock.styles, ...updates } };
@@ -433,9 +446,9 @@ export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ printerSetting
                             <tr>
                                 <th className="text-center w-[5%] py-1">#</th>
                                 <th className="text-left w-auto py-1">Item</th>
-                                <th className="text-center w-[10%] py-1">Qty</th>
                                 <th className="text-right w-[15%] py-1">MRP</th>
                                 <th className="text-right w-[15%] py-1">Rate</th>
+                                <th className="text-center w-[10%] py-1">Qty</th>
                                 <th className="text-right w-[10%] py-1">Dis</th>
                                 <th className="text-right w-[20%] py-1">Amt</th>
                             </tr>
@@ -443,12 +456,15 @@ export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ printerSetting
                         <tbody>
                             <tr>
                                 <td className="text-center py-1">1</td>
-                                <td className="font-bold py-1">S K C Baniyan 135</td>
-                                <td className="text-center py-1">1</td>
-                                <td className="text-right py-1">140.00</td>
-                                <td className="text-right py-1">135.00</td>
+                                <td className="font-bold py-1">
+                                    <div>S K C Cotton Shirt</div>
+                                    <div className="text-[8px] text-gray-500 font-normal">2 @ ₹700.00</div>
+                                </td>
+                                <td className="text-right py-1">750.00</td>
+                                <td className="text-right py-1">700.00</td>
+                                <td className="text-center py-1">2</td>
                                 <td className="text-right py-1">0.00</td>
-                                <td className="text-right font-bold py-1">135.00</td>
+                                <td className="text-right font-bold py-1">1400.00</td>
                             </tr>
                         </tbody>
                     </table>
@@ -590,32 +606,89 @@ export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ printerSetting
                         )}
 
                         {selectedBlock.type === 'items_table' && (
-                            <div className="space-y-2 p-3 rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
-                                <label className="text-xs font-bold text-gray-500 uppercase">Items Table Options</label>
-                                <label className="flex items-center gap-2 cursor-pointer select-none text-sm">
-                                    <input
-                                        type="checkbox"
-                                        checked={selectedBlock.styles.showVariantInfo === true}
-                                        onChange={(e) => updateSelectedBlock({ showVariantInfo: e.target.checked })}
-                                    />
-                                    <span>Show Item Size / Variant</span>
-                                </label>
-                                <label className="flex items-center gap-2 cursor-pointer select-none text-sm">
-                                    <input
-                                        type="checkbox"
-                                        checked={selectedBlock.styles.tableHeaderBold !== false}
-                                        onChange={(e) => updateSelectedBlock({ tableHeaderBold: e.target.checked })}
-                                    />
-                                    <span>Header Bold</span>
-                                </label>
-                                <label className="flex items-center gap-2 cursor-pointer select-none text-sm">
-                                    <input
-                                        type="checkbox"
-                                        checked={selectedBlock.styles.tableRowBold === true}
-                                        onChange={(e) => updateSelectedBlock({ tableRowBold: e.target.checked })}
-                                    />
-                                    <span>Item Rows Bold</span>
-                                </label>
+                            <div className="space-y-3 p-3 rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
+                                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">Items Table Options</label>
+
+                                <div className="space-y-2 pt-1 border-t border-gray-100 dark:border-gray-800">
+                                    <span className="text-[11px] font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">Rate & Price Display</span>
+
+                                    <label className="flex items-start gap-2 cursor-pointer select-none text-sm">
+                                        <input
+                                            type="checkbox"
+                                            className="mt-0.5 rounded text-blue-600"
+                                            checked={(selectedBlock.styles.showRate !== undefined ? selectedBlock.styles.showRate : printerConfig.showRate) === true}
+                                            onChange={(e) => {
+                                                updateSelectedBlock({ showRate: e.target.checked });
+                                                setPrinterConfig(prev => ({ ...prev, showRate: e.target.checked }));
+                                            }}
+                                        />
+                                        <div>
+                                            <span className="font-medium text-gray-800 dark:text-gray-200">Rate Column</span>
+                                            <p className="text-[10px] text-gray-500 dark:text-gray-400">Order: Item | Rate | Qty | Amt</p>
+                                        </div>
+                                    </label>
+
+                                    <label className="flex items-start gap-2 cursor-pointer select-none text-sm">
+                                        <input
+                                            type="checkbox"
+                                            className="mt-0.5 rounded text-blue-600"
+                                            checked={(selectedBlock.styles.showRateSubline !== undefined ? selectedBlock.styles.showRateSubline : (printerConfig.showRateSubline ?? false)) === true}
+                                            onChange={(e) => {
+                                                updateSelectedBlock({ showRateSubline: e.target.checked });
+                                                setPrinterConfig(prev => ({ ...prev, showRateSubline: e.target.checked }));
+                                            }}
+                                        />
+                                        <div>
+                                            <span className="font-medium text-gray-800 dark:text-gray-200">Rate Subline (when Qty &gt; 1)</span>
+                                            <p className="text-[10px] text-gray-500 dark:text-gray-400">Prints &quot;2 @ ₹700.00&quot; under item name</p>
+                                        </div>
+                                    </label>
+
+                                    <label className="flex items-center gap-2 cursor-pointer select-none text-sm pt-1">
+                                        <input
+                                            type="checkbox"
+                                            className="rounded text-blue-600"
+                                            checked={(selectedBlock.styles.showMRP !== undefined ? selectedBlock.styles.showMRP : printerConfig.showMRP) === true}
+                                            onChange={(e) => {
+                                                updateSelectedBlock({ showMRP: e.target.checked });
+                                                setPrinterConfig(prev => ({ ...prev, showMRP: e.target.checked }));
+                                            }}
+                                        />
+                                        <span>Show MRP Column</span>
+                                    </label>
+                                </div>
+
+                                <div className="space-y-2 pt-2 border-t border-gray-100 dark:border-gray-800">
+                                    <span className="text-[11px] font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">Styling & Labels</span>
+
+                                    <label className="flex items-center gap-2 cursor-pointer select-none text-sm">
+                                        <input
+                                            type="checkbox"
+                                            className="rounded text-blue-600"
+                                            checked={selectedBlock.styles.showVariantInfo === true}
+                                            onChange={(e) => updateSelectedBlock({ showVariantInfo: e.target.checked })}
+                                        />
+                                        <span>Show Item Size / Variant</span>
+                                    </label>
+                                    <label className="flex items-center gap-2 cursor-pointer select-none text-sm">
+                                        <input
+                                            type="checkbox"
+                                            className="rounded text-blue-600"
+                                            checked={selectedBlock.styles.tableHeaderBold !== false}
+                                            onChange={(e) => updateSelectedBlock({ tableHeaderBold: e.target.checked })}
+                                        />
+                                        <span>Header Bold</span>
+                                    </label>
+                                    <label className="flex items-center gap-2 cursor-pointer select-none text-sm">
+                                        <input
+                                            type="checkbox"
+                                            className="rounded text-blue-600"
+                                            checked={selectedBlock.styles.tableRowBold === true}
+                                            onChange={(e) => updateSelectedBlock({ tableRowBold: e.target.checked })}
+                                        />
+                                        <span>Item Rows Bold</span>
+                                    </label>
+                                </div>
                             </div>
                         )}
 

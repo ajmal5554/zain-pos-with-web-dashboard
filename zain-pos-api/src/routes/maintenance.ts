@@ -7,7 +7,11 @@ const router = express.Router();
 const prisma = new PrismaClient();
 
 // Secret key for maintenance operations (simple protection)
-const MAINTENANCE_SECRET = process.env.MAINTENANCE_SECRET || 'zain-pos-maintenance-secret';
+const MAINTENANCE_SECRET = process.env.MAINTENANCE_SECRET;
+router.use((_req, res, next) => {
+    if (!MAINTENANCE_SECRET) return res.status(503).json({ error: 'Maintenance access is not configured' });
+    next();
+});
 
 // WIPE ALL DATA (Except Users)
 router.post('/reset', async (req, res) => {

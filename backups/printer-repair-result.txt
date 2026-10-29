@@ -1,0 +1,47 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20261028133622
+Username: LAPTOP-H2P0H9NJ\admin
+RunAs User: LAPTOP-H2P0H9NJ\admin
+Configuration Name: 
+Machine: LAPTOP-H2P0H9NJ (Microsoft Windows NT 10.0.22631.0)
+Host Application: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\admin\Downloads\zain-POS-with-web-main\zain-POS-with-web-main\scripts\repair-epson-windows.ps1
+Process ID: 6556
+PSVersion: 5.1.22621.6133
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.22621.6133
+BuildVersion: 10.0.22621.6133
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+Transcript started, output file is C:\Users\admin\Downloads\zain-POS-with-web-main\zain-POS-with-web-main\backups\printer-repair-result.txt
+Backup: C:\Users\admin\Downloads\zain-POS-with-web-main\zain-POS-with-web-main\backups\printer-repair-admin-20261028-133622
+
+
+Name    : UNIDRV.DLL
+Version : 10.0.22621.6199 (WinBuild.160101.0800)
+
+
+
+
+
+Name    : UNIDRVUI.DLL
+Version : 10.0.22621.6199 (WinBuild.160101.0800)
+
+
+
+
+
+Name    : UNIRES.DLL
+Version : 10.0.22621.6199 (WinBuild.160101.0800)
+
+
+
+Printer settings valid: True
+Windows diagnostic job submitted successfully
+**********************
+Windows PowerShell transcript end
+End time: 20261028133638
+**********************

@@ -5,6 +5,7 @@ import { demoProducts, isDemoModeEnabled } from '@/lib/demo';
 export function useInventoryMetrics() {
     const [products, setProducts] = useState<Product[]>([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
 
     // Derived state
     const [metrics, setMetrics] = useState({
@@ -22,6 +23,7 @@ export function useInventoryMetrics() {
     const loadData = async () => {
         try {
             setLoading(true);
+            setError(null);
             const data = isDemoModeEnabled()
                 ? demoProducts
                 : await inventoryService.getProducts();
@@ -42,10 +44,11 @@ export function useInventoryMetrics() {
             });
         } catch (error) {
             console.error('Failed to load inventory', error);
+            setError('Stock could not be loaded. Check your connection and retry.');
         } finally {
             setLoading(false);
         }
     };
 
-    return { products, metrics, loading, refresh: loadData };
+    return { products, metrics, loading, error, refresh: loadData };
 }

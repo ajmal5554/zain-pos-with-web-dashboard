@@ -15,6 +15,7 @@ import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import { db } from '../lib/db';
 import { useAuthStore } from '../store/authStore';
+import { showToast } from '../components/ui/Toast';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -845,17 +846,16 @@ export const Reports: React.FC = () => {
 
             const cancelledSales = sales.filter((sale) => sale.status === 'VOIDED');
             const activeSales = sales.filter((sale) => sale.status !== 'VOIDED');
-            const nettedSales = activeSales.map((sale) => getNetSaleForReport(sale));
-
-            const processedSales = nettedSales.map((sale) => processSaleForReport(sale));
+            const processedSales = activeSales.map((sale) => processSaleForReport(sale));
             const exchangeReplacementSales = processedSales.filter(isReplacementSale);
+            const regularSales = processedSales.filter((s) => !isReplacementSale(s));
             const taxInvoices = processedSales.filter((s) => !s.isHistorical);
 
             setReportData({
                 startDate: start,
                 endDate: end,
                 taxInvoices,
-                regularSales: processedSales,
+                regularSales,
                 allSales: processedSales,
                 cancelledSales,
                 exchangeReplacementSales,
@@ -866,7 +866,7 @@ export const Reports: React.FC = () => {
             });
         } catch (error) {
             console.error('Failed to generate report:', error);
-            alert('Failed to generate report');
+            showToast('Failed to generate report', 'error');
         } finally {
             setLoading(false);
         }
@@ -877,7 +877,10 @@ export const Reports: React.FC = () => {
     // ── PDF Export ────────────────────────────────────────────────────────────
 
     const exportToPDF = () => {
-        if (!reportData) return alert('Please generate a report first');
+        if (!reportData) {
+            showToast('Please generate a report first', 'warning');
+            return;
+        }
 
         const doc = new jsPDF('landscape');
         const pageWidth = doc.internal.pageSize.getWidth();
@@ -1012,7 +1015,7 @@ export const Reports: React.FC = () => {
 
                 return [
                     format(new Date(sale.createdAt), 'dd/MMM/yy'),
-                    isReplacementSale(sale) ? `${sale.billNo} (EXCHANGE)` : String(sale.billNo),
+                    formatGstBillLabel(sale),
                     sale.subtotal.toFixed(2),
                     exCredit > 0 ? `-${exCredit.toFixed(2)}` : '-',
                     sale.discount.toFixed(2),
@@ -1027,11 +1030,11 @@ export const Reports: React.FC = () => {
 
             doc.setFontSize(11);
             doc.setFont('helvetica', 'bold');
-            doc.text('DETAILED INVOICE REPORT - TAX INVOICES (FRESH SALES)', 14, currentY);
+            doc.text('DETAILED INVOICE REPORT - GST REGISTER', 14, currentY);
             currentY += 5;
 
-            // Sort regular sales based on user selection
-            const sortedRegularSales = [...reportData.regularSales].sort((a, b) =>
+            // Sort all sales based on user selection
+            const sortedSales = [...reportData.allSales].sort((a, b) =>
                 sortBy === 'billNo' ? compareBillNos(String(a.billNo), String(b.billNo)) : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
             );
 
@@ -1052,9 +1055,9 @@ export const Reports: React.FC = () => {
                 'All modes',                                     
             ];
 
-            const regularBody = sortedRegularSales.length > 0
-                ? [...sortedRegularSales.map(mapSaleRow), grandTotalRow]
-                : [['No fresh tax invoices in this date range', '', '', '', '', '', '', '', '', '', ''], grandTotalRow];
+            const regularBody = sortedSales.length > 0
+                ? [...sortedSales.map(mapSaleRow), grandTotalRow]
+                : [['No tax invoices in this date range', '', '', '', '', '', '', '', '', '', ''], grandTotalRow];
 
             autoTable(doc, {
                 startY: currentY,
@@ -1128,7 +1131,10 @@ export const Reports: React.FC = () => {
     // ── Excel Export ──────────────────────────────────────────────────────────
 
     const exportToExcel = () => {
-        if (!reportData) return alert('Please generate a report first');
+        if (!reportData) {
+            showToast('Please generate a report first', 'warning');
+            return;
+        }
 
         const wb = XLSX.utils.book_new();
         const dateRange = `From ${format(reportData.startDate, 'dd/MM/yyyy')} To ${format(reportData.endDate, 'dd/MM/yyyy')}`;
@@ -1205,7 +1211,7 @@ export const Reports: React.FC = () => {
 
                 return [
                     format(new Date(sale.createdAt), 'dd/MMM/yy HH:mm'),
-                    isReplacementSale(sale) ? `${sale.billNo} (EXCHANGE)` : String(sale.billNo),
+                    formatGstBillLabel(sale),
                     sale.customerName || 'Walk-in Customer',
                     sale.subtotal,
                     exCredit > 0 ? -exCredit : 0,
@@ -1348,23 +1354,19 @@ export const Reports: React.FC = () => {
     const [detailedFilter, setDetailedFilter] = useState<'all' | 'fresh' | 'replacements'>('all');
 
     // Sorted data based on user selection
-    const sortedRegularSales = useMemo(() => {
+    const sortedAllSales = useMemo(() => {
         if (!reportData) return [];
-        const sales = [...reportData.regularSales];
+        const sales = [...reportData.allSales];
         if (sortBy === 'billNo') {
             return sales.sort((a, b) => compareBillNos(String(a.billNo), String(b.billNo)));
         }
         return sales.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     }, [reportData, sortBy]);
 
-    const sortedReplacementSales = useMemo(() => {
-        if (!reportData) return [];
-        const sales = [...reportData.exchangeReplacementSales];
-        if (sortBy === 'billNo') {
-            return sales.sort((a, b) => compareBillNos(String(a.billNo), String(b.billNo)));
-        }
-        return sales.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-    }, [reportData, sortBy]);
+    const sortedRegularSales = useMemo(() => {
+        return sortedAllSales.filter((s) => !isReplacementSale(s));
+    }, [sortedAllSales]);
+
 
     const sortedDailySummaries = useMemo(() => {
         if (!reportData) return [];
@@ -1554,19 +1556,19 @@ export const Reports: React.FC = () => {
 
                     {/* Summary Stats */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div className="card p-4 border-l-4 border-blue-500">
+                        <div className="card p-4">
                             <p className="text-xs text-gray-500 dark:text-gray-400">Total GST Invoices</p>
                             <p className="text-2xl font-bold">{a.count}</p>
                         </div>
-                        <div className="card p-4 border-l-4 border-green-500">
+                        <div className="card p-4">
                             <p className="text-xs text-gray-500 dark:text-gray-400">Taxable Value</p>
                             <p className="text-2xl font-bold">{formatIndianCurrency(a.taxableValue)}</p>
                         </div>
-                        <div className="card p-4 border-l-4 border-purple-500">
+                        <div className="card p-4">
                             <p className="text-xs text-gray-500 dark:text-gray-400">Total GST</p>
                             <p className="text-2xl font-bold">{formatIndianCurrency(a.totalTax)}</p>
                         </div>
-                        <div className="card p-4 border-l-4 border-orange-500">
+                        <div className="card p-4">
                             <p className="text-xs text-gray-500 dark:text-gray-400">Grand Total</p>
                             <p className="text-2xl font-bold">{formatIndianCurrency(a.grandTotal)}</p>
                         </div>
@@ -1703,7 +1705,7 @@ export const Reports: React.FC = () => {
                                                     : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                                             }`}
                                         >
-                                            All Sections ({reportData.regularSales.length + reportData.exchangeReplacementSales.length})
+                                            All Invoices ({reportData.allSales.length})
                                         </button>
                                         <button
                                             type="button"
@@ -1714,7 +1716,7 @@ export const Reports: React.FC = () => {
                                                     : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                                             }`}
                                         >
-                                            Tax Invoices & Turnover ({reportData.regularSales.length})
+                                            Tax Invoices ({reportData.regularSales.length})
                                         </button>
                                         <button
                                             type="button"
@@ -1732,200 +1734,130 @@ export const Reports: React.FC = () => {
                             )}
 
                             {/* Invoices Table */}
-                            {(detailedFilter === 'all' || detailedFilter === 'fresh' || detailedFilter === 'replacements') && (
-                                <div className="card">
-                                    <div className="flex items-center justify-between mb-3">
-                                        <h4 className="font-bold">GST Invoices & Sales Register</h4>
-                                        <span className="text-xs text-gray-500 font-medium">{a.count} bills</span>
-                                    </div>
-                                    <div className="overflow-x-auto">
-                                        <table className="w-full text-sm">
-                                            <thead>
-                                                <tr className="border-b dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
-                                                    <th className="text-left py-2 px-3">Date</th>
-                                                    <th className="text-center py-2 px-3">Bill No</th>
-                                                    <th className="text-right py-2 px-3">Gross Amount</th>
-                                                    <th className="text-right py-2 px-3">Exchange Credit</th>
-                                                    <th className="text-right py-2 px-3">Discount</th>
-                                                    <th className="text-right py-2 px-3">Taxable</th>
-                                                    <th className="text-right py-2 px-3">CGST</th>
-                                                    <th className="text-right py-2 px-3">SGST</th>
-                                                    <th className="text-right py-2 px-3">Grand Total</th>
-                                                    <th className="text-center py-2 px-3">Payment</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {(() => {
-                                                    const displayedSales = sortedRegularSales.filter((sale) => {
-                                                        if (detailedFilter === 'fresh') return !isReplacementSale(sale);
-                                                        if (detailedFilter === 'replacements') return isReplacementSale(sale);
-                                                        return true;
-                                                    });
+                            {(() => {
+                                const displayedSales = sortedAllSales.filter((sale) => {
+                                    if (detailedFilter === 'fresh') return !isReplacementSale(sale);
+                                    if (detailedFilter === 'replacements') return isReplacementSale(sale);
+                                    return true;
+                                });
 
-                                                    if (displayedSales.length === 0) {
-                                                        return (
-                                                            <tr>
-                                                                <td colSpan={10} className="text-center py-6 text-gray-400 text-sm">
-                                                                    No invoices in this view
-                                                                </td>
-                                                            </tr>
-                                                        );
-                                                    }
+                                const displayedTotals = displayedSales.reduce(
+                                    (acc, s) => {
+                                        acc.subtotal += s.subtotal;
+                                        acc.exchangeCredit += (s.exchangeCredit || 0);
+                                        acc.discount += s.discount;
+                                        acc.taxableValue += (s.taxableValue !== undefined ? s.taxableValue : (s.subtotal - s.discount));
+                                        acc.cgst += (s.cgst || 0);
+                                        acc.sgst += (s.sgst || 0);
+                                        acc.grandTotal += s.grandTotal;
+                                        return acc;
+                                    },
+                                    { subtotal: 0, exchangeCredit: 0, discount: 0, taxableValue: 0, cgst: 0, sgst: 0, grandTotal: 0 }
+                                );
 
-                                                    return displayedSales.map((sale) => {
-                                                        const pb = getPaymentBreakdown(sale);
-                                                        const payModes: string[] = [];
-                                                        if (pb.cash > 0) payModes.push('Cash');
-                                                        if (pb.upi > 0) payModes.push('UPI');
-                                                        if (pb.card > 0) payModes.push('Card');
-                                                        if (payModes.length === 0 && (sale.exchangeCredit || 0) > 0) {
-                                                            payModes.push('Exchange Credit');
-                                                        }
-
-                                                        const isRep = isReplacementSale(sale);
-
-                                                        return (
-                                                            <tr key={sale.id} className={`border-b dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-800/50 ${isRep ? 'bg-amber-50/20 dark:bg-amber-950/10' : ''}`}>
-                                                                <td className="py-2 px-3">{format(new Date(sale.createdAt), 'dd/MMM/yy')}</td>
-                                                                <td className="py-2 px-3 text-center font-mono">
-                                                                    <span className="font-semibold">{sale.billNo}</span>
-                                                                    {isRep && (
-                                                                        <span className="ml-1.5 text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400">
-                                                                            (EXCHANGE)
-                                                                        </span>
-                                                                    )}
-                                                                </td>
-                                                                <td className="py-2 px-3 text-right">{formatIndianCurrency(sale.subtotal)}</td>
-                                                                <td className="py-2 px-3 text-right text-amber-600 dark:text-amber-400 font-mono">
-                                                                    {(sale.exchangeCredit || 0) > 0 ? `-${formatIndianCurrency(sale.exchangeCredit || 0)}` : '-'}
-                                                                </td>
-                                                                <td className="py-2 px-3 text-right text-red-500">{sale.discount > 0 ? `-${formatIndianCurrency(sale.discount)}` : '-'}</td>
-                                                                <td className="py-2 px-3 text-right">{formatIndianCurrency(sale.taxableValue !== undefined ? sale.taxableValue : (sale.subtotal - sale.discount))}</td>
-                                                                <td className="py-2 px-3 text-right text-gray-500">{formatIndianCurrency(sale.cgst || 0)}</td>
-                                                                <td className="py-2 px-3 text-right text-gray-500">{formatIndianCurrency(sale.sgst || 0)}</td>
-                                                                <td className="py-2 px-3 text-right font-semibold">{formatIndianCurrency(sale.grandTotal)}</td>
-                                                                <td className="py-2 px-3 text-center text-xs">{payModes.join(', ') || sale.paymentMethod}</td>
-                                                            </tr>
-                                                        );
-                                                    });
-                                                })()}
-                                            </tbody>
-                                            <tfoot>
-                                                <tr className="bg-gray-100 dark:bg-gray-800 font-bold">
-                                                    <td className="py-2 px-3">TOTAL</td>
-                                                    <td className="py-2 px-3 text-center">{a.count} bills</td>
-                                                    <td className="py-2 px-3 text-right">{formatIndianCurrency(a.subtotal)}</td>
-                                                    <td className="py-2 px-3 text-right text-amber-600 dark:text-amber-400 font-mono">
-                                                        {(a.exchangeCredit || 0) > 0 ? `-${formatIndianCurrency(a.exchangeCredit || 0)}` : '-'}
-                                                    </td>
-                                                    <td className="py-2 px-3 text-right text-red-500">-{formatIndianCurrency(a.discount)}</td>
-                                                    <td className="py-2 px-3 text-right">{formatIndianCurrency(a.taxableValue)}</td>
-                                                    <td className="py-2 px-3 text-right">{formatIndianCurrency(a.cgst)}</td>
-                                                    <td className="py-2 px-3 text-right">{formatIndianCurrency(a.sgst)}</td>
-                                                    <td className="py-2 px-3 text-right">{formatIndianCurrency(a.grandTotal)}</td>
-                                                    <td className="py-2 px-3 text-center text-xs text-gray-400 font-semibold">-</td>
-                                                </tr>
-                                            </tfoot>
-                                        </table>
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Exchange Replacement Invoices Table */}
-                            {(detailedFilter === 'all' || detailedFilter === 'replacements') && reportData.exchangeReplacementSales.length > 0 && (
-                                <div className="card border-l-4 border-amber-500">
-                                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
-                                        <div>
-                                            <div className="flex items-center gap-2">
-                                                <h4 className="font-bold text-amber-900 dark:text-amber-200">Exchange Replacement Invoices</h4>
-                                                <span className="badge py-0.5 px-2 bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 text-xs">
-                                                    Non-Revenue / Exchange Adjustment
-                                                </span>
-                                            </div>
-                                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                                                Bills issued for returned goods. Base amounts are offset by returned goods to prevent double taxation.
-                                            </p>
+                                return (
+                                    <div className="card">
+                                        <div className="flex items-center justify-between mb-3">
+                                            <h4 className="font-bold">GST Invoices & Sales Register</h4>
+                                            <span className="text-xs text-gray-500 font-medium">
+                                                {displayedSales.length === a.count ? `${a.count} bills` : `${displayedSales.length} of ${a.count} bills`}
+                                            </span>
                                         </div>
-                                        <span className="text-xs font-mono font-semibold text-amber-800 dark:text-amber-300">
-                                            {reportData.exchangeReplacementTotals.count} bills
-                                        </span>
-                                    </div>
-                                    <div className="overflow-x-auto">
-                                        <table className="w-full text-sm">
-                                            <thead>
-                                                <tr className="border-b dark:border-gray-700 bg-amber-50/50 dark:bg-amber-950/20">
-                                                    <th className="text-left py-2 px-3">Date</th>
-                                                    <th className="text-center py-2 px-3">Bill No</th>
-                                                    <th className="text-right py-2 px-3">Subtotal</th>
-                                                    <th className="text-right py-2 px-3">Discount</th>
-                                                    <th className="text-right py-2 px-3">Taxable</th>
-                                                    <th className="text-right py-2 px-3">CGST</th>
-                                                    <th className="text-right py-2 px-3">SGST</th>
-                                                    <th className="text-right py-2 px-3">Replacement Value</th>
-                                                    <th className="text-center py-2 px-3">Payment</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {sortedReplacementSales.map((sale) => {
-                                                    const pb = getPaymentBreakdown(sale);
-                                                    const payModes: string[] = [];
-                                                    if (pb.cash > 0) payModes.push('Cash');
-                                                    if (pb.upi > 0) payModes.push('UPI');
-                                                    if (pb.card > 0) payModes.push('Card');
-                                                    if (payModes.length === 0 && (sale.exchangeCredit || 0) > 0) {
-                                                        payModes.push('Exchange Credit');
-                                                    }
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm">
+                                                <thead>
+                                                    <tr className="border-b dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
+                                                        <th className="text-left py-2 px-3">Date</th>
+                                                        <th className="text-center py-2 px-3">Bill No</th>
+                                                        <th className="text-right py-2 px-3">Gross Amount</th>
+                                                        <th className="text-right py-2 px-3">Exchange Credit</th>
+                                                        <th className="text-right py-2 px-3">Discount</th>
+                                                        <th className="text-right py-2 px-3">Taxable</th>
+                                                        <th className="text-right py-2 px-3">CGST</th>
+                                                        <th className="text-right py-2 px-3">SGST</th>
+                                                        <th className="text-right py-2 px-3">Grand Total</th>
+                                                        <th className="text-center py-2 px-3">Payment</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {displayedSales.length === 0 ? (
+                                                        <tr>
+                                                            <td colSpan={10} className="text-center py-6 text-gray-400 text-sm">
+                                                                No invoices in this view
+                                                            </td>
+                                                        </tr>
+                                                    ) : (
+                                                        displayedSales.map((sale) => {
+                                                            const pb = getPaymentBreakdown(sale);
+                                                            const payModes: string[] = [];
+                                                            if (pb.cash > 0) payModes.push('Cash');
+                                                            if (pb.upi > 0) payModes.push('UPI');
+                                                            if (pb.card > 0) payModes.push('Card');
+                                                            if (payModes.length === 0 && (sale.exchangeCredit || 0) > 0) {
+                                                                payModes.push('Exchange Credit');
+                                                            }
 
-                                                    return (
-                                                        <tr key={sale.id} className="border-b dark:border-gray-700/50 hover:bg-amber-50/30 dark:hover:bg-amber-950/10">
-                                                            <td className="py-2 px-3">{format(new Date(sale.createdAt), 'dd/MMM/yy')}</td>
-                                                            <td className="py-2 px-3 text-center font-mono">
-                                                                <span className="font-semibold">{sale.billNo}</span>
-                                                                <span className="ml-1.5 text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400">
-                                                                    (REPLACEMENT)
-                                                                </span>
-                                                            </td>
-                                                            <td className="py-2 px-3 text-right">{formatIndianCurrency(sale.subtotal)}</td>
-                                                            <td className="py-2 px-3 text-right text-red-500">{sale.discount > 0 ? `-${formatIndianCurrency(sale.discount)}` : '-'}</td>
-                                                            <td className="py-2 px-3 text-right">{formatIndianCurrency(sale.subtotal - sale.discount)}</td>
-                                                            <td className="py-2 px-3 text-right text-gray-500">{formatIndianCurrency(sale.cgst || 0)}</td>
-                                                            <td className="py-2 px-3 text-right text-gray-500">{formatIndianCurrency(sale.sgst || 0)}</td>
-                                                            <td className="py-2 px-3 text-right font-semibold">{formatIndianCurrency(sale.grandTotal)}</td>
-                                                            <td className="py-2 px-3 text-center text-xs">
-                                                                {payModes.length > 0 ? payModes.join(', ') : sale.paymentMethod}
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                })}
-                                            </tbody>
-                                            <tfoot>
-                                                {(() => {
-                                                    const repTotals = reportData.exchangeReplacementTotals;
-                                                    const netPaidCash = repTotals.payment.cash;
-                                                    const netPaidUpi = repTotals.payment.upi;
-                                                    const netPaidCard = repTotals.payment.card;
-                                                    const netPaidTotal = netPaidCash + netPaidUpi + netPaidCard;
-                                                    return (
-                                                        <tr className="bg-amber-100/70 dark:bg-amber-950/40 font-bold">
-                                                            <td className="py-2 px-3">TOTAL</td>
-                                                            <td className="py-2 px-3 text-center">{repTotals.count} bills</td>
-                                                            <td className="py-2 px-3 text-right">{formatIndianCurrency(repTotals.subtotal)}</td>
-                                                            <td className="py-2 px-3 text-right text-red-500">-{formatIndianCurrency(repTotals.discount)}</td>
-                                                            <td className="py-2 px-3 text-right">{formatIndianCurrency(repTotals.taxableValue)}</td>
-                                                            <td className="py-2 px-3 text-right">{formatIndianCurrency(repTotals.cgst)}</td>
-                                                            <td className="py-2 px-3 text-right">{formatIndianCurrency(repTotals.sgst)}</td>
-                                                            <td className="py-2 px-3 text-right">{formatIndianCurrency(repTotals.grandTotal)}</td>
-                                                            <td className="py-2 px-3 text-center text-xs text-emerald-700 dark:text-emerald-400 font-semibold">
-                                                                {netPaidTotal > 0 ? `Net Extra Paid: ${formatIndianCurrency(netPaidTotal)}` : 'Offset by Exchange'}
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                })()}
-                                            </tfoot>
-                                        </table>
+                                                            const isRep = isReplacementSale(sale);
+
+                                                            return (
+                                                                <tr key={sale.id} className={`border-b dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-800/50 ${isRep ? 'bg-amber-50/20 dark:bg-amber-950/10' : ''}`}>
+                                                                    <td className="py-2 px-3">{format(new Date(sale.createdAt), 'dd/MMM/yy')}</td>
+                                                                    <td className="py-2 px-3 text-center font-mono">
+                                                                        <span className="font-semibold">{sale.billNo}</span>
+                                                                        {isRep && (
+                                                                            <span className="ml-1.5 text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400">
+                                                                                (EXCHANGE)
+                                                                            </span>
+                                                                        )}
+                                                                        {sale.reportStatus === 'PARTIALLY_REFUNDED' && (
+                                                                            <span className="ml-1.5 text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400">
+                                                                                (PARTIAL REFUND)
+                                                                            </span>
+                                                                        )}
+                                                                        {sale.reportStatus === 'REFUNDED' && (
+                                                                            <span className="ml-1.5 text-[10px] uppercase font-bold text-red-600 dark:text-red-400">
+                                                                                (REFUNDED)
+                                                                            </span>
+                                                                        )}
+                                                                    </td>
+                                                                    <td className="py-2 px-3 text-right">{formatIndianCurrency(sale.subtotal)}</td>
+                                                                    <td className="py-2 px-3 text-right text-amber-600 dark:text-amber-400 font-mono">
+                                                                        {(sale.exchangeCredit || 0) > 0 ? `-${formatIndianCurrency(sale.exchangeCredit || 0)}` : '-'}
+                                                                    </td>
+                                                                    <td className="py-2 px-3 text-right text-red-500">{sale.discount > 0 ? `-${formatIndianCurrency(sale.discount)}` : '-'}</td>
+                                                                    <td className="py-2 px-3 text-right">{formatIndianCurrency(sale.taxableValue !== undefined ? sale.taxableValue : (sale.subtotal - sale.discount))}</td>
+                                                                    <td className="py-2 px-3 text-right text-gray-500">{formatIndianCurrency(sale.cgst || 0)}</td>
+                                                                    <td className="py-2 px-3 text-right text-gray-500">{formatIndianCurrency(sale.sgst || 0)}</td>
+                                                                    <td className="py-2 px-3 text-right font-semibold">{formatIndianCurrency(sale.grandTotal)}</td>
+                                                                    <td className="py-2 px-3 text-center text-xs">{payModes.join(', ') || sale.paymentMethod}</td>
+                                                                </tr>
+                                                            );
+                                                        })
+                                                    )}
+                                                </tbody>
+                                                <tfoot>
+                                                    <tr className="bg-gray-100 dark:bg-gray-800 font-bold">
+                                                        <td className="py-2 px-3">TOTAL</td>
+                                                        <td className="py-2 px-3 text-center">{displayedSales.length} bills</td>
+                                                        <td className="py-2 px-3 text-right">{formatIndianCurrency(displayedTotals.subtotal)}</td>
+                                                        <td className="py-2 px-3 text-right text-amber-600 dark:text-amber-400 font-mono">
+                                                            {displayedTotals.exchangeCredit > 0 ? `-${formatIndianCurrency(displayedTotals.exchangeCredit)}` : '-'}
+                                                        </td>
+                                                        <td className="py-2 px-3 text-right text-red-500">
+                                                            {displayedTotals.discount > 0 ? `-${formatIndianCurrency(displayedTotals.discount)}` : '-'}
+                                                        </td>
+                                                        <td className="py-2 px-3 text-right">{formatIndianCurrency(displayedTotals.taxableValue)}</td>
+                                                        <td className="py-2 px-3 text-right">{formatIndianCurrency(displayedTotals.cgst)}</td>
+                                                        <td className="py-2 px-3 text-right">{formatIndianCurrency(displayedTotals.sgst)}</td>
+                                                        <td className="py-2 px-3 text-right">{formatIndianCurrency(displayedTotals.grandTotal)}</td>
+                                                        <td className="py-2 px-3 text-center text-xs text-gray-400 font-semibold">-</td>
+                                                    </tr>
+                                                </tfoot>
+                                            </table>
+                                        </div>
                                     </div>
-                                </div>
-                            )}
+                                );
+                            })()}
 
                             {/* Tax Rate Breakdown */}
                             {a.taxSlabs.length > 0 && (

@@ -1,3 +1,4 @@
+import {Profit} from './pages/Profit';
 import React from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Login } from './pages/Login';
@@ -12,6 +13,10 @@ import { ActivityPage } from './pages/Activity';
 import { Users } from './pages/Users';
 import { Permissions } from './pages/Permissions';
 import { Forecasting } from './pages/Forecasting';
+import { CashDrawerPage } from './pages/CashDrawer';
+import { Stock } from './pages/Stock';
+import { Purchases } from './pages/Purchases';
+import { Expenses } from './pages/Expenses';
 import { MainLayout } from './components/Layout/MainLayout';
 import { WindowTitleBar } from './components/Layout/WindowTitleBar';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
@@ -19,7 +24,7 @@ import { ToastContainer } from './components/ui/Toast';
 import { useAuthStore } from './store/authStore';
 
 type UserPermKey = 'permViewReports' | 'permManageProducts' | 'permViewSales' |
-    'permViewGstReports' | 'permEditSettings' | 'permManageUsers' | 'permViewInsights';
+    'permViewGstReports' | 'permEditSettings' | 'permManageUsers' | 'permViewInsights' | 'permManageCashDrawer' | 'permManageInventory';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -77,6 +82,17 @@ function App() {
                                     </PermissionRoute>
                                 }
                             />
+                            <Route
+                                path="stock"
+                                element={
+                                    <PermissionRoute perm="permManageInventory">
+                                        <PageBoundary><Stock /></PageBoundary>
+                                    </PermissionRoute>
+                                }
+                            />
+                            <Route path="profit" element={<PageBoundary><Profit /></PageBoundary>} />
+                            <Route path="expenses" element={<PermissionRoute perm="permManageCashDrawer"><PageBoundary><Expenses /></PageBoundary></PermissionRoute>} />
+                            <Route path="purchases" element={<PermissionRoute perm="permManageInventory"><PageBoundary><Purchases /></PageBoundary></PermissionRoute>} />
                             <Route path="customers" element={<PageBoundary><Customers /></PageBoundary>} />
                             <Route
                                 path="sales"
@@ -127,6 +143,14 @@ function App() {
                                 }
                             />
                             <Route
+                                path="cash-drawer"
+                                element={
+                                    <PermissionRoute perm="permManageCashDrawer">
+                                        <PageBoundary><CashDrawerPage /></PageBoundary>
+                                    </PermissionRoute>
+                                }
+                            />
+                            <Route
                                 path="forecasting"
                                 element={
                                     <InsightsRoute>
@@ -143,3 +167,4 @@ function App() {
 }
 
 export default App;
+

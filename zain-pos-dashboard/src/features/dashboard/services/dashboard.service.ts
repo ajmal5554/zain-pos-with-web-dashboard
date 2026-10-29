@@ -27,8 +27,8 @@ export interface DashboardStats {
 // Helper: resolve a settled result, returning fallback on failure
 function settled<T>(result: PromiseSettledResult<{ data: T }>, fallback: T): T {
     if (result.status === 'fulfilled') return result.value.data;
-    console.warn('Dashboard request failed:', (result as PromiseRejectedResult).reason?.message);
-    return fallback;
+    void fallback;
+    throw result.reason;
 }
 
 export const dashboardService = {
@@ -43,7 +43,7 @@ export const dashboardService = {
             ? { 
                 startDate: startStr, 
                 endDate: endStr,
-                timezoneOffset: typeof window !== 'undefined' ? new Date().getTimezoneOffset() : -330
+                timezoneOffset: -330
               }
             : { startDate: startStr, endDate: endStr };
 
@@ -52,7 +52,7 @@ export const dashboardService = {
             api.get('/sales/summary', { params: { startDate: startStr, endDate: endStr } }),
             api.get(chartEndpoint, { params: chartParams }),
             api.get('/sales/audit-payment-modes', { params: { startDate: startStr, endDate: endStr } }),
-            api.get('/reports/top-products', { params: { limit: 5 } }),
+            api.get('/reports/top-products', { params: { limit: 5, startDate: startStr, endDate: endStr } }),
             api.get('/inventory/low-stock', { params: { threshold: 5 } })
         ]);
 

@@ -4,6 +4,7 @@ import { DEMO_MODE_KEY } from './demo';
 
 const api = axios.create({
     baseURL: `${API_URL}/api`,
+    timeout: 30000,
     headers: {
         'Content-Type': 'application/json',
     },
@@ -22,9 +23,10 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
     (response) => response,
     (error) => {
-        if (error.response?.status === 401 && localStorage.getItem(DEMO_MODE_KEY) !== 'true') {
+        if (error.response?.status === 401 && localStorage.getItem(DEMO_MODE_KEY) !== 'true' && error.config?.url !== '/auth/login') {
             localStorage.removeItem('token');
-            window.location.href = '/login';
+            localStorage.removeItem('user');
+            if (window.location.pathname !== '/login') window.location.replace('/login');
         }
         return Promise.reject(error);
     }

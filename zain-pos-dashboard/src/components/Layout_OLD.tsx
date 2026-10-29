@@ -10,8 +10,6 @@ import {
     LogOut,
     Menu,
     X,
-    Sun,
-    Moon,
     Activity,
     Bell
 } from 'lucide-react';
@@ -22,20 +20,9 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
     const [sidebarOpen, setSidebarOpen] = useState(true);
-    const [darkMode, setDarkMode] = useState(false);
-
     const { user, logout } = useAuth();
     const location = useLocation();
     const navigate = useNavigate();
-
-    // Dark Mode Effect
-    useEffect(() => {
-        if (darkMode) {
-            document.documentElement.classList.add('dark');
-        } else {
-            document.documentElement.classList.remove('dark');
-        }
-    }, [darkMode]);
 
     const navigation = [
         { name: 'Dashboard', href: '/', icon: LayoutDashboard },
@@ -127,9 +114,6 @@ export default function Layout({ children }: LayoutProps) {
                             {/* Simple dot for now */}
                             <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full"></span>
                         </Link>
-                        <button onClick={() => setDarkMode(!darkMode)} className="p-2">
-                            {darkMode ? <Sun size={20} /> : <Moon size={20} />}
-                        </button>
                         <button onClick={handleLogout} className="p-2 text-red-500">
                             <LogOut size={20} />
                         </button>
@@ -147,13 +131,6 @@ export default function Layout({ children }: LayoutProps) {
                             {/* Simple dot for now, ideally connected to real unread state */}
                             <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full"></span>
                         </Link>
-
-                        <button
-                            onClick={() => setDarkMode(!darkMode)}
-                            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
-                        >
-                            {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-                        </button>
                         <div className="flex items-center gap-2">
                             <div className="w-8 h-8 rounded-full bg-primary-100 flex items-center justify-center text-primary-700 font-bold">
                                 {user?.username?.charAt(0).toUpperCase()}

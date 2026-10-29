@@ -7,6 +7,16 @@ type ShopBrand = {
 };
 
 export const WindowTitleBar: React.FC = () => {
+    // If running in a regular web browser, hide window title bar controls
+    const isElectron = typeof window !== 'undefined' && (
+        navigator.userAgent.toLowerCase().includes('electron') ||
+        !!(window as any).process?.versions?.electron
+    );
+
+    if (!isElectron) {
+        return null;
+    }
+
     const [isMaximized, setIsMaximized] = React.useState(false);
     const [shopBrand, setShopBrand] = React.useState<ShopBrand>({
         shopName: 'ZAIN GENTS PALACE POS',
@@ -18,7 +28,7 @@ export const WindowTitleBar: React.FC = () => {
 
         const syncWindowState = async () => {
             try {
-                const result = await window.electronAPI.app.getWindowState();
+                const result = await window.electronAPI?.app?.getWindowState?.();
                 if (result?.success) {
                     setIsMaximized(!!result.isMaximized);
                 }
@@ -28,9 +38,11 @@ export const WindowTitleBar: React.FC = () => {
         };
 
         syncWindowState();
-        unsubscribe = window.electronAPI.app.onWindowStateChange((state: { isMaximized: boolean }) => {
-            setIsMaximized(!!state.isMaximized);
-        });
+        if (window.electronAPI?.app?.onWindowStateChange) {
+            unsubscribe = window.electronAPI.app.onWindowStateChange((state: { isMaximized: boolean }) => {
+                setIsMaximized(!!state.isMaximized);
+            });
+        }
 
         return () => unsubscribe();
     }, []);
@@ -38,7 +50,7 @@ export const WindowTitleBar: React.FC = () => {
     React.useEffect(() => {
         const loadShopBrand = async () => {
             try {
-                const result = await window.electronAPI.settings.get({ key: 'SHOP_SETTINGS' });
+                const result = await window.electronAPI?.settings?.get?.({ key: 'SHOP_SETTINGS' });
                 if (result?.success && result.data) {
                     const parsed = JSON.parse(result.data as string);
                     setShopBrand({
@@ -69,7 +81,7 @@ export const WindowTitleBar: React.FC = () => {
 
     return (
         <div
-            className="h-8 bg-gray-50 dark:bg-dark-bg border-b border-gray-200 dark:border-dark-border flex items-center justify-between pl-4"
+            className="h-8 relative z-[60] bg-gray-50 dark:bg-dark-bg border-b border-gray-200 dark:border-dark-border flex items-center justify-between pl-4"
             style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
             <div className="flex items-center gap-2 text-sm text-gray-700 select-none">
@@ -89,7 +101,7 @@ export const WindowTitleBar: React.FC = () => {
             >
                 <button
                     type="button"
-                    onClick={() => void window.electronAPI.app.minimizeWindow()}
+                    onClick={() => void window.electronAPI?.app?.minimizeWindow?.()}
                     className="w-12 h-full flex items-center justify-center text-gray-600 hover:bg-gray-100 transition-colors"
                     aria-label="Minimize window"
                 >
@@ -98,7 +110,7 @@ export const WindowTitleBar: React.FC = () => {
                 <button
                     type="button"
                     onClick={async () => {
-                        const result = await window.electronAPI.app.toggleMaximizeWindow();
+                        const result = await window.electronAPI?.app?.toggleMaximizeWindow?.();
                         if (result?.success) {
                             setIsMaximized(!!result.isMaximized);
                         }
@@ -110,7 +122,7 @@ export const WindowTitleBar: React.FC = () => {
                 </button>
                 <button
                     type="button"
-                    onClick={() => void window.electronAPI.app.closeWindow()}
+                    onClick={() => void window.electronAPI?.app?.closeWindow?.()}
                     className="w-12 h-full flex items-center justify-center text-gray-600 hover:bg-red-500 hover:text-white transition-colors"
                     aria-label="Close window"
                 >

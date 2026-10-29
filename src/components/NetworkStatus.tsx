@@ -36,6 +36,23 @@ export const NetworkStatus: React.FC<NetworkStatusProps> = ({
 
         const initializeNetworkStatus = async () => {
             try {
+                if (!window.electronAPI?.network) {
+                    setNetworkStatus({
+                        online: typeof navigator !== 'undefined' ? navigator.onLine : true,
+                        lastChecked: new Date(),
+                        checkMethod: 'navigator'
+                    });
+                    const handleOnline = () => setNetworkStatus({ online: true, lastChecked: new Date(), checkMethod: 'navigator' });
+                    const handleOffline = () => setNetworkStatus({ online: false, lastChecked: new Date(), checkMethod: 'navigator' });
+                    window.addEventListener('online', handleOnline);
+                    window.addEventListener('offline', handleOffline);
+                    unsubscribe = () => {
+                        window.removeEventListener('online', handleOnline);
+                        window.removeEventListener('offline', handleOffline);
+                    };
+                    return;
+                }
+
                 // Get initial network status
                 const initialStatus = await window.electronAPI.network.getStatus();
                 setNetworkStatus(initialStatus);

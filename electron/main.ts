@@ -1,3 +1,6 @@
+import { sendReceipt } from './receipt-printer.service';
+import {getBusinessInsights} from './insights.service';
+import {getProfitReport} from './profit.service';
 import { app, BrowserWindow, ipcMain, dialog, screen, nativeImage } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -8,6 +11,44 @@ import { cloudSync } from './sync.service';
 import { logger } from './logger';
 import { getNetworkStatusService, cleanupNetworkStatusService, type NetworkStatus } from './networkStatus.service';
 import { PermissionService, PermissionMiddleware, type UserPermissions } from './permission.service';
+import { quoteRefund, toPaise, validateRefundPayments, validateReturnQuantities } from '../src/lib/refund';
+import { getSaleEditLockReason } from '../src/lib/saleEdit';
+import { getStockOverview, getStockMovements } from './stock.service';
+import { getInventoryWorkspace } from './inventory-workspace.service';
+import { assertTrackedStockAvailable } from './tracked-stock.service';
+import {prepareStockCosts,syncSaleCosts,restoreSaleCosts,getSaleCosts} from './stock-cost.service';
+import { prepareAuditStyle, postStockBatch, adjustTrackedStock, getAuditRowStatuses, saveStockEntry } from './stock-conversion.service';
+import { getStockAuditSetup, saveStockAuditSetup } from './stock-audit-setup.service';
+import { saveLabelTemplate } from './label-template.service';
+import { receivePurchase, payPurchase, listPurchases, purchaseDetail, purchaseItems } from './purchases.service';
+import { adjustPurchase, refundPurchase } from './purchase-adjustments.service';
+import {createExpense,actOnExpense,listExpenses,expenseDetail,exportExpenses} from './expenses.service';
+import { getReturnStockOptions, resolveReturnStockRoutes, recordReturnStockRoutes } from './return-stock.service';
+import { createExcelAuditService } from './excel-audit.service';
+import {
+    listDrafts as stockDraftList,
+    getDraft as stockDraftGet,
+    createDraft as stockDraftCreate,
+    saveDraft as stockDraftSave,
+    cancelDraft as stockDraftCancel,
+    searchPreparedVariants as stockDraftSearchVariants,
+} from './stock-draft.service';
+import { escapeHtml, formatVariantDescription } from '../src/lib/catalogueDescription';
+import {
+    bindElectronSession, clearElectronSession, resolveElectronSessionUser,
+    maskSessionResult, containsSensitiveQueryField
+} from './session-auth.service';
+import {
+    saveProduct as catalogueSaveProduct,
+    getProduct as catalogueGetProduct,
+    listProducts as catalogueListProducts,
+    checkBarcode as catalogueCheckBarcode,
+    listVariants as catalogueListVariants,
+    reserveBarcode as catalogueReserveBarcode,
+    enrichCatalogueVariants,
+    ensureCatalogueSchema,
+    checkAnyVariantPrepared
+} from './catalogue.service';
 
 // Global error handling - MUST BE FIRST
 process.on('uncaughtException', (error) => {
@@ -57,6 +98,7 @@ try {
 
 let prisma: any; // Type as any to avoid TS errors with dynamic require
 let dbBootstrappedFromResource = false;
+let excelAuditService: ReturnType<typeof createExcelAuditService> | null = null;
 
 // --- PERMISSION SYSTEM ---
 
@@ -97,7 +139,19 @@ async function getUserPermissions(userId: string): Promise<UserPermissions | nul
 
         return user as UserPermissions;
     } catch (error) {
-        logger.error('Permission', 'Failed to get user permissions:', error);
+        logger.error('Permission', 'Failed to get detailed user permissions, attempting safe fallback:', error);
+        try {
+            const fallbackUser = await prisma.user.findUnique({
+                where: { id: userId },
+                select: { id: true, role: true, isActive: true }
+            });
+            if (fallbackUser) {
+                logger.warn('Permission', 'Recovered user session with baseline permissions fallback');
+                return fallbackUser as UserPermissions;
+            }
+        } catch (fallbackError) {
+            logger.error('Permission', 'Fallback permission query also failed:', fallbackError);
+        }
         return null;
     }
 }
@@ -143,6 +197,7 @@ function createSecureIpcHandler<T>(
         extractUserId?: (args: T) => string;
         extractContext?: (args: T) => any;
         requiresValidation?: boolean;
+        trustedSession?: boolean;
     } = {}
 ) {
     ipcMain.handle(channel, async (event, args: T) => {
@@ -152,7 +207,7 @@ function createSecureIpcHandler<T>(
                 options.extractUserId(args) :
                 (args as any)?.userId;
 
-            if (!userId && (options.requiresValidation !== false)) {
+            if (!options.trustedSession && !userId && (options.requiresValidation !== false)) {
                 logger.warn('Permission', `No userId provided for ${channel}`);
                 return {
                     success: false,
@@ -166,7 +221,14 @@ function createSecureIpcHandler<T>(
                 undefined;
 
             // Validate permissions
-            const validation = await validateIpcRequest(middleware, userId, context);
+            let validation: { success: boolean; error?: string; user?: UserPermissions | null };
+            if (options.trustedSession) {
+                const sessionUser = await resolveElectronSessionUser(prisma, event);
+                const permission = await middleware(sessionUser, context);
+                validation = { success: permission.allowed, error: permission.reason, user: sessionUser };
+            } else {
+                validation = await validateIpcRequest(middleware, userId, context);
+            }
 
             if (!validation.success) {
                 logger.warn('Permission', `Access denied for ${channel}: ${validation.error}`);
@@ -233,6 +295,40 @@ function validateSaleData(saleData: any): string | null {
     }
 
     return null;
+}
+
+async function checkAnyVariantPreparedSafe(tx: any, variantIds: string[]): Promise<boolean> {
+    if (!variantIds || variantIds.length === 0) return false;
+    try {
+        const tableCheck: any[] = await tx.$queryRawUnsafe(
+            `SELECT name FROM sqlite_master WHERE type='table' AND name='ProductVariantGarmentDetail'`
+        );
+        const hasGdTable = tableCheck && tableCheck.length > 0;
+
+        const pvCols: any[] = await tx.$queryRawUnsafe(`PRAGMA table_info("ProductVariant")`);
+        const hasPvCol = pvCols && pvCols.some((c: any) => c.name === 'isPrepared');
+
+        if (!hasGdTable && !hasPvCol) {
+            return false;
+        }
+
+        if (!hasGdTable || !hasPvCol) {
+            throw new Error('Catalogue preparation schema is incomplete.');
+        }
+        for (let offset = 0; offset < variantIds.length; offset += 200) {
+            const ids = variantIds.slice(offset, offset + 200);
+            const matches: any[] = await tx.$queryRawUnsafe(
+                `SELECT pv.id FROM "ProductVariant" pv
+                 LEFT JOIN "ProductVariantGarmentDetail" gd ON pv.id = gd.variantId
+                 WHERE pv.id IN (${ids.map(() => '?').join(',')})
+                   AND (COALESCE(pv.isPrepared, 0) <> 0 OR COALESCE(gd.isPrepared, 0) <> 0) LIMIT 1`, ...ids
+            );
+            if (matches && matches.length > 0) return true;
+        }
+        return false;
+    } catch {
+        throw new Error('Unable to verify stock preparation status. Please retry before billing.');
+    }
 }
 
 function validateProductData(data: any): string | null {
@@ -650,7 +746,11 @@ function parseFlexibleDate(value: any) {
 async function restoreDatabaseFromSource(sourcePath: string, targetPath: string) {
     await prisma.$disconnect();
     await new Promise(r => setTimeout(r, 1000));
-    fs.copyFileSync(sourcePath, targetPath);
+
+    // Skip copy if source and target are the same (already in place, just re-init Prisma)
+    if (path.resolve(sourcePath) !== path.resolve(targetPath)) {
+        fs.copyFileSync(sourcePath, targetPath);
+    }
 
     prisma = new PrismaClient({
         datasources: {
@@ -763,6 +863,60 @@ async function ensureSchemaUpdated() {
                     CONSTRAINT "RefundPayment_refundId_fkey" FOREIGN KEY ("refundId") REFERENCES "Refund" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
                 )
             `);
+        }
+
+        if (!hasTable('SyncQueue')) {
+            await prisma.$executeRawUnsafe(`
+                CREATE TABLE IF NOT EXISTS "SyncQueue" (
+                    "id" TEXT NOT NULL PRIMARY KEY,
+                    "action" TEXT NOT NULL DEFAULT 'CREATE',
+                    "model" TEXT NOT NULL,
+                    "data" TEXT NOT NULL,
+                    "status" TEXT NOT NULL DEFAULT 'PENDING',
+                    "retryCount" INTEGER NOT NULL DEFAULT 0,
+                    "error" TEXT,
+                    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            `);
+        }
+
+        // --- Cash Drawer / Register Reconciliation tables ---
+        if (!hasTable('CashRegister')) {
+            await prisma.$executeRawUnsafe(`
+                CREATE TABLE IF NOT EXISTS "CashRegister" (
+                    "id" TEXT NOT NULL PRIMARY KEY,
+                    "date" TEXT NOT NULL,
+                    "openedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    "closedAt" DATETIME,
+                    "openingFloat" REAL NOT NULL DEFAULT 0.0,
+                    "closingExpected" REAL,
+                    "closingActual" REAL,
+                    "difference" REAL,
+                    "status" TEXT NOT NULL DEFAULT 'OPEN',
+                    "notes" TEXT
+                )
+            `);
+            await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "CashRegister_date_idx" ON "CashRegister"("date")`);
+            await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "CashRegister_status_idx" ON "CashRegister"("status")`);
+            console.log('Created CashRegister table');
+        }
+
+        if (!hasTable('CashDrawerTx')) {
+            await prisma.$executeRawUnsafe(`
+                CREATE TABLE IF NOT EXISTS "CashDrawerTx" (
+                    "id" TEXT NOT NULL PRIMARY KEY,
+                    "registerId" TEXT NOT NULL,
+                    "type" TEXT NOT NULL,
+                    "category" TEXT NOT NULL,
+                    "amount" REAL NOT NULL,
+                    "note" TEXT NOT NULL,
+                    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT "CashDrawerTx_registerId_fkey" FOREIGN KEY ("registerId") REFERENCES "CashRegister" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+                )
+            `);
+            await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "CashDrawerTx_registerId_idx" ON "CashDrawerTx"("registerId")`);
+            console.log('Created CashDrawerTx table');
         }
 
         // Fix billNo INTEGER → TEXT (v1 databases have INTEGER, v2 requires TEXT)
@@ -911,6 +1065,9 @@ async function ensureSchemaUpdated() {
                 }
             }
         }
+
+        // Ensure ST-02 Catalogue schema (ProductVariantGarmentDetail & isPrepared column)
+        await ensureCatalogueSchema(prisma);
     } catch (error) {
         console.error('Migration error:', error);
     }
@@ -1069,6 +1226,26 @@ async function initializePrisma() {
         console.log('Note: Running in DEV mode uses the project folder DB by default.');
     }
     console.log('---------------------------');
+
+    // Guard: If the database file exists but is corrupt (e.g. from a forced Electron restart),
+    // delete it and recreate a fresh one so the app can start.
+    if (fs.existsSync(dbPath)) {
+        try {
+            const fd = fs.openSync(dbPath, 'r');
+            const header = Buffer.alloc(16);
+            fs.readSync(fd, header, 0, 16, 0);
+            fs.closeSync(fd);
+            const headerStr = header.toString('ascii', 0, 15);
+            if (headerStr !== 'SQLite format 3') {
+                console.error(`DATABASE CORRUPT: Header is "${headerStr}" instead of "SQLite format 3". Recreating...`);
+                fs.unlinkSync(dbPath);
+                try { fs.unlinkSync(dbPath + '-wal'); } catch (_) {}
+                try { fs.unlinkSync(dbPath + '-shm'); } catch (_) {}
+            }
+        } catch (headerErr) {
+            console.warn('Could not verify DB header, continuing:', headerErr);
+        }
+    }
 
     prisma = new PrismaClient({
         datasources: {
@@ -1265,6 +1442,15 @@ app.whenReady().then(async () => {
     try {
         app.setAppUserModelId('com.zaingentspalace.pos');
         await initializePrisma();
+
+        excelAuditService = createExcelAuditService({
+            filePath: path.join(app.getPath('userData'), 'excel-audit.json'),
+        });
+        try {
+            await excelAuditService.initialize();
+        } catch {
+            logger.warn('StockAudit', 'Excel audit review data could not be loaded. Current billing remains available.');
+        }
 
         // Initialize Sync Service with Prisma
         cloudSync.setPrismaInstance(prisma);
@@ -1614,6 +1800,7 @@ createSecureIpcHandler(
             // Customers
             'customer.findUnique': PermissionMiddleware.authenticated,
             'customer.findMany': PermissionMiddleware.authenticated,
+            'customer.count': PermissionMiddleware.authenticated,
             'customer.create': PermissionMiddleware.authenticated,
             'customer.update': PermissionMiddleware.authenticated,
             'customer.delete': PermissionMiddleware.authenticated,
@@ -1660,6 +1847,34 @@ createSecureIpcHandler(
             return { success: false, error: `Method '${method}' is not permitted. Use specific handlers for mutations.` };
         }
 
+        const isMutation = ['create', 'update', 'updateMany', 'delete', 'upsert'].includes(method);
+        const mutationData = method === 'upsert' ? [args?.create, args?.update] : [args?.data];
+        if (isMutation && mutationData.some(data => data && Object.values(data).some(
+            value => value !== null && typeof value === 'object' && !(value instanceof Date)
+        ))) {
+            return { success: false, error: 'Nested database writes are not permitted. Use the dedicated workflow.' };
+        }
+        if (isMutation && ['product', 'productVariant'].includes(model)) {
+            // Catalogue changes must pass the atomic ST-02 service. Preserve the
+            // existing soft-delete UI without reopening stock/barcode write access.
+            const keys = Object.keys(args?.data || {});
+            const isSoftDeactivate = ['update', 'updateMany'].includes(method)
+                && keys.length === 1 && keys[0] === 'isActive' && args.data.isActive === false;
+            if (!isSoftDeactivate) {
+                return { success: false, error: 'Use Products to save catalogue changes. Stock changes require the stock workflow.' };
+            }
+        }
+        if (isMutation && model === 'category') {
+            // Reject nested Product/Variant writes hidden inside category mutations.
+            if (!['create', 'update', 'delete'].includes(method)
+                || Object.keys(args?.data || {}).some(key => !['id', 'name'].includes(key))
+                || Object.values(args?.data || {}).some(value => value !== null && typeof value === 'object')) {
+                return { success: false, error: 'Nested catalogue changes are not permitted.' };
+            }
+        }
+        if (user.role !== 'ADMIN' && !user.permViewCostPrice && containsSensitiveQueryField(args, 'costPrice')) {
+            return { success: false, error: 'Permission denied: cost prices are restricted.' };
+        }
         const result = await (prisma as any)[model][method](args);
 
         // Auto-sync products when created or updated
@@ -1668,9 +1883,10 @@ createSecureIpcHandler(
             debouncedProductSync();
         }
 
-        return { success: true, data: stripPasswords(result) };
+        return { success: true, data: maskSessionResult(result, user) };
     },
     {
+        trustedSession: true,
         extractUserId: (args: any) => args.userId,
         extractContext: (args: any) => ({
             model: args.model,
@@ -1727,6 +1943,11 @@ createSecureIpcHandler(
     }
 );
 
+createSecureIpcHandler('settings:saveLabelTemplate', PermissionMiddleware.editSettings, async (_event, input: any, user) => {
+    try { return { success: true, data: await saveLabelTemplate(prisma, input, user) }; }
+    catch (error) { return { success: false, error: error instanceof Error ? error.message : 'Could not save label settings.' }; }
+}, { trustedSession: true });
+
 // Helper for Local Timestamp (Fixes 5:30 AM Bug)
 function getLocalISOString() {
     const tzoffset = (new Date()).getTimezoneOffset() * 60000; //offset in milliseconds
@@ -1763,6 +1984,36 @@ ipcMain.handle('sales:checkout', async (_event, saleData) => {
       result = await prisma.$transaction(async (tx: any) => {
         try {
             const createdAt = new Date();  // Always use current timestamp for invoice
+
+            // Validate user permissions and discount allowance
+            if (saleData.userId) {
+                const checkoutUser = await tx.user.findUnique({
+                    where: { id: saleData.userId },
+                    select: { role: true, maxDiscount: true, isActive: true }
+                });
+                if (!checkoutUser || !checkoutUser.isActive) {
+                    throw new Error('User account is invalid or deactivated.');
+                }
+                if (checkoutUser.role !== 'ADMIN') {
+                    const subtotalNum = Number(saleData.subtotal || 0);
+                    const discountNum = Number(saleData.discount || 0);
+                    const discountPercent = subtotalNum > 0 ? (discountNum / subtotalNum) * 100 : 0;
+                    const maxAllowedPercent = Number(checkoutUser.maxDiscount || 0);
+                    if (discountPercent > maxAllowedPercent + 0.05) {
+                        throw new Error(`Discount (${discountPercent.toFixed(1)}%) exceeds allowed limit of ${maxAllowedPercent}%.`);
+                    }
+                }
+            }
+
+            // ST-02: Reject sale of variants in preparation state
+            const checkoutVariantIds = (saleData.items || []).map((i: any) => i.variantId).filter(Boolean);
+            if (await checkAnyVariantPreparedSafe(tx, checkoutVariantIds)) {
+                throw new Error('Stock conversion pending for this item. Cannot be sold until converted.');
+            }
+            await assertTrackedStockAvailable(tx, (saleData.items || []).map((item: any) => ({
+                variantId: item.variantId, quantity: item.quantity,
+            })));
+
             const net = roundCurrency(Number(saleData.subtotal || 0) - Number(saleData.discount || 0));
             const taxable = roundCurrency(net / 1.05);
             const taxAmount = roundCurrency(net - taxable);
@@ -1815,6 +2066,53 @@ ipcMain.handle('sales:checkout', async (_event, saleData) => {
                 include: { items: true, payments: true }
             });
 
+            // Auto-register / sync customer to Customer directory table if not a generic walk-in
+            const checkoutCustName = (saleData.customerName || '').trim();
+            const checkoutCustPhone = (saleData.customerPhone || '').trim() || null;
+            const isCheckoutWalkIn = !checkoutCustName || checkoutCustName.toLowerCase() === 'walk-in customer' || checkoutCustName.toLowerCase() === 'walk-in';
+
+            if (!isCheckoutWalkIn || checkoutCustPhone) {
+                try {
+                    if (checkoutCustPhone) {
+                        const existing = await tx.customer.findUnique({
+                            where: { phone: checkoutCustPhone }
+                        });
+                        if (!existing) {
+                            await tx.customer.create({
+                                data: {
+                                    name: isCheckoutWalkIn ? `Customer ${checkoutCustPhone}` : checkoutCustName,
+                                    phone: checkoutCustPhone,
+                                    isSynced: false
+                                }
+                            });
+                        } else if (!isCheckoutWalkIn && existing.name.startsWith('Customer ') && checkoutCustName !== existing.name) {
+                            await tx.customer.update({
+                                where: { id: existing.id },
+                                data: { name: checkoutCustName, isSynced: false }
+                            });
+                        }
+                    } else if (!isCheckoutWalkIn) {
+                        const existing = await tx.customer.findFirst({
+                            where: { name: checkoutCustName }
+                        });
+                        if (!existing) {
+                            await tx.customer.create({
+                                data: {
+                                    name: checkoutCustName,
+                                    phone: null,
+                                    isSynced: false
+                                }
+                            });
+                        }
+                    }
+                } catch (autoCustErr) {
+                    console.warn('Customer auto-registration on checkout skipped:', autoCustErr);
+                }
+            }
+
+            const checkoutCostQuantities=new Map<string,number>();
+            for(const item of saleData.items)checkoutCostQuantities.set(item.variantId,(checkoutCostQuantities.get(item.variantId)||0)+item.quantity);
+            await syncSaleCosts(tx,sale.id,checkoutCostQuantities);
             // 2. Update Stock and Inventory Movements
             for (const item of saleData.items) {
                 await tx.productVariant.update({
@@ -2005,6 +2303,8 @@ ipcMain.handle('sales:getSaleById', async (_event, saleId) => {
             include: {
                 items: true,
                 payments: true,
+                exchanges: { select: { id: true } },
+                refunds: { select: { id: true } },
                 user: {
                     select: { name: true, role: true }
                 }
@@ -2044,16 +2344,18 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
         try {
             // 1. Verify Permission
             const user = await tx.user.findUnique({ where: { id: userId } });
-            if (user?.role !== 'ADMIN' && !user?.permEditSales) {
+            if (!user?.isActive || (user?.role !== 'ADMIN' && !user?.permEditSales)) {
                 throw new Error("Unauthorized: You do not have permission to edit finalized sales.");
             }
 
             // 2. Fetch Original Sale
             const originalSale = await tx.sale.findUnique({
                 where: { id: saleId },
-                include: { items: true, payments: true }
+                include: { items: true, payments: true, exchanges: { select: { id: true } }, refunds: { select: { id: true } } }
             });
             if (!originalSale) throw new Error("Sale not found.");
+            const editLockReason = getSaleEditLockReason(originalSale);
+            if (editLockReason) throw new Error(editLockReason);
 
             const oldQtyByVariant = new Map<string, number>();
             for (const item of originalSale.items) {
@@ -2071,6 +2373,20 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
                 ...newQtyByVariant.keys()
             ]);
 
+            // ST-02: Reject sale updates that increase/add items in preparation state
+            const addedVariantIds = Array.from(affectedVariantIds).filter(vid => {
+                const oldQty = oldQtyByVariant.get(vid) || 0;
+                const newQty = newQtyByVariant.get(vid) || 0;
+                return newQty > oldQty;
+            });
+            if (addedVariantIds.length > 0 && await checkAnyVariantPreparedSafe(tx, addedVariantIds)) {
+                throw new Error('Stock conversion pending for this item. Cannot be sold until converted.');
+            }
+            await assertTrackedStockAvailable(tx, Array.from(affectedVariantIds).map(variantId => ({
+                variantId, quantity: (newQtyByVariant.get(variantId) || 0) - (oldQtyByVariant.get(variantId) || 0),
+            })));
+
+            await syncSaleCosts(tx,saleId,newQtyByVariant,oldQtyByVariant);
             // 3. Update stock based on quantity delta
             for (const variantId of affectedVariantIds) {
                 const oldQty = oldQtyByVariant.get(variantId) || 0;
@@ -2231,7 +2547,13 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
                 }
             }
 
-            const changeSummary = itemChanges.length > 0 ? ` | ${itemChanges.join('; ')}` : '';
+            const oldCustDesc = [originalSale.customerName, originalSale.customerPhone].filter(Boolean).join(' • ') || 'Walk-in Customer';
+            const newCustDesc = [normalizedSaleData.customerName, normalizedSaleData.customerPhone].filter(Boolean).join(' • ') || 'Walk-in Customer';
+            const customerChanged = (originalSale.customerName || '') !== (normalizedSaleData.customerName || '') ||
+                (originalSale.customerPhone || '') !== (normalizedSaleData.customerPhone || '');
+            const customerSummary = customerChanged ? ` | Customer: "${oldCustDesc}" -> "${newCustDesc}"` : '';
+
+            const changeSummary = (itemChanges.length > 0 ? ` | ${itemChanges.join('; ')}` : '') + customerSummary;
             const updateTag = `[UPDATE ${new Date().toISOString()}] POS edit: items ${oldItemCount} -> ${newItemCount}, total Rs.${originalSale.grandTotal.toFixed(2)} -> Rs.${normalizedSaleData.grandTotal.toFixed(2)}${changeSummary}`;
 
             const updatedSale = await tx.sale.update({
@@ -2255,6 +2577,50 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
                     isSynced: false
                 }
             });
+
+            // Auto-register / sync customer to Customer directory table if updated on sale
+            const updateCustName = (normalizedSaleData.customerName || '').trim();
+            const updateCustPhone = (normalizedSaleData.customerPhone || '').trim() || null;
+            const isUpdateWalkIn = !updateCustName || updateCustName.toLowerCase() === 'walk-in customer' || updateCustName.toLowerCase() === 'walk-in';
+
+            if (!isUpdateWalkIn || updateCustPhone) {
+                try {
+                    if (updateCustPhone) {
+                        const existing = await tx.customer.findUnique({
+                            where: { phone: updateCustPhone }
+                        });
+                        if (!existing) {
+                            await tx.customer.create({
+                                data: {
+                                    name: isUpdateWalkIn ? `Customer ${updateCustPhone}` : updateCustName,
+                                    phone: updateCustPhone,
+                                    isSynced: false
+                                }
+                            });
+                        } else if (!isUpdateWalkIn && existing.name.startsWith('Customer ') && updateCustName !== existing.name) {
+                            await tx.customer.update({
+                                where: { id: existing.id },
+                                data: { name: updateCustName, isSynced: false }
+                            });
+                        }
+                    } else if (!isUpdateWalkIn) {
+                        const existing = await tx.customer.findFirst({
+                            where: { name: updateCustName }
+                        });
+                        if (!existing) {
+                            await tx.customer.create({
+                                data: {
+                                    name: updateCustName,
+                                    phone: null,
+                                    isSynced: false
+                                }
+                            });
+                        }
+                    }
+                } catch (autoCustErr) {
+                    console.warn('Customer auto-registration on update skipped:', autoCustErr);
+                }
+            }
 
             // 6. Replace payments
             await tx.invoicePayment.deleteMany({ where: { saleId } });
@@ -2321,7 +2687,8 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
                             taxAmount: Number(originalSale.taxAmount || 0),
                             itemCount: oldItemCount,
                             paymentMethod: originalSale.paymentMethod,
-                            customerName: originalSale.customerName || undefined
+                            customerName: originalSale.customerName || undefined,
+                            customerPhone: originalSale.customerPhone || undefined
                         },
                         after: {
                             grandTotal: Number(updatedSale.grandTotal || 0),
@@ -2331,7 +2698,8 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
                             taxAmount: Number(normalizedSaleData.taxAmount || 0),
                             itemCount: newItemCount,
                             paymentMethod: normalizedSaleData.paymentMethod,
-                            customerName: normalizedSaleData.customerName || undefined
+                            customerName: normalizedSaleData.customerName || undefined,
+                            customerPhone: normalizedSaleData.customerPhone || undefined
                         }
                     },
                     itemChanges: structuredItemChanges,
@@ -2369,7 +2737,7 @@ ipcMain.handle('sales:updateSale', async (_event, { saleId, saleData, userId }) 
             };
         } catch (error: any) {
             console.error('Update Sale failed:', error);
-            return { success: false, error: error.message };
+            throw error; // Roll back any earlier stock/item writes on failure.
         }
       });
     } catch (error: any) {
@@ -2416,6 +2784,7 @@ createSecureIpcHandler(
     'sales:exchange',
     PermissionMiddleware.editSale,
     async (_event, exchangeData: any, user) => {
+        exchangeData = { ...exchangeData, userId: user.id };
         let result: any;
         try {
             result = await prisma.$transaction(async (tx: any) => {
@@ -2424,6 +2793,13 @@ createSecureIpcHandler(
             const sanitizedNotes = sanitizeString(exchangeData.notes, 500);
             const returnedItems = (exchangeData.items || []).filter((item: any) => item.returnedId && (item.returnedQty || 0) > 0);
             const newItems = (exchangeData.items || []).filter((item: any) => item.newId && (item.newQty || 0) > 0);
+
+            for (const item of exchangeData.items || []) {
+                if ((item.returnedId && (!Number.isInteger(item.returnedQty) || item.returnedQty < 0)) ||
+                    (item.newId && (!Number.isInteger(item.newQty) || item.newQty < 0))) {
+                    throw new Error('Exchange quantities must be non-negative whole numbers.');
+                }
+            }
 
             if (returnedItems.length === 0) {
                 throw new Error('Exchange requires at least one returned item.');
@@ -2451,6 +2827,7 @@ createSecureIpcHandler(
                 (originalSale.items || []).map((item: any) => [item.variantId, item])
             );
 
+            // Exchange credit uses MRP (sellingPrice), not net-paid-after-discount
             const totalReturnedValue = returnedItems.reduce((sum: number, item: any) => {
                 if ((item.returnedQty || 0) <= 0) {
                     throw new Error('Returned quantity must be greater than zero.');
@@ -2459,8 +2836,8 @@ createSecureIpcHandler(
                 if (!saleItem) {
                     throw new Error(`Returned item not found in original invoice: ${item.returnedId}`);
                 }
-                const lineUnitValue = getSaleItemNetUnitPrice(saleItem, originalSale);
-                return sum + (lineUnitValue * Number(item.returnedQty || 0));
+                const unitMrp = Number(saleItem.sellingPrice || 0);
+                return sum + (unitMrp * Number(item.returnedQty || 0));
             }, 0);
 
             const replacementVariants = newItems.length > 0
@@ -2470,8 +2847,15 @@ createSecureIpcHandler(
                 })
                 : [];
 
+            // ST-02: Reject replacement items that are in preparation state
+            const replacementIds = newItems.map((i: any) => i.newId).filter(Boolean);
+            if (replacementIds.length > 0 && await checkAnyVariantPreparedSafe(tx, replacementIds)) {
+                throw new Error('Stock conversion pending for this item. Cannot be sold until converted.');
+            }
+
+            const enrichedReplacementVariants = await enrichCatalogueVariants(tx, replacementVariants, user);
             const replacementVariantById = new Map<string, any>(
-                replacementVariants.map((variant: any) => [variant.id, variant])
+                enrichedReplacementVariants.map((variant: any) => [variant.id, variant])
             );
 
             const totalNewValue = newItems.reduce((sum: number, item: any) => {
@@ -2485,12 +2869,16 @@ createSecureIpcHandler(
                 return sum + (Number(variant.sellingPrice || 0) * Number(item.newQty || 0));
             }, 0);
 
-            // Cap exchange credit to the new bill subtotal (no cash refunds in exchange)
-            const exchangeCreditApplied = Math.min(totalReturnedValue, totalNewValue);
-            const netPayable = roundCurrency(Math.max(0, totalNewValue - exchangeCreditApplied));
-            const normalizedDifferenceAmount = roundCurrency(totalNewValue - totalReturnedValue);
-            // Store credit: if returned value > new value, the excess becomes a credit note
-            const storeCreditBalance = roundCurrency(Math.max(0, totalReturnedValue - totalNewValue));
+            // Apply bill-level discount from the exchange modal
+            const exchangeItemDiscount = roundCurrency(Math.max(0, Number(exchangeData.discount || 0)));
+            const discountedNewValue = roundCurrency(totalNewValue - exchangeItemDiscount);
+
+            // Cap exchange credit to the discounted new bill subtotal (no cash refunds in exchange)
+            const exchangeCreditApplied = Math.min(totalReturnedValue, discountedNewValue);
+            const netPayable = roundCurrency(Math.max(0, discountedNewValue - exchangeCreditApplied));
+            const normalizedDifferenceAmount = roundCurrency(discountedNewValue - totalReturnedValue);
+            // Store credit: if returned value > discounted new value, the excess becomes a credit note
+            const storeCreditBalance = roundCurrency(Math.max(0, totalReturnedValue - discountedNewValue));
             const exchangePayments = (exchangeData.payments || [])
                 .filter((payment: any) => Number(payment.amount || 0) > 0)
                 .map((payment: any) => ({
@@ -2509,6 +2897,7 @@ createSecureIpcHandler(
             }
 
             // 2. IMMUTABLE BILL: Validate returned quantities but DO NOT modify original sale items or totals
+            validateReturnQuantities(originalSale, returnedItems.map((item: any) => ({ id: item.returnedId, qty: item.returnedQty })));
             for (const item of returnedItems) {
                 const saleItem = originalSale.items.find((si: any) => si.variantId === item.returnedId);
                 if (!saleItem) {
@@ -2530,6 +2919,16 @@ createSecureIpcHandler(
                 }
                 // Original SaleItem rows are NOT modified — bill remains immutable
             }
+
+            const returnStockRoutes = await resolveReturnStockRoutes(tx, returnedItems.map((item: any) => ({
+                sourceVariantId: item.returnedId, quantity: item.returnedQty, choice: item.stockChoice,
+            })), user);
+            await assertTrackedStockAvailable(tx, [
+                ...newItems.map((item: any) => ({ variantId: item.newId, quantity: item.newQty })),
+                ...Array.from(returnStockRoutes.values()).filter(route => route.targetVariantId).map(route => ({
+                    variantId: route.targetVariantId!, quantity: -route.quantity,
+                })),
+            ]);
 
             // 3. Create Exchange Entry
             const exchange = await tx.exchange.create({
@@ -2571,8 +2970,8 @@ createSecureIpcHandler(
 
                     return {
                         variantId: item.newId,
-                        productName: variant?.product?.name || 'Unknown Item',
-                        variantInfo: `${variant?.size || ''} ${variant?.color || ''}`.trim(),
+                        productName: formatVariantDescription(variant?.product?.name || 'Unknown Item', variant),
+                        variantInfo: '',
                         quantity: item.newQty || 0,
                         mrp: variant?.mrp || variant?.sellingPrice || 0,
                         sellingPrice: variant?.sellingPrice || 0,
@@ -2584,8 +2983,14 @@ createSecureIpcHandler(
                 });
 
                 const subtotal = replacementSaleItems.reduce((sum: number, line: any) => sum + (line.sellingPrice * line.quantity), 0);
-                const taxAmount = replacementSaleItems.reduce((sum: number, line: any) => sum + line.taxAmount, 0);
-                const replacementTotal = replacementSaleItems.reduce((sum: number, line: any) => sum + line.total, 0);
+                const grossTotal = replacementSaleItems.reduce((sum: number, line: any) => sum + line.total, 0);
+                // Apply discount: grandTotal = gross - discount, then recalculate tax on discounted amount
+                const discountedGrandTotal = roundCurrency(grossTotal - exchangeItemDiscount);
+                // Recalculate GST on the discounted grand total (GST-inclusive back-calculation)
+                const GST_INCLUSIVE_FACTOR = 1.05;
+                const discountedTaxable = roundCurrency(discountedGrandTotal / GST_INCLUSIVE_FACTOR);
+                const discountedTaxAmount = roundCurrency(discountedGrandTotal - discountedTaxable);
+
                 const replacementSalePayments = [
                     ...(exchangeCreditApplied > 0 ? [{
                         paymentMode: 'EXCHANGE_CREDIT',
@@ -2594,6 +2999,7 @@ createSecureIpcHandler(
                     ...exchangePayments
                 ];
 
+                const discountNote = exchangeItemDiscount > 0 ? `, Discount: Rs.${exchangeItemDiscount.toFixed(2)}` : '';
                 replacementSale = await tx.sale.create({
                     data: {
                         billNo: nextBillNo,
@@ -2601,16 +3007,16 @@ createSecureIpcHandler(
                         customerName: originalSale.customerName,
                         customerPhone: originalSale.customerPhone,
                         subtotal,
-                        discount: 0,
-                        discountPercent: 0,
-                        taxAmount,
-                        cgst: taxAmount / 2,
-                        sgst: taxAmount / 2,
-                        grandTotal: replacementTotal,
+                        discount: exchangeItemDiscount,
+                        discountPercent: subtotal > 0 ? roundCurrency((exchangeItemDiscount / subtotal) * 100) : 0,
+                        taxAmount: discountedTaxAmount,
+                        cgst: roundCurrency(discountedTaxAmount / 2),
+                        sgst: roundCurrency(discountedTaxAmount / 2),
+                        grandTotal: discountedGrandTotal,
                         paymentMethod: netPayable > 0 ? replacementPaymentMethod : 'EXCHANGE',
                         paidAmount: netPayable, // Only the fresh money collected today
                         changeAmount: 0,
-                        remarks: `Replacement sale for Invoice #${originalSale.billNo}. Exchange Ref: ${exchange.id}. New: Rs.${replacementTotal.toFixed(2)}, Credit: Rs.${exchangeCreditApplied.toFixed(2)}, Payable: Rs.${netPayable.toFixed(2)}${storeCreditBalance > 0 ? `. STORE CREDIT NOTE: Rs.${storeCreditBalance.toFixed(2)} issued to customer for future use.` : ''}`,
+                        remarks: `Replacement sale for Invoice #${originalSale.billNo}. Exchange Ref: ${exchange.id}. New: Rs.${grossTotal.toFixed(2)}${discountNote}, Credit: Rs.${exchangeCreditApplied.toFixed(2)}, Payable: Rs.${netPayable.toFixed(2)}${storeCreditBalance > 0 ? `. STORE CREDIT NOTE: Rs.${storeCreditBalance.toFixed(2)} issued to customer for future use.` : ''}`,
                         createdAt: now,
                         items: {
                             create: replacementSaleItems
@@ -2621,6 +3027,18 @@ createSecureIpcHandler(
                     }
                 });
             }
+
+            // Save the agreed exchange values in the same transaction as both stock legs.
+            // Surplus credit is a customer obligation, never extra sale revenue.
+            await tx.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS ExchangeRevenue (
+                exchangeId TEXT PRIMARY KEY REFERENCES Exchange(id),originalSaleId TEXT NOT NULL,
+                replacementSaleId TEXT NOT NULL UNIQUE,returnedCreditPaise INTEGER NOT NULL,
+                replacementValuePaise INTEGER NOT NULL,appliedCreditPaise INTEGER NOT NULL,
+                surplusCreditPaise INTEGER NOT NULL,freshPaymentPaise INTEGER NOT NULL,createdAt TEXT NOT NULL)`);
+            await tx.$executeRawUnsafe('INSERT INTO ExchangeRevenue VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                exchange.id,originalSale.id,replacementSale.id,Math.round(totalReturnedValue*100),
+                Math.round(discountedNewValue*100),Math.round(exchangeCreditApplied*100),
+                Math.round(storeCreditBalance*100),Math.round(netPayable*100),now.toISOString());
 
             // 5. Flag original invoice with clear exchange note
             const returnedSummary = returnedItems
@@ -2644,19 +3062,26 @@ createSecureIpcHandler(
                 }
             });
 
+            const exchangeCostVariants=[...returnStockRoutes.values()].map(route=>route.targetVariantId).filter(Boolean) as string[];
+            const exchangeCostQuantities=new Map<string,number>();
+            for(const item of newItems)exchangeCostQuantities.set(item.newId,(exchangeCostQuantities.get(item.newId)||0)+item.newQty);
+            await prepareStockCosts(tx,[...exchangeCostVariants,...exchangeCostQuantities.keys()]);
+            await restoreSaleCosts(tx,originalSale,returnStockRoutes,exchange.id,'EXCHANGE',true);
+            if(replacementSale)await syncSaleCosts(tx,replacementSale.id,exchangeCostQuantities,new Map(),true);
             // 6. Adjust Stock for each exchange item
             for (const item of exchangeData.items) {
                 // Returned Item -> Increase Stock
-                if (item.returnedId) {
+                const returnRoute = returnStockRoutes.get(item.returnedId);
+                if (returnRoute?.targetVariantId) {
                     await tx.productVariant.update({
-                        where: { id: item.returnedId },
-                        data: { stock: { increment: item.returnedQty || 0 }, isSynced: false }
+                        where: { id: returnRoute.targetVariantId },
+                        data: { stock: { increment: returnRoute.quantity }, isSynced: false }
                     });
                     await tx.inventoryMovement.create({
                         data: {
-                            variantId: item.returnedId,
+                            variantId: returnRoute.targetVariantId,
                             type: 'EXCHANGE_RETURN',
-                            quantity: item.returnedQty || 0,
+                            quantity: returnRoute.quantity,
                             reason: 'Exchange Return',
                             reference: exchange.id,
                             createdBy: exchangeData.userId,
@@ -2684,11 +3109,12 @@ createSecureIpcHandler(
                     });
                 }
             }
+            await recordReturnStockRoutes(tx, returnStockRoutes, exchange.id, 'EXCHANGE', user, now);
 
             // 7. Log Activity
             const structuredReturnedItems = returnedItems.map((item: any) => {
                 const saleItem = originalSale.items.find((si: any) => si.variantId === item.returnedId);
-                const unitPrice = saleItem ? getSaleItemNetUnitPrice(saleItem, originalSale) : 0;
+                const unitPrice = saleItem ? Number(saleItem.sellingPrice || saleItem.mrp || 0) : 0;
                 const total = roundCurrency(unitPrice * (item.returnedQty || 1));
                 return {
                     name: saleItem?.productName || 'Item',
@@ -2789,23 +3215,16 @@ createSecureIpcHandler(
         return result;
     },
     {
+        trustedSession: true,
         extractUserId: (args: any) => args.userId
     }
 );
 
 // Retrieve structured Exchange/Refund details for any sale (original or replacement)
-ipcMain.handle('sales:getExchangeDetails', async (_event, args: { billNo?: string; saleId?: string; remarks?: string }) => {
+ipcMain.handle('sales:getExchangeDetails', async (_event, args: { billNo?: string; saleId?: string; remarks?: string; isOriginal?: boolean; isReplacement?: boolean }) => {
     try {
-        const { billNo, saleId, remarks } = args || {};
-        const targetBills = new Set<string>();
-        if (billNo) targetBills.add(String(billNo));
-
-        if (remarks) {
-            const replMatch = remarks.match(/Replacement Bill #(\d+)/i);
-            if (replMatch) targetBills.add(replMatch[1]);
-            const origMatch = remarks.match(/Invoice #(\d+)/i);
-            if (origMatch) targetBills.add(origMatch[1]);
-        }
+        const { billNo, saleId, remarks, isOriginal, isReplacement } = args || {};
+        const strBillNo = billNo ? String(billNo) : '';
 
         // 1. Search AuditLog for structured EXCHANGE events
         const exchangeLogs = await prisma.auditLog.findMany({
@@ -2816,8 +3235,11 @@ ipcMain.handle('sales:getExchangeDetails', async (_event, args: { billNo?: strin
                 }
             },
             orderBy: { createdAt: 'desc' },
-            take: 50
+            take: 100
         });
+
+        let outgoingLogData: any = null;
+        let incomingLogData: any = null;
 
         for (const log of exchangeLogs) {
             try {
@@ -2827,65 +3249,111 @@ ipcMain.handle('sales:getExchangeDetails', async (_event, args: { billNo?: strin
                 const logOrigId = String(parsed.originalInvoiceId || '');
                 const logReplId = String(parsed.replacementSaleId || '');
 
-                const isMatch = (
-                    (billNo && (logOrigBill === String(billNo) || logReplBill === String(billNo))) ||
-                    (saleId && (logOrigId === saleId || logReplId === saleId)) ||
-                    Array.from(targetBills).some(b => b === logOrigBill || b === logReplBill)
-                );
+                const matchesOrig = (saleId && logOrigId === saleId) || (strBillNo && logOrigBill === strBillNo);
+                const matchesRepl = (saleId && logReplId === saleId) || (strBillNo && logReplBill === strBillNo);
 
-                if (isMatch) {
-                    return {
-                        success: true,
-                        data: {
-                            type: 'EXCHANGE',
-                            originalBillNo: logOrigBill,
-                            replacementBillNo: logReplBill,
-                            returnedItems: parsed.returnedItems || [],
-                            replacementItems: parsed.replacementItems || [],
-                            returnedTotal: Number(parsed.returnedTotal || 0),
-                            replacementTotal: Number(parsed.replacementTotal || 0),
-                            differenceAmount: Number(parsed.differenceAmount ?? 0),
-                            netPayable: Number(parsed.netPayable ?? 0),
-                            exchangeCreditApplied: Number(parsed.exchangeCreditApplied ?? 0),
-                            paymentMethod: parsed.paymentMethod,
-                            summary: parsed.summary,
-                            createdAt: log.createdAt,
-                            actor: log.user?.name || 'Staff'
-                        }
-                    };
+                const formatData = () => ({
+                    type: 'EXCHANGE',
+                    originalBillNo: logOrigBill,
+                    originalInvoiceId: logOrigId,
+                    replacementBillNo: logReplBill,
+                    replacementSaleId: logReplId,
+                    returnedItems: parsed.returnedItems || [],
+                    replacementItems: parsed.replacementItems || [],
+                    returnedTotal: Number(parsed.returnedTotal || 0),
+                    replacementTotal: Number(parsed.replacementTotal || 0),
+                    differenceAmount: Number(parsed.differenceAmount ?? 0),
+                    netPayable: Number(parsed.netPayable ?? 0),
+                    exchangeCreditApplied: Number(parsed.exchangeCreditApplied ?? 0),
+                    paymentMethod: parsed.paymentMethod,
+                    summary: parsed.summary,
+                    createdAt: log.createdAt,
+                    actor: log.user?.name || 'Staff'
+                });
+
+                if (matchesOrig && !outgoingLogData) {
+                    outgoingLogData = formatData();
+                }
+                if (matchesRepl && !incomingLogData) {
+                    incomingLogData = formatData();
+                }
+
+                if (outgoingLogData && incomingLogData) {
+                    break;
                 }
             } catch {
                 // skip non-json
             }
         }
 
-        // 2. Fallback to querying the Exchange database table
-        let exchangeRef = '';
-        if (remarks) {
-            const refMatch = remarks.match(/(?:Exchange Ref:|Ref:)\s*([a-zA-Z0-9-]+)/i);
-            if (refMatch) exchangeRef = refMatch[1].trim();
+        // Return appropriate exchange data based on the sale's context
+        if (outgoingLogData || incomingLogData) {
+            // If the sale had items exchanged out (it is the original for an exchange):
+            if (outgoingLogData && (!isReplacement || isOriginal || !incomingLogData)) {
+                return {
+                    success: true,
+                    data: {
+                        ...outgoingLogData,
+                        incomingExchange: incomingLogData ? {
+                            originalBillNo: incomingLogData.originalBillNo,
+                            replacementBillNo: incomingLogData.replacementBillNo,
+                            returnedTotal: incomingLogData.returnedTotal,
+                            replacementTotal: incomingLogData.replacementTotal
+                        } : undefined
+                    }
+                };
+            }
+
+            // If it's a replacement bill (created from an exchange):
+            if (incomingLogData) {
+                return {
+                    success: true,
+                    data: {
+                        ...incomingLogData,
+                        outgoingExchange: outgoingLogData ? {
+                            originalBillNo: outgoingLogData.originalBillNo,
+                            replacementBillNo: outgoingLogData.replacementBillNo,
+                            returnedTotal: outgoingLogData.returnedTotal,
+                            replacementTotal: outgoingLogData.replacementTotal
+                        } : undefined
+                    }
+                };
+            }
+
+            if (outgoingLogData) {
+                return { success: true, data: outgoingLogData };
+            }
         }
 
+        // 2. Fallback to querying the Exchange database table
         let exchange = null;
-        if (exchangeRef) {
-            exchange = await prisma.exchange.findUnique({
-                where: { id: exchangeRef },
-                include: {
-                    items: true,
-                    payments: true,
-                    invoice: { include: { items: true } }
-                }
-            });
-        }
-        if (!exchange && saleId) {
+        if (saleId) {
             exchange = await prisma.exchange.findFirst({
                 where: { originalInvoiceId: saleId },
                 include: {
                     items: true,
                     payments: true,
                     invoice: { include: { items: true } }
-                }
+                },
+                orderBy: { exchangeDate: 'desc' }
             });
+        }
+        if (!exchange && remarks) {
+            const refMatches = Array.from(remarks.matchAll(/(?:Exchange Ref:|Ref:)\s*([a-zA-Z0-9-]+)/gi));
+            for (const match of refMatches) {
+                const found = await prisma.exchange.findUnique({
+                    where: { id: match[1].trim() },
+                    include: {
+                        items: true,
+                        payments: true,
+                        invoice: { include: { items: true } }
+                    }
+                });
+                if (found) {
+                    exchange = found;
+                    break;
+                }
+            }
         }
 
         if (exchange) {
@@ -2930,14 +3398,14 @@ ipcMain.handle('sales:getExchangeDetails', async (_event, args: { billNo?: strin
                 success: true,
                 data: {
                     type: 'EXCHANGE',
-                    originalBillNo: exchange.invoice?.billNo || '',
+                    originalBillNo: exchange.invoice?.billNo || strBillNo,
                     replacementBillNo: replBillMatch ? replBillMatch[1] : '',
                     returnedItems,
                     replacementItems,
                     returnedTotal,
                     replacementTotal,
                     differenceAmount: exchange.differenceAmount,
-                    summary: `Exchange on Bill #${exchange.invoice?.billNo}`,
+                    summary: `Exchange on Bill #${exchange.invoice?.billNo || strBillNo}`,
                     createdAt: exchange.exchangeDate
                 }
             };
@@ -2955,17 +3423,34 @@ createSecureIpcHandler(
     'sales:refund',
     PermissionMiddleware.editSale,
     async (_event, refundData: any, user) => {
+        refundData = { ...refundData, userId: user.id };
         let result: any;
         try {
+            if (typeof refundData.requestId !== 'string' || !/^[0-9a-f-]{36}$/i.test(refundData.requestId)) {
+                throw new Error('A refund request ID is required. Reopen the refund window.');
+            }
             result = await prisma.$transaction(async (tx: any) => {
         try {
+            const auditId = `refund-request-${refundData.requestId}`;
+            const previousRequest = await tx.auditLog.findUnique({ where: { id: auditId } });
+            if (previousRequest) {
+                const details = JSON.parse(previousRequest.details);
+                if (previousRequest.userId !== user.id || details.originalInvoiceId !== refundData.originalInvoiceId) {
+                    throw new Error('Refund request does not match the original operation.');
+                }
+                const previousRefund = await tx.refund.findUnique({ where: { id: details.refundId }, include: { items: true, payments: true } });
+                if (!previousRefund) throw new Error('Previous refund record requires review.');
+                return { success: true, data: previousRefund };
+            }
             const now = new Date();
             const sanitizedReason = sanitizeString(refundData.reason, 500);
             const originalSale = await tx.sale.findUnique({
                 where: { id: refundData.originalInvoiceId },
                 include: {
                     items: true,
-                    refunds: { include: { items: true } }
+                    refunds: { include: { items: true } },
+                    exchanges: { include: { items: true } },
+                    payments: true
                 }
             });
             if (!originalSale) {
@@ -2981,56 +3466,25 @@ createSecureIpcHandler(
                 throw new Error('Select at least one item to refund.');
             }
 
-            const normalizedRefundItems = refundData.items.map((item: any) => ({
-                id: item.id,
-                qty: Number(item.qty || 0),
-                amount: roundCurrency(item.amount || 0)
-            }));
-
-            let computedRefundAmount = 0;
-
+            const refundQuote = quoteRefund(originalSale, refundData.items.map((item: any) => ({ id: item.id, qty: item.qty })), refundData.originalDiscount);
+            if (refundQuote.requiresDiscount) throw new Error('Confirm the original discount for the returned items.');
+            const normalizedRefundItems = refundQuote.items;
+            const computedRefundAmount = refundQuote.total;
+            if (typeof refundData.totalAmount !== 'number' || toPaise(refundData.totalAmount) !== toPaise(computedRefundAmount)) {
+                throw new Error('Refund amount has changed. Reopen the bill and review the refund.');
+            }
             for (const item of normalizedRefundItems) {
-                const saleItem = originalSale.items.find((si: any) => si.variantId === item.id);
-                if (!saleItem) {
-                    throw new Error(`Refunded item not found in original invoice: ${item.id}`);
+                const supplied = refundData.items.find((entry: any) => entry.id === item.id);
+                if (typeof supplied?.amount !== 'number' || toPaise(supplied.amount) !== toPaise(item.amount)) {
+                    throw new Error('Refund item amounts do not match the confirmed discount.');
                 }
-                const refundedQty = (originalSale.refunds || []).reduce((sum: number, refund: any) => {
-                    const refundItem = (refund.items || []).find((ri: any) => ri.variantId === item.id);
-                    return sum + (refundItem?.quantity || 0);
-                }, 0);
-                const availableQty = Math.max(0, saleItem.quantity - refundedQty);
-                if (item.qty <= 0 || item.qty > availableQty) {
-                    throw new Error(`Refund qty exceeds refundable qty for ${saleItem.productName}`);
-                }
-
-                const unitAmount = getSaleItemNetUnitPrice(saleItem, originalSale);
-                const expectedAmount = roundCurrency(unitAmount * item.qty);
-                if (roundCurrency(item.amount) !== expectedAmount) {
-                    throw new Error(`Refund amount mismatch for ${saleItem.productName}`);
-                }
-                computedRefundAmount += expectedAmount;
             }
-
-            computedRefundAmount = roundCurrency(computedRefundAmount);
-
-            if (roundCurrency(refundData.totalAmount) !== computedRefundAmount) {
-                throw new Error('Refund total does not match the selected items.');
-            }
-
-            const refundPayments = (refundData.payments || []).map((payment: any) => ({
-                paymentMode: payment.paymentMode,
-                amount: roundCurrency(payment.amount)
-            }));
-            const refundPaymentsTotal = roundCurrency(
-                refundPayments.reduce((sum: number, payment: any) => sum + Number(payment.amount || 0), 0)
-            );
-
-            if (refundPayments.some((payment: any) => !payment.paymentMode || Number(payment.amount || 0) <= 0)) {
-                throw new Error('Refund payments must include a valid payment mode and amount.');
-            }
-            if (refundPaymentsTotal !== computedRefundAmount) {
-                throw new Error('Refund payments do not match the refund total.');
-            }
+            const refundPayments = refundData.payments;
+            validateRefundPayments(refundPayments, computedRefundAmount);
+            const stockRoutes = await resolveReturnStockRoutes(tx, normalizedRefundItems.map((item: any) => ({
+                sourceVariantId: item.id, quantity: item.qty,
+                choice: refundData.items.find((entry: any) => entry.id === item.id)?.stockChoice,
+            })), user);
 
             // 1. Create Refund Record
             const refund = await tx.refund.create({
@@ -3039,7 +3493,7 @@ createSecureIpcHandler(
                     refundDate: now,
                     totalRefundAmount: computedRefundAmount,
                     reason: sanitizedReason,
-                    createdBy: refundData.userId,
+                    createdBy: user.id,
                     items: {
                         create: normalizedRefundItems.map((item: any) => ({
                             variantId: item.id,
@@ -3057,24 +3511,28 @@ createSecureIpcHandler(
                 }
             });
 
+            await restoreSaleCosts(tx,originalSale,stockRoutes,refund.id,'REFUND');
             // 2. Adjust Stock
             for (const item of normalizedRefundItems) {
+                const targetVariantId = stockRoutes.get(item.id)!.targetVariantId;
+                if (!targetVariantId) continue; // Held returns are recorded, never added to saleable stock.
                 await tx.productVariant.update({
-                    where: { id: item.id },
-                    data: { stock: { increment: item.qty } }
+                    where: { id: targetVariantId },
+                    data: { stock: { increment: item.qty }, isSynced: false }
                 });
                 await tx.inventoryMovement.create({
                     data: {
-                        variantId: item.id,
+                        variantId: targetVariantId,
                         type: 'REFUND',
                         quantity: item.qty,
                         reason: `Refund: ${sanitizedReason}`,
                         reference: refund.id,
-                        createdBy: refundData.userId,
+                        createdBy: user.id,
                         createdAt: now
                     }
                 });
             }
+            await recordReturnStockRoutes(tx, stockRoutes, refund.id, 'REFUND', user, now);
 
             // 3. Log Activity
             const structuredRefundItems = normalizedRefundItems.map((item: any) => {
@@ -3083,7 +3541,8 @@ createSecureIpcHandler(
                     name: saleItem?.productName || 'Item',
                     variant: saleItem?.variantInfo || '',
                     qty: item.qty || 1,
-                    amount: item.amount || 0
+                    amount: item.amount || 0,
+                    originalDiscount: item.originalDiscount
                 };
             });
 
@@ -3095,9 +3554,14 @@ createSecureIpcHandler(
                 billNo: originalSale.billNo,
                 originalInvoiceId: originalSale.id,
                 refundAmount: computedRefundAmount,
+                refundId: refund.id,
+                returnedGross: refundQuote.gross,
+                originalDiscount: refundQuote.discount,
+                discountSource: refundQuote.automatic ? 'REMAINING_PAYMENT' : 'STAFF_CONFIRMED',
                 reason: sanitizedReason,
                 refundPayments,
                 refundedItems: structuredRefundItems,
+                stockRoutes: [...stockRoutes.values()],
                 customerName: originalSale.customerName,
                 summary: refundSummary
             };
@@ -3105,8 +3569,9 @@ createSecureIpcHandler(
             await tx.auditLog.create({
                 data: {
                     action: 'REFUND',
+                    id: auditId,
                     details: JSON.stringify(refundAuditPayload),
-                    userId: refundData.userId,
+                    userId: user.id,
                     createdAt: now
                 }
             });
@@ -3128,6 +3593,7 @@ createSecureIpcHandler(
         return result;
     },
     {
+        trustedSession: true,
         extractUserId: (args: any) => args.userId
     }
 );
@@ -3154,6 +3620,9 @@ createSecureIpcHandler(
                 return { success: false, error: 'Refunded or exchanged sales cannot be voided' };
             }
 
+            const voidCostQuantities=new Map<string,number>();
+            for(const item of sale.items)voidCostQuantities.set(item.variantId,(voidCostQuantities.get(item.variantId)||0)+item.quantity);
+            await syncSaleCosts(tx,saleId,new Map(),voidCostQuantities);
             // Return stock for every item in the sale
             for (const item of sale.items) {
                 await tx.productVariant.update({
@@ -3230,79 +3699,30 @@ createSecureIpcHandler(
 
 // Print handlers
 
-ipcMain.handle('print:receipt', async (_event, data) => {
+ipcMain.handle('print:receipt', async (_event, data) => sendReceipt(BrowserWindow, data));
+
+ipcMain.handle('print:listPrinters', async () => {
     try {
-        const printWindow = new BrowserWindow({
-            show: false,
-            width: 302,
-            webPreferences: { nodeIntegration: false, contextIsolation: true }
-        });
-
-        const htmlContent = typeof data === 'string' ? data : data.html;
-        const printOptions = typeof data === 'object' && data?.options ? data.options : {};
-        const deviceName = typeof printOptions.deviceName === 'string' && printOptions.deviceName.trim().length > 0
-            ? printOptions.deviceName.trim()
-            : undefined;
-
-        // Strip any leading/trailing whitespace and fix malformed data URI prefix
-        await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(htmlContent.trim())}`);
-
-        const printOnce = (name?: string) => new Promise<{ success: boolean; error?: string }>((resolve) => {
-            let settled = false;
-            const timeout = setTimeout(() => {
-                if (settled) return;
-                settled = true;
-                resolve({ success: false, error: 'Print timeout: printer did not respond in time.' });
-            }, 6000);
-
-            const options: Electron.WebContentsPrintOptions = {
-                silent: true,
-                printBackground: true,
-                margins: { marginType: 'none' }
-            };
-            if (name && name.trim().length > 0) {
-                options.deviceName = name.trim();
-            }
-
-            printWindow.webContents.print(options, (success, failureReason) => {
-                if (settled) return;
-                settled = true;
-                clearTimeout(timeout);
-                if (!success) {
-                    resolve({ success: false, error: failureReason || 'Receipt print failed' });
-                    return;
-                }
-                resolve({ success: true });
-            });
-        });
-
-        // First try configured printer (if set), then fallback to system default printer.
-        const primary = await printOnce(deviceName);
-        if (primary.success) {
-            try { printWindow.close(); } catch { }
-            return { success: true };
-        }
-
-        if (deviceName) {
-            console.warn(`Receipt print failed on configured printer "${deviceName}", retrying on default printer.`, primary.error);
-            const fallback = await printOnce(undefined);
-            try { printWindow.close(); } catch { }
-            if (fallback.success) {
-                return { success: true };
-            }
-            return { success: false, error: fallback.error || primary.error };
-        }
-
-        try { printWindow.close(); } catch { }
-        return primary;
-    } catch (error: any) {
-        console.error('Print:Receipt Error:', error);
-        return { success: false, error: error.message };
-    }
+        const contents = BrowserWindow.getAllWindows().find(win => !win.isDestroyed())?.webContents;
+        if (!contents) throw new Error('Printer discovery is unavailable. Restart the app.');
+        const printers = await contents.getPrintersAsync();
+        return { success: true, data: printers.map(p => ({ name: p.name, displayName: p.displayName, isDefault: p.isDefault, status: p.status })) };
+    } catch (error: any) { return { success: false, error: error.message }; }
 });
 
-ipcMain.handle('print:label', async (_event, data) => {
+ipcMain.handle('print:label', async (event, data) => {
     try {
+        const user = await resolveElectronSessionUser(prisma, event);
+        const permission = PermissionService.checkPermission(user, 'permPrintSticker');
+        if (!permission.allowed) throw new Error(permission.reason || 'Sticker printing is not permitted.');
+        if (data?.variantId) {
+            const variant = await prisma.productVariant.findUnique({ where: { id: data.variantId }, include: { product: true } });
+            if (!variant || !data.productId || variant.productId !== data.productId
+                || (data.barcode !== undefined && variant.barcode !== data.barcode)
+                || !data.expectedUpdatedAt || new Date(data.expectedUpdatedAt).getTime() !== new Date(variant.product.updatedAt).getTime()) {
+                throw new Error('Save and reload the variant before printing its labels.');
+            }
+        }
         const printWindow = new BrowserWindow({ show: false });
         const htmlContent = data.html || data;
         const printOptions = data?.options || {};
@@ -4163,9 +4583,14 @@ ipcMain.handle('db:restore', async () => {
 
         // Preserve current print settings/layout to avoid label/receipt regressions after restore
         const printSettingKeys = ['PRINTER_CONFIG', 'LABEL_LAYOUT', 'RECEIPT_LAYOUT'];
-        const preservedPrintSettings = await prisma.setting.findMany({
-            where: { key: { in: printSettingKeys } }
-        });
+        let preservedPrintSettings: any[] = [];
+        try {
+            preservedPrintSettings = await prisma.setting.findMany({
+                where: { key: { in: printSettingKeys } }
+            });
+        } catch (preserveErr) {
+            logger.warn('Restore', 'Could not read current print settings (DB may be corrupt/empty), skipping preservation', preserveErr);
+        }
 
         logger.info('Restore', `Restoring database from ${backupPath} to ${targetPath}`);
 
@@ -4290,7 +4715,8 @@ ipcMain.handle('users:listForLogin', async () => {
     }
 });
 
-ipcMain.handle('auth:login', async (_event, { username, password }) => {
+ipcMain.handle('auth:login', async (event, { username, password }) => {
+    clearElectronSession(event.sender.id);
     try {
         await ensureUserSchemaReady();
         await ensureDefaultAdmin();
@@ -4363,11 +4789,17 @@ ipcMain.handle('auth:login', async (_event, { username, password }) => {
             }
         });
 
+        bindElectronSession(event.sender, user.id);
         return { success: true, data: stripPasswords(user) };
     } catch (error: any) {
         logger.error('Login', 'Login failed:', error);
         return { success: false, error: error.message || 'Login failed' };
     }
+});
+
+ipcMain.handle('auth:logout', async (event) => {
+    clearElectronSession(event.sender.id);
+    return { success: true };
 });
 
 // User Management Handlers (SECURE VERSIONS)
@@ -4499,6 +4931,14 @@ createSecureIpcHandler(
                     error: `Cannot modify restricted fields: ${restrictedFields.join(', ')}`
                 };
             }
+        }
+
+        // Only existing ADMINs can assign the ADMIN role
+        if (data.role && data.role === 'ADMIN' && user.role !== 'ADMIN') {
+            return {
+                success: false,
+                error: 'Only administrators can assign the Administrator role.'
+            };
         }
 
         // If password is being updated, hash it
@@ -4740,89 +5180,15 @@ ipcMain.handle('network:subscribe', (event) => {
 // ========================================
 
 // Test receipt print
-ipcMain.handle('print:testReceipt', async (_event, { data, printer }) => {
-    try {
-        // Generate test receipt HTML
-        const testReceiptHtml = `
-<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        body {
-            font-family: 'Courier New', monospace;
-            font-size: 11px;
-            line-height: 1.2;
-            margin: 0;
-            padding: 8px;
-            width: 280px;
-        }
-        .center { text-align: center; }
-        .bold { font-weight: bold; }
-        .line { border-top: 1px dashed #000; margin: 5px 0; }
-        .header { font-size: 13px; margin-bottom: 10px; }
-        .total { font-size: 12px; margin-top: 5px; }
-    </style>
-</head>
-<body>
-    <div class="center header bold">${data.shopName}</div>
-    <div class="center">*** TEST RECEIPT ***</div>
-    <div class="line"></div>
-    <div>Bill No: TEST-001</div>
-    <div>Date: ${new Date().toLocaleDateString()}</div>
-    <div>Time: ${new Date().toLocaleTimeString()}</div>
-    <div class="line"></div>
-    <div>1. ${data.productName}</div>
-    <div>   ${data.price} x 1 = ${data.price}</div>
-    <div class="line"></div>
-    <div class="total bold">TOTAL: ${data.price}</div>
-    <div class="line"></div>
-    <div class="center">Thank You!</div>
-    <div class="center">** TEST PRINT **</div>
-</body>
-</html>`;
-
-        // Use existing print:receipt handler
-        return await new Promise((resolve) => {
-            const printWindow = new BrowserWindow({
-                show: false,
-                width: 302,
-                webPreferences: { nodeIntegration: false, contextIsolation: true }
-            });
-
-            printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(testReceiptHtml.trim())}`);
-            
-            // Wait for content to load then print
-            printWindow.webContents.once('did-finish-load', () => {
-                setTimeout(() => {
-                    const options: any = {
-                        silent: true,
-                        margins: { marginType: 'none' },
-                        pageSize: 'A4'
-                    };
-
-                    if (printer && printer.trim().length > 0) {
-                        options.deviceName = printer.trim();
-                    }
-
-                    printWindow.webContents.print(options, (success) => {
-                        printWindow.close();
-                        if (success) {
-                            resolve({ success: true });
-                        } else {
-                            resolve({ success: false, error: 'Print failed' });
-                        }
-                    });
-                }, 500);
-            });
-        });
-    } catch (error: any) {
-        return { success: false, error: error.message };
-    }
-});
+ipcMain.handle('print:testReceipt', async (_event, data) => sendReceipt(BrowserWindow, data));
 
 // Test label print
-ipcMain.handle('print:testLabel', async (_event, { data, printer }) => {
+ipcMain.handle('print:testLabel', async (event, { data, printer }) => {
     try {
+        const user = await resolveElectronSessionUser(prisma, event);
+        const permission = PermissionService.checkPermission(user, 'permPrintSticker');
+        if (!permission.allowed) throw new Error(permission.reason || 'Sticker printing is not permitted.');
+        const barcodeLiteral = JSON.stringify(String(data?.barcode || '')).replace(/</g, '\\u003c');
         // Generate test barcode label HTML
         const testLabelHtml = `
 <!DOCTYPE html>
@@ -4845,16 +5211,16 @@ ipcMain.handle('print:testLabel', async (_event, { data, printer }) => {
     </style>
 </head>
 <body>
-    <div class="product-name">${data.productName}</div>
-    <div class="details">${data.productCode}</div>
+    <div class="product-name">${escapeHtml(String(data?.productName || ''))}</div>
+    <div class="details">${escapeHtml(String(data?.productCode || ''))}</div>
     <div class="barcode">
         <svg id="barcode"></svg>
     </div>
-    <div class="details">${data.price}</div>
+    <div class="details">${escapeHtml(String(data?.price || ''))}</div>
     <div class="details">TEST LABEL</div>
     
     <script>
-        JsBarcode("#barcode", "${data.barcode}", {
+        JsBarcode("#barcode", ${barcodeLiteral}, {
             format: "CODE128",
             width: 1,
             height: 30,
@@ -4900,6 +5266,581 @@ ipcMain.handle('print:testLabel', async (_event, { data, printer }) => {
     }
 });
 
+
+// ============================================================
+// CASH DRAWER / REGISTER RECONCILIATION IPC HANDLERS
+// ============================================================
+
+/**
+ * Helper: get local IST date string YYYY-MM-DD
+ * Avoids UTC date shifting by reading the system's local time.
+ */
+function getLocalDateString(): string {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+/**
+ * Get today's cash sales data: total cash and itemized sale entries for the ledger.
+ */
+async function getTodaySalesData(todayStr: string): Promise<{ totalCash: number; grossCash: number; refundCash: number; saleEntries: any[] }> {
+    try {
+        const [year, month, day] = todayStr.split('-').map(Number);
+        const startLocal = new Date(year, month - 1, day, 0, 0, 0, 0);
+        const endLocal   = new Date(year, month - 1, day, 23, 59, 59, 999);
+
+        // Fetch completed sales for today using Prisma Client ORM
+        // which properly handles SQLite timestamp integer conversion
+        const sales = await prisma.sale.findMany({
+            where: {
+                status: 'COMPLETED',
+                OR: [
+                    {
+                        actualSaleDate: {
+                            gte: startLocal,
+                            lte: endLocal,
+                        }
+                    },
+                    {
+                        actualSaleDate: null,
+                        createdAt: {
+                            gte: startLocal,
+                            lte: endLocal,
+                        }
+                    }
+                ]
+            },
+            include: {
+                payments: true
+            },
+            orderBy: {
+                createdAt: 'desc'
+            }
+        });
+
+        let totalCash = 0;
+        const saleEntries: any[] = [];
+
+        for (const sale of sales) {
+            let saleCash = 0;
+            if (sale.payments && sale.payments.length > 0) {
+                for (const p of sale.payments) {
+                    const mode = (p.paymentMode || '').toUpperCase();
+                    if (mode === 'CASH') {
+                        saleCash += Number(p.amount || 0);
+                    }
+                }
+            } else if ((sale.paymentMethod || '').toUpperCase() === 'CASH') {
+                saleCash = Number(sale.grandTotal || 0);
+            }
+
+            if (saleCash > 0) {
+                totalCash += saleCash;
+                const rawDate = sale.actualSaleDate || sale.createdAt;
+                const isoDate = typeof rawDate === 'number'
+                    ? new Date(rawDate).toISOString()
+                    : new Date(rawDate).toISOString();
+
+                saleEntries.push({
+                    id: `sale-${sale.id}`,
+                    type: 'CASH_SALE',
+                    category: 'POS_SALE',
+                    amount: saleCash,
+                    note: `Bill #${sale.billNo || '—'}${sale.customerName ? ` (${sale.customerName})` : ''}`,
+                    createdAt: isoDate,
+                    isSale: true,
+                    billNo: sale.billNo
+                });
+            }
+        }
+
+        // Fetch refunds issued today to account for cash paid out to customers from the till
+        const refunds = await prisma.refund.findMany({
+            where: {
+                refundDate: {
+                    gte: startLocal,
+                    lte: endLocal,
+                }
+            },
+            include: {
+                payments: true,
+                invoice: {
+                    select: {
+                        billNo: true,
+                        customerName: true
+                    }
+                }
+            },
+            orderBy: {
+                refundDate: 'desc'
+            }
+        });
+
+        let totalCashRefunds = 0;
+        const refundEntries: any[] = [];
+
+        for (const refund of refunds) {
+            let refundCash = 0;
+            if (refund.payments && refund.payments.length > 0) {
+                for (const p of refund.payments) {
+                    const mode = (p.paymentMode || '').toUpperCase();
+                    if (mode === 'CASH') {
+                        refundCash += Number(p.amount || 0);
+                    }
+                }
+            }
+
+            if (refundCash > 0) {
+                totalCashRefunds += refundCash;
+                const rawDate = refund.refundDate;
+                const isoDate = typeof rawDate === 'number'
+                    ? new Date(rawDate).toISOString()
+                    : new Date(rawDate).toISOString();
+
+                refundEntries.push({
+                    id: `refund-${refund.id}`,
+                    type: 'CASH_REFUND',
+                    category: 'REFUND',
+                    amount: refundCash,
+                    note: `Refund on Bill #${refund.invoice?.billNo || '—'}${refund.invoice?.customerName ? ` (${refund.invoice.customerName})` : ''}${refund.reason ? ` — ${refund.reason}` : ''}`,
+                    createdAt: isoDate,
+                    isRefund: true,
+                    billNo: refund.invoice?.billNo
+                });
+            }
+        }
+
+        const combinedEntries = [...saleEntries, ...refundEntries].sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        const netCash = totalCash - totalCashRefunds;
+
+        return {
+            totalCash: netCash,
+            grossCash: totalCash,
+            refundCash: totalCashRefunds,
+            saleEntries: combinedEntries
+        };
+    } catch (err: any) {
+        console.error('getTodaySalesData error:', err.message);
+        throw new Error(`Failed to calculate sales data: ${err.message}`);
+    }
+}
+
+/**
+ * Get today's cash sales (only CASH payments from COMPLETED sales on today's local date).
+ */
+async function getTodayCashSales(todayStr: string): Promise<number> {
+    const data = await getTodaySalesData(todayStr);
+    return data.totalCash;
+}
+
+// Mutex lock to serialize register creation and mutations, preventing concurrent duplicates
+let registerLock: Promise<any> = Promise.resolve();
+
+function withRegisterLock<T>(fn: () => Promise<T>): Promise<T> {
+    const next = registerLock.then(fn, fn);
+    registerLock = next.catch(() => {});
+    return next;
+}
+
+// Check permission for cash drawer operations
+async function checkCashDrawerPermission(userId?: string): Promise<{ allowed: boolean; error?: string }> {
+    if (!userId) return { allowed: true };
+    try {
+        const user = await getUserPermissions(userId);
+        if (!user) return { allowed: false, error: 'User not found' };
+        if (!user.isActive) return { allowed: false, error: 'User account is deactivated' };
+        if (user.role === 'ADMIN' || user.permViewReports || user.permManageCashDrawer || user.isActive) {
+            return { allowed: true };
+        }
+        return { allowed: false, error: 'Permission denied: You do not have permission to manage the cash drawer' };
+    } catch (err: any) {
+        return { allowed: false, error: err.message };
+    }
+}
+
+// register:get-current
+// Returns (or auto-creates) the open register for today, plus computed totals
+ipcMain.handle('register:get-current', async (_event) => {
+    return withRegisterLock(async () => {
+        try {
+            const todayStr = getLocalDateString();
+
+            // 1. Find existing OPEN register
+            const openRegisters: any[] = await prisma.$queryRawUnsafe(
+                `SELECT * FROM "CashRegister" WHERE status = 'OPEN' ORDER BY openedAt DESC`
+            );
+            let register: any = openRegisters.length > 0 ? openRegisters[0] : null;
+
+            let isPreviousDayUnclosed = false;
+            let unclosedRegisterDate: string | undefined = undefined;
+
+            if (register) {
+                // If open register is from a past date (e.g. power outage or missed closing)
+                if (register.date && register.date < todayStr) {
+                    isPreviousDayUnclosed = true;
+                    unclosedRegisterDate = register.date;
+                }
+            } else {
+                // 2. If no OPEN register, check if today's register was already CLOSED today
+                const todayClosed: any[] = await prisma.$queryRawUnsafe(
+                    `SELECT * FROM "CashRegister" WHERE date = ? AND status = 'CLOSED' ORDER BY closedAt DESC LIMIT 1`,
+                    todayStr
+                );
+                if (todayClosed.length > 0) {
+                    register = todayClosed[0];
+                }
+            }
+
+            // 3. If still none (first time opening the register today), auto-create one
+            if (!register) {
+                // Get openingFloat from most recently CLOSED register
+                const lastClosed: any[] = await prisma.$queryRawUnsafe(
+                    `SELECT closingActual FROM "CashRegister" WHERE status = 'CLOSED' ORDER BY closedAt DESC LIMIT 1`
+                );
+                const openingFloat = lastClosed.length > 0 && lastClosed[0].closingActual != null
+                    ? Number(lastClosed[0].closingActual)
+                    : 0;
+
+                const newId = require('crypto').randomUUID ? require('crypto').randomUUID() :
+                              `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+                await prisma.$executeRawUnsafe(
+                    `INSERT INTO "CashRegister" ("id", "date", "openedAt", "openingFloat", "status")
+                     VALUES (?, ?, ?, ?, 'OPEN')`,
+                    newId, todayStr, new Date().toISOString(), openingFloat
+                );
+
+                register = { id: newId, date: todayStr, openingFloat, status: 'OPEN', openedAt: new Date().toISOString() };
+            }
+
+            // 4. Get manual transactions for this register
+            const txList: any[] = await prisma.$queryRawUnsafe(
+                `SELECT * FROM "CashDrawerTx" WHERE "registerId" = ? ORDER BY "createdAt" DESC`,
+                register.id
+            );
+
+            // 5. Calculate totals and get itemized POS cash sales
+            const effectiveDate = register.date || todayStr;
+            const { totalCash: cashSales, grossCash, refundCash, saleEntries } = await getTodaySalesData(effectiveDate);
+
+            const cashOut = txList
+                .filter((t: any) => t.type === 'CASH_OUT')
+                .reduce((s: number, t: any) => s + Number(t.amount), 0);
+            const cashIn = txList
+                .filter((t: any) => t.type === 'CASH_IN')
+                .reduce((s: number, t: any) => s + Number(t.amount), 0);
+
+            const openingFloat = Number(register.openingFloat || 0);
+            const expectedCashInDrawer = openingFloat + cashSales + cashIn - cashOut;
+
+            // Combine POS cash sales and manual drawer transactions, newest first
+            const allTransactions = [...saleEntries, ...txList].sort(
+                (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+            );
+
+            return {
+                success: true,
+                data: {
+                    register,
+                    openingFloat,
+                    cashSales,
+                    grossCashSales: grossCash,
+                    cashRefunds: refundCash,
+                    cashOut,
+                    cashIn,
+                    expectedCashInDrawer,
+                    transactions: allTransactions,
+                    isPreviousDayUnclosed,
+                    unclosedRegisterDate
+                }
+            };
+        } catch (error: any) {
+            console.error('register:get-current error:', error);
+            return { success: false, error: error.message };
+        }
+    });
+});
+
+// register:add-tx
+// Add a new CashDrawerTx to the current open register
+ipcMain.handle('register:add-tx', async (_event, { type, category, amount, note, userId }) => {
+    return withRegisterLock(async () => {
+        try {
+            const perm = await checkCashDrawerPermission(userId);
+            if (!perm.allowed) {
+                return { success: false, error: perm.error };
+            }
+
+            // Find open register
+            const registers: any[] = await prisma.$queryRawUnsafe(
+                `SELECT * FROM "CashRegister" WHERE status = 'OPEN' ORDER BY openedAt DESC LIMIT 1`
+            );
+            if (!registers.length) {
+                return { success: false, error: 'No open register found. Please refresh.' };
+            }
+            const register = registers[0];
+
+            const todayStr = getLocalDateString();
+            if (register.date && register.date < todayStr) {
+                return {
+                    success: false,
+                    error: `Register from previous day (${register.date}) is still open. Please reconcile and close it before adding new transactions.`
+                };
+            }
+
+            if (!type || !['CASH_OUT', 'CASH_IN'].includes(type)) {
+                return { success: false, error: 'Invalid transaction type' };
+            }
+            if (!amount || Number(amount) <= 0) {
+                return { success: false, error: 'Amount must be greater than 0' };
+            }
+
+            const newId = require('crypto').randomUUID
+                ? require('crypto').randomUUID()
+                : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+            await prisma.$executeRawUnsafe(
+                `INSERT INTO "CashDrawerTx" ("id", "registerId", "type", "category", "amount", "note", "createdAt")
+                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                newId, register.id, type, category || (type === 'CASH_IN' ? 'TOP_UP' : 'EXPENSE'), Number(amount), note || '', new Date().toISOString()
+            );
+
+            const tx: any[] = await prisma.$queryRawUnsafe(
+                `SELECT * FROM "CashDrawerTx" WHERE id = ?`, newId
+            );
+
+            return { success: true, data: tx[0] };
+        } catch (error: any) {
+            console.error('register:add-tx error:', error);
+            return { success: false, error: error.message };
+        }
+    });
+});
+
+// register:delete-tx
+// Delete an unclosed-register transaction
+ipcMain.handle('register:delete-tx', async (_event, { txId, userId }) => {
+    return withRegisterLock(async () => {
+        try {
+            const perm = await checkCashDrawerPermission(userId);
+            if (!perm.allowed) {
+                return { success: false, error: perm.error };
+            }
+
+            const txRows: any[] = await prisma.$queryRawUnsafe(
+                `SELECT ct.*, cr.status as registerStatus
+                 FROM "CashDrawerTx" ct
+                 JOIN "CashRegister" cr ON cr.id = ct."registerId"
+                 WHERE ct.id = ?`,
+                txId
+            );
+            if (!txRows.length) return { success: false, error: 'Transaction not found' };
+            const purchaseTables: any[] = await prisma.$queryRawUnsafe("SELECT name FROM sqlite_master WHERE type='table' AND name='PurchasePayment'");
+            if (purchaseTables.length) {
+                const linked: any[] = await prisma.$queryRawUnsafe('SELECT id FROM PurchasePayment WHERE drawerTxId=? LIMIT 1', txId);
+                if (linked.length) return { success: false, error: 'This is a recorded supplier payment and cannot be deleted from the cash register.' };
+            }
+            const expenseTables:any[]=await prisma.$queryRawUnsafe("SELECT name FROM sqlite_master WHERE type='table' AND name='ShopExpense'");
+            if(expenseTables.length){
+                const linked:any[]=await prisma.$queryRawUnsafe('SELECT id FROM ShopExpense WHERE drawerTxId=? OR reversalDrawerTxId=? LIMIT 1',txId,txId);
+                if(linked.length)return {success:false,error:'This cash entry is linked to an expense. Manage it from Expenses so the cash and expense records stay consistent.'};
+            }
+            if (txRows[0].registerStatus === 'CLOSED') {
+                return { success: false, error: 'Cannot delete transactions from a closed register' };
+            }
+
+            await prisma.$executeRawUnsafe(`DELETE FROM "CashDrawerTx" WHERE id = ?`, txId);
+            return { success: true };
+        } catch (error: any) {
+            console.error('register:delete-tx error:', error);
+            return { success: false, error: error.message };
+        }
+    });
+});
+
+// register:adjust-opening-float
+// Allow manual override of openingFloat for the current open register
+ipcMain.handle('register:adjust-opening-float', async (_event, { openingFloat, userId }) => {
+    return withRegisterLock(async () => {
+        try {
+            const perm = await checkCashDrawerPermission(userId);
+            if (!perm.allowed) {
+                return { success: false, error: perm.error };
+            }
+
+            const float = Number(openingFloat);
+            if (isNaN(float) || float < 0) {
+                return { success: false, error: 'Invalid opening float value' };
+            }
+            const registers: any[] = await prisma.$queryRawUnsafe(
+                `SELECT * FROM "CashRegister" WHERE status = 'OPEN' ORDER BY openedAt DESC LIMIT 1`
+            );
+            if (!registers.length) {
+                return { success: false, error: 'No open register found' };
+            }
+            await prisma.$executeRawUnsafe(
+                `UPDATE "CashRegister" SET "openingFloat" = ? WHERE id = ?`,
+                float, registers[0].id
+            );
+            return { success: true };
+        } catch (error: any) {
+            console.error('register:adjust-opening-float error:', error);
+            return { success: false, error: error.message };
+        }
+    });
+});
+
+// register:close
+// Close the current register with actual cash count
+ipcMain.handle('register:close', async (_event, { actualCashCounted, notes, registerId, userId }) => {
+    return withRegisterLock(async () => {
+        try {
+            const perm = await checkCashDrawerPermission(userId);
+            if (!perm.allowed) {
+                return { success: false, error: perm.error };
+            }
+
+            const actual = Number(actualCashCounted);
+            if (isNaN(actual) || actual < 0) {
+                return { success: false, error: 'Invalid actual cash amount' };
+            }
+
+            let register: any;
+            if (registerId) {
+                const regs: any[] = await prisma.$queryRawUnsafe(
+                    `SELECT * FROM "CashRegister" WHERE id = ? AND status = 'OPEN' LIMIT 1`,
+                    registerId
+                );
+                if (!regs.length) return { success: false, error: 'Specified register is not open or does not exist' };
+                register = regs[0];
+            } else {
+                const registers: any[] = await prisma.$queryRawUnsafe(
+                    `SELECT * FROM "CashRegister" WHERE status = 'OPEN' ORDER BY openedAt DESC LIMIT 1`
+                );
+                if (!registers.length) {
+                    return { success: false, error: 'No open register to close' };
+                }
+                register = registers[0];
+            }
+
+            // Calculate expected for this register's specific date
+            const txList: any[] = await prisma.$queryRawUnsafe(
+                `SELECT * FROM "CashDrawerTx" WHERE "registerId" = ?`, register.id
+            );
+            const cashOut = txList.filter((t: any) => t.type === 'CASH_OUT').reduce((s: number, t: any) => s + Number(t.amount), 0);
+            const cashIn  = txList.filter((t: any) => t.type === 'CASH_IN').reduce((s: number, t: any) => s + Number(t.amount), 0);
+            const cashSales = await getTodayCashSales(register.date || getLocalDateString());
+            const openingFloat = Number(register.openingFloat || 0);
+            const expected = openingFloat + cashSales + cashIn - cashOut;
+            const difference = actual - expected;
+
+            await prisma.$executeRawUnsafe(
+                `UPDATE "CashRegister"
+                 SET status = 'CLOSED', "closedAt" = ?, "closingActual" = ?, "closingExpected" = ?, "difference" = ?, notes = ?
+                 WHERE id = ?`,
+                new Date().toISOString(), actual, expected, difference, notes || null, register.id
+            );
+
+            const updated: any[] = await prisma.$queryRawUnsafe(
+                `SELECT * FROM "CashRegister" WHERE id = ?`, register.id
+            );
+            return { success: true, data: { register: updated[0], expected, difference } };
+        } catch (error: any) {
+            console.error('register:close error:', error);
+            return { success: false, error: error.message };
+        }
+    });
+});
+
+// register:reopen
+// Reopens today's closed register (for last-minute customers)
+ipcMain.handle('register:reopen', async (_event, { registerId, userId } = {}) => {
+    return withRegisterLock(async () => {
+        try {
+            const perm = await checkCashDrawerPermission(userId);
+            if (!perm.allowed) {
+                return { success: false, error: perm.error };
+            }
+
+            let targetId = registerId;
+            if (!targetId) {
+                const todayStr = getLocalDateString();
+                const closed: any[] = await prisma.$queryRawUnsafe(
+                    `SELECT * FROM "CashRegister" WHERE date = ? AND status = 'CLOSED' ORDER BY closedAt DESC LIMIT 1`,
+                    todayStr
+                );
+                if (!closed.length) {
+                    return { success: false, error: 'No closed register found for today to reopen' };
+                }
+                targetId = closed[0].id;
+            }
+
+            await prisma.$executeRawUnsafe(
+                `UPDATE "CashRegister"
+                 SET status = 'OPEN', "closedAt" = NULL, "closingActual" = NULL, "closingExpected" = NULL, "difference" = NULL
+                 WHERE id = ?`,
+                targetId
+            );
+
+            const updated: any[] = await prisma.$queryRawUnsafe(
+                `SELECT * FROM "CashRegister" WHERE id = ?`, targetId
+            );
+
+            return { success: true, data: updated[0] };
+        } catch (error: any) {
+            console.error('register:reopen error:', error);
+            return { success: false, error: error.message };
+        }
+    });
+});
+
+// register:get-history
+// Show the latest saved closing per day, preserving older stored closing records.
+ipcMain.handle('register:get-history', async (_event, { limit = 365 } = {}) => {
+    try {
+        const queryLimit = limit === null || limit === 0 || limit === undefined ? 5000 : Number(limit);
+        const registers: any[] = await prisma.$queryRawUnsafe(
+            `SELECT cr.* FROM "CashRegister" cr
+             WHERE cr.status = 'CLOSED'
+               AND NOT EXISTS (
+                   SELECT 1 FROM "CashRegister" newer
+                   WHERE newer.date = cr.date
+                     AND (
+                         newer.status = 'OPEN'
+                         OR (newer.status = 'CLOSED' AND (
+                             COALESCE(newer."closedAt", '') > COALESCE(cr."closedAt", '')
+                             OR (COALESCE(newer."closedAt", '') = COALESCE(cr."closedAt", '') AND (
+                                 newer."openedAt" > cr."openedAt"
+                                 OR (newer."openedAt" = cr."openedAt" AND newer.id > cr.id)
+                             ))
+                         ))
+                     )
+               )
+             ORDER BY cr.date DESC, cr."closedAt" DESC, cr.id DESC LIMIT ?`,
+            queryLimit
+        );
+
+        // Attach transactions to each register
+        const result = await Promise.all(registers.map(async (reg: any) => {
+            const txList: any[] = await prisma.$queryRawUnsafe(
+                `SELECT * FROM "CashDrawerTx" WHERE "registerId" = ? ORDER BY "createdAt" ASC`,
+                reg.id
+            );
+            return { ...reg, transactions: txList };
+        }));
+
+        return { success: true, data: result };
+    } catch (error: any) {
+        console.error('register:get-history error:', error);
+        return { success: false, error: error.message };
+    }
+});
+
 // Test printer connection
 ipcMain.handle('print:testConnection', async (_event, { printer, type }) => {
     try {
@@ -4936,3 +5877,348 @@ ipcMain.handle('print:testConnection', async (_event, { printer, type }) => {
         return { success: false, error: error.message };
     }
 });
+
+// --- Expense Handlers: trusted session, one cash movement per entry ---
+for(const [channel,handler] of [
+    ['expenses:create',createExpense],['expenses:act',actOnExpense],['expenses:list',listExpenses],['expenses:detail',expenseDetail],['expenses:export',exportExpenses],
+] as const)createSecureIpcHandler(channel,PermissionMiddleware.manageCashDrawer,async(_event,args:any,user)=>{
+    try{
+        const data=channel==='expenses:create'||channel==='expenses:act'
+            ?await withRegisterLock(()=>handler(prisma,args,user)):await handler(prisma,args,user);
+        return {success:true,data};
+    }catch(error){return {success:false,error:error instanceof Error?error.message:'Expense request failed.'};}
+},{trustedSession:true});
+// --- End Expense Handlers ---
+
+// --- Business Insights Read Handler ---
+createSecureIpcHandler('insights:get',PermissionMiddleware.authenticated,async(_event,_args:any,user)=>{
+    try{return {success:true,data:await getBusinessInsights(prisma,user)};}catch(error){return {success:false,error:error instanceof Error?error.message:'Could not load business insights.'};}
+},{trustedSession:true});
+// --- End Business Insights Read Handler ---
+
+createSecureIpcHandler('profit:get',PermissionMiddleware.authenticated,async(_event,args:any,user)=>{
+    try{return {success:true,data:await getProfitReport(prisma,args,user)};}catch(error){return {success:false,error:error instanceof Error?error.message:'Could not load profit.'};}
+},{trustedSession:true});
+
+// --- Sale Cost Read Handler ---
+createSecureIpcHandler('sales:getCosts',PermissionMiddleware.authenticated,async(_event,args:any,user)=>{
+    try{return {success:true,data:await getSaleCosts(prisma,args,user)};}
+    catch(error){return {success:false,error:error instanceof Error?error.message:'Could not read sale costs.'};}
+},{trustedSession:true});
+
+// --- Purchase Handlers: receipt costs and supplier balances ---
+for (const [channel, handler] of [
+    ['purchases:receive', receivePurchase], ['purchases:pay', payPurchase],
+    ['purchases:adjust', adjustPurchase], ['purchases:refund', refundPurchase],
+    ['purchases:list', listPurchases], ['purchases:detail', purchaseDetail], ['purchases:items', purchaseItems],
+] as const) {
+    createSecureIpcHandler(channel, PermissionMiddleware.manageInventory, async (_event, args: any, user) => {
+        try {
+            const data = ['purchases:receive','purchases:pay','purchases:adjust','purchases:refund'].includes(channel)
+                ? await withRegisterLock(() => handler(prisma, args, user))
+                : await handler(prisma, args, user);
+            return { success: true, data };
+        }
+        catch (error) { return { success: false, error: error instanceof Error ? error.message : 'Purchase request failed.' }; }
+    }, { trustedSession: true });
+}
+
+// --- End Purchase Handlers ---
+
+// --- Stock & Inventory Handlers (ST-01) ---
+createSecureIpcHandler(
+    'stock:getOverview',
+    PermissionMiddleware.manageInventory,
+    async (_event, args: any) => {
+        return await getStockOverview(prisma, args);
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'stock:getMovements',
+    PermissionMiddleware.manageInventory,
+    async (_event, args: any) => {
+        return await getStockMovements(prisma, args);
+    },
+    { trustedSession: true }
+);
+
+// --- Return Stock Lookup: original financial item, explicit physical destination ---
+createSecureIpcHandler('sales:getReturnStockOptions', PermissionMiddleware.editSale, async (_event, args: any, user) => {
+    try {
+        return { success: true, data: await getReturnStockOptions(prisma, args, user) };
+    } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Could not identify returned stock.' };
+    }
+}, { trustedSession: true });
+
+// --- Inventory Workspace Handlers: explicit tracking and reviewed stock writes ---
+createSecureIpcHandler(
+    'stock:getInventory',
+    PermissionMiddleware.manageInventory,
+    async (_event, args: any) => getInventoryWorkspace(prisma, args || {}),
+    { trustedSession: true }
+);
+
+const prepareStockPermission = PermissionService.createPermissionMiddleware(
+    ['permManageProducts', 'permManageInventory'],
+    { action: 'prepare-audit-style', resource: 'inventory', checkType: 'all' }
+);
+for (const [channel, operation] of [
+    ['stockAuditSetup:get', (_args: any, user: any) => getStockAuditSetup(prisma, user)],
+    ['stockAuditSetup:save', (args: any, user: any) => saveStockAuditSetup(prisma, args, user)],
+] as const) createSecureIpcHandler(channel, PermissionMiddleware.manageInventory, async (_event, args: any, user) => {
+    try { return { success: true, data: await operation(args, user) }; }
+    catch (error) { return { success: false, error: error instanceof Error ? error.message : 'Could not load or save stock audit setup.' }; }
+}, { trustedSession: true });
+
+createSecureIpcHandler(
+    'stockConversion:saveEntry', PermissionMiddleware.manageInventory,
+    async (_event, args: any, user) => {
+        try {
+            const sourceBarcodes: string[] = [];
+            // Edited values are intentional operator input; source IDs must still
+            // belong to the exact saved workbook, not an arbitrary renderer claim.
+            if (args?.fileHash) {
+                if (!excelAuditService || !Array.isArray(args.rows) || args.rows.length > 1000) throw new Error('Upload and review the workbook first.');
+                for (let offset = 0; offset < args.rows.length; offset += 100) {
+                    const saved = excelAuditService.resolveRows(args.fileHash, args.rows.slice(offset, offset + 100).map((row: any) => row.sourceRowId));
+                    for (const row of saved.rows) if (row.barcode) sourceBarcodes.push(row.barcode);
+                }
+            }
+            return { success: true, data: await saveStockEntry(prisma, args, user, sourceBarcodes) };
+        } catch (error) { return { success: false, error: error instanceof Error ? error.message : 'Could not save stock.' }; }
+    }, { trustedSession: true }
+);
+createSecureIpcHandler(
+    'stockConversion:prepare',
+    prepareStockPermission,
+    async (_event, args: any, user) => {
+        try {
+            if (!excelAuditService) return { success: false, error: 'Excel audit is still starting. Please try again.' };
+            // Resolve IDs against the reviewed main-process snapshot. Never trust renderer counts.
+            const saved = excelAuditService.resolveRows(args?.fileHash, args?.rowIds);
+            const data = await prepareAuditStyle(prisma, { ...args, ...saved }, user);
+            return { success: true, data };
+        } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : 'Could not prepare the reviewed audit items.' };
+        }
+    },
+    { trustedSession: true }
+);
+createSecureIpcHandler(
+    'stockConversion:postBatch',
+    PermissionMiddleware.manageInventory,
+    async (_event, args: any, user) => {
+        try {
+            return { success: true, data: await postStockBatch(prisma, args, user) };
+        } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : 'Could not post this stock batch.' };
+        }
+    },
+    { trustedSession: true }
+);
+createSecureIpcHandler(
+    'stockConversion:adjust',
+    PermissionMiddleware.manageInventory,
+    async (_event, args: any, user) => {
+        try {
+            return { success: true, data: await adjustTrackedStock(prisma, args, user) };
+        } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : 'Could not save this stock correction.' };
+        }
+    },
+    { trustedSession: true }
+);
+
+// --- Excel Audit Handlers: uploaded observations, never live inventory writes ---
+function registerExcelAuditHandler(
+    channel: string,
+    operation: (service: NonNullable<typeof excelAuditService>, args: any, owner: string, user: UserPermissions) => any
+) {
+    createSecureIpcHandler(channel, PermissionMiddleware.manageInventory, async (event, args: any, user) => {
+        if (!excelAuditService) return { success: false, error: 'Excel audit is still starting. Please try again.' };
+        try {
+            return { success: true, data: await operation(excelAuditService, args || {}, `${user.id}:${event.sender.id}`, user) };
+        } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : 'The Excel audit request failed.' };
+        }
+    }, { trustedSession: true });
+}
+
+registerExcelAuditHandler('excelAudit:status', service => service.status());
+registerExcelAuditHandler('excelAudit:list', async (service, args, _owner, user) => {
+    const result = await service.list(args);
+    const statuses = await getAuditRowStatuses(prisma, result.items.map(row => row.id), user);
+    return { ...result, items: result.items.map(row => {
+        const progress = statuses[row.id];
+        return progress ? { ...row, stockStatus: progress.state, stockDraftId: progress.draftId, stockVariantId: progress.variantId } : row;
+    }) };
+});
+registerExcelAuditHandler('excelAudit:preview', (service, args, owner) => service.preview(args, owner));
+registerExcelAuditHandler('excelAudit:commit', (service, args, owner) => service.commit(args.token, owner));
+
+// --- Stock Count Drafts Handlers (ST-03A) ---
+createSecureIpcHandler(
+    'stockDraft:list',
+    PermissionMiddleware.manageInventory,
+    async (_event, args: any, user) => {
+        try {
+            const data = await stockDraftList(prisma, args, user);
+            return { success: true, data };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'stockDraft:get',
+    PermissionMiddleware.manageInventory,
+    async (_event, args: any, user) => {
+        try {
+            const data = await stockDraftGet(prisma, args, user);
+            return { success: true, data };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'stockDraft:searchVariants',
+    PermissionMiddleware.manageInventory,
+    async (_event, args: any, user) => {
+        try {
+            const data = await stockDraftSearchVariants(prisma, args, user);
+            return { success: true, data };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'stockDraft:create',
+    PermissionMiddleware.manageInventory,
+    async (_event, args: any, user) => {
+        try {
+            const data = await stockDraftCreate(prisma, args, user);
+            return { success: true, data };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'stockDraft:save',
+    PermissionMiddleware.manageInventory,
+    async (_event, args: any, user) => {
+        try {
+            const data = await stockDraftSave(prisma, args, user);
+            return { success: true, data };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'stockDraft:cancel',
+    PermissionMiddleware.manageInventory,
+    async (_event, args: any, user) => {
+        try {
+            const data = await stockDraftCancel(prisma, args, user);
+            return { success: true, data };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+// --- Catalogue & Label Readiness Handlers (ST-02) ---
+createSecureIpcHandler(
+    'catalogue:saveProduct',
+    PermissionMiddleware.manageProducts,
+    async (_event, data: any, user) => {
+        try {
+            const saved = await catalogueSaveProduct(prisma, data, user);
+            return { success: true, data: saved };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'catalogue:getProduct',
+    PermissionMiddleware.authenticated,
+    async (_event, args: { id: string }, user) => {
+        try {
+            const product = await catalogueGetProduct(prisma, args?.id, user);
+            return { success: true, data: product };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'catalogue:listProducts',
+    PermissionMiddleware.authenticated,
+    async (_event, args: any, user) => {
+        try {
+            const products = await catalogueListProducts(prisma, args || {}, user);
+            return { success: true, data: products };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'catalogue:checkBarcode',
+    PermissionMiddleware.authenticated,
+    async (_event, args: { barcode: string; excludeVariantId?: string }) => {
+        try {
+            const check = await catalogueCheckBarcode(prisma, args?.barcode, args?.excludeVariantId);
+            return { success: true, data: check };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'catalogue:listVariants',
+    PermissionMiddleware.authenticated,
+    async (_event, args: any, user) => {
+        return { success: true, data: await catalogueListVariants(prisma, args || {}, user) };
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'catalogue:generateBarcode',
+    PermissionMiddleware.manageProducts,
+    async (_event, args: any, user) => {
+        return { success: true, data: await catalogueReserveBarcode(prisma, args, user) };
+    },
+    { trustedSession: true }
+);
+
+
+
+

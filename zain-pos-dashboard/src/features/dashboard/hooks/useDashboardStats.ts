@@ -15,8 +15,10 @@ export function useDashboardStats() {
     const { isConnected } = useSocket();
 
     const latestFetchRef = useRef<() => void>(() => {});
+    const requestRef = useRef(0);
 
     const fetchStats = useCallback(async () => {
+        const request = ++requestRef.current;
         setLoading(true);
         setError(null);
 
@@ -27,13 +29,16 @@ export function useDashboardStats() {
             }
 
             const data = await dashboardService.getStats(dateRange.startDate!, dateRange.endDate!);
+            if (request !== requestRef.current) return;
             setStats(data);
         } catch (err: any) {
+            if (request !== requestRef.current) return;
+            setStats(null);
             console.error('Failed to fetch dashboard stats', err);
             const msg = err?.response?.data?.error || err?.message || 'Unknown error';
             setError(`Could not load dashboard: ${msg}`);
         } finally {
-            setLoading(false);
+            if (request === requestRef.current) setLoading(false);
         }
     }, [dateRange]);
 
@@ -42,9 +47,8 @@ export function useDashboardStats() {
     }, [fetchStats]);
 
     useEffect(() => {
-        if (dateRange.startDate && dateRange.endDate) {
-            fetchStats();
-        }
+        void fetchStats();
+        return () => { requestRef.current++; };
     }, [fetchStats, dateRange.startDate, dateRange.endDate]);
 
     useEffect(() => {

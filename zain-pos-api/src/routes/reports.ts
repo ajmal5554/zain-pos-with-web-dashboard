@@ -70,6 +70,10 @@ router.get('/top-products', async (req, res) => {
         const limit = parseInt(req.query.limit as string) || 10;
 
         const items = await prisma.saleItem.groupBy({
+            where: { sale: { status: 'COMPLETED', ...buildEffectiveSaleDateWhere(
+                req.query.startDate ? new Date(String(req.query.startDate)) : null,
+                req.query.endDate ? new Date(String(req.query.endDate)) : null
+            ) } },
             by: ['variantId', 'productName'],
             _sum: {
                 quantity: true,
@@ -132,7 +136,7 @@ router.get('/gst', async (req, res) => {
         const sales = await prisma.sale.findMany({
             where: {
                 status: { in: ['COMPLETED', 'VOIDED'] },
-                ...(buildEffectiveSaleDateWhere(startDate, endDate) || {})
+                ...(req.query.allTime === 'true' ? {} : buildEffectiveSaleDateWhere(startDate, endDate) || {})
             },
             include: {
                 items: {

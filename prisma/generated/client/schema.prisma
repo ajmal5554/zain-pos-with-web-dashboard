@@ -40,6 +40,7 @@ model User {
   permBulkUpdate      Boolean @default(false) // Can perform bulk updates
   permBackDateSale    Boolean @default(false) // Can record sales for previous dates
   permViewInsights    Boolean @default(false) // Can view AI Forecasting and Insights
+  permManageCashDrawer Boolean @default(true) // Can view and manage cash counter, expenses, and closing
 
   maxDiscount Float @default(0.0) // Max ₹ discount allowed per item/bill
 
@@ -48,6 +49,7 @@ model User {
 
   sales    Sale[]
   AuditLog AuditLog[]
+  cashTransactions CashTransaction[]
 }
 
 model Category {
@@ -348,4 +350,68 @@ model SyncQueue {
   error      String? // Last error message
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+}
+
+model CashTransaction {
+  id                String   @id @default(uuid())
+  type              String // 'EXPENSE', 'OWNER_WITHDRAWAL', 'CASH_IN', 'FLOAT_ADJUSTMENT'
+  category          String // 'FREIGHT', 'MUNICIPALITY_PLASTIC', 'TEA_SNACKS', 'SHOP_MAINTENANCE', 'STAFF_EXPENSE', 'PACKAGING', 'OWNER_DRAWING', 'FLOAT_DEPOSIT', 'OTHER'
+  amount            Float
+  recipient         String? // e.g. "DTDC Courier", "Municipality Plastic Collector"
+  notes             String?
+  voucherNo         String? // Optional voucher number
+  paymentMethod     String   @default("CASH")
+  userId            String
+  registerSessionId String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user            User?                @relation(fields: [userId], references: [id])
+  registerSession CashRegisterSession? @relation(fields: [registerSessionId], references: [id])
+
+  // Cloud Sync Tracking
+  isSynced     Boolean   @default(false)
+  lastSyncedAt DateTime?
+
+  @@index([createdAt])
+  @@index([type])
+  @@index([category])
+  @@index([userId])
+  @@index([registerSessionId])
+  @@index([isSynced])
+}
+
+model CashRegisterSession {
+  id                 String    @id @default(uuid())
+  sessionDate        String // Format: 'YYYY-MM-DD'
+  openedAt           DateTime  @default(now())
+  closedAt           DateTime?
+  status             String    @default("OPEN") // 'OPEN', 'CLOSED'
+  openingFloat       Float     @default(0) // Opening cash in drawer
+  cashSales          Float     @default(0) // Total cash from sales
+  cashIn             Float     @default(0) // Total deposits/additions
+  expenses           Float     @default(0) // Total payouts/petty expenses
+  ownerWithdrawals   Float     @default(0) // Total cash taken home/safe drops
+  cashRefunds        Float     @default(0) // Total cash refunded
+  expectedCash       Float     @default(0) // Calculated expected cash in drawer
+  actualCash         Float? // Physically counted cash
+  difference         Float? // actualCash - expectedCash (negative = shortage, positive = excess)
+  closingNotes       String? // Remarks/explanation if discrepancy
+  carriedForwardCash Float? // Cash retained in drawer for tomorrow's opening float
+  finalTakenHomeCash Float? // Cash taken home at closing
+  openedBy           String
+  closedBy           String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  transactions CashTransaction[]
+
+  // Cloud Sync Tracking
+  isSynced     Boolean   @default(false)
+  lastSyncedAt DateTime?
+
+  @@index([sessionDate])
+  @@index([status])
+  @@index([openedAt])
+  @@index([isSynced])
 }

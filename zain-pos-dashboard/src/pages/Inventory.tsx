@@ -24,7 +24,7 @@ import { formatCurrency } from '@/lib/format';
 
 
 export default function Inventory() {
-    const { products, metrics, loading } = useInventoryMetrics();
+    const { products, metrics, loading, error, refresh } = useInventoryMetrics();
     const [searchTerm, setSearchTerm] = useState('');
 
     const filteredProducts = products.filter((product) =>
@@ -43,12 +43,13 @@ export default function Inventory() {
                 </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {error && <div role="alert" className="rounded-md border border-destructive p-4 text-destructive">{error} <button className="underline font-semibold" onClick={() => void refresh()}>Retry</button></div>}
+            {!error && <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 <StatCard title="Total Stock Value" value={formatCurrency(metrics.totalValue)} icon={<DollarSign className="h-4 w-4" />} loading={loading} />
                 <StatCard title="Low Stock Items" value={metrics.lowStockCount} icon={<AlertTriangle className="h-4 w-4" />} loading={loading} />
                 <StatCard title="Out of Stock" value={metrics.outOfStockCount} icon={<TrendingDown className="h-4 w-4" />} loading={loading} />
                 <StatCard title="Product Types" value={metrics.totalItems} icon={<Layers className="h-4 w-4" />} loading={loading} />
-            </div>
+            </div>}
 
             {/* Pressure Alert Box */}
             {metrics.lowStockCount > 0 && (

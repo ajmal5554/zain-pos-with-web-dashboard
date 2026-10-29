@@ -1,921 +1,846 @@
 import React, { useEffect, useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import {
-    BrainCircuit,
     TrendingUp,
+    RefreshCw,
     Calendar,
-    Sparkles,
-    ShoppingBag,
     Package,
-    ArrowUpRight,
-    ArrowDownRight,
-    Filter,
-    Target,
+    ArrowRight,
+    BarChart3,
     AlertTriangle,
     CheckCircle2,
-    Lightbulb,
-    IndianRupee
+    ShieldCheck,
+    Layers,
+    Clock,
+    Activity,
+    Search,
 } from 'lucide-react';
-import { db } from '../lib/db';
-import { formatIndianCurrency } from '../lib/format';
-import { useAuthStore } from '../store/authStore';
-import { format, subYears } from 'date-fns';
 import {
+    ResponsiveContainer,
+    LineChart,
+    Line,
     XAxis,
     YAxis,
     CartesianGrid,
     Tooltip,
-    ResponsiveContainer,
-    AreaChart,
-    Area
+    Legend,
 } from 'recharts';
+import { useAuthStore } from '../store/authStore';
+import { ForecastSeasons } from '../components/ForecastSeasons';
+import type { BusinessInsights } from '../types/insights';
 
-// Kerala Festival Dates (Approximate or fixed)
-const KERALA_FESTIVALS = [
-    { name: 'Vishu', month: 3, day: 14, description: 'Malayalam New Year - Major clothing purchase season' },
-    { name: 'Onam', month: 7, day: 25, durationDays: 10, description: 'Harvest Festival - Peak bridal and traditional wear demand' },
-    { name: 'Eid / Ramzan', month: null, moving: true, description: 'Major shopping season for ethnic wear' },
-    { name: 'Christmas', month: 11, day: 25, description: 'Year-end festive shopping' },
-    { name: 'Wedding Season', months: [0, 1, 3, 4, 7, 8], description: 'Recurring bridal wear demand' }
-];
+const money = (value: number | null) =>
+    value === null
+        ? 'Unavailable'
+        : (value / 100).toLocaleString('en-IN', {
+              style: 'currency',
+              currency: 'INR',
+              maximumFractionDigits: 0,
+          });
 
-// --- TypeScript Interfaces ---
+const monthName = (month: string) =>
+    new Intl.DateTimeFormat('en-IN', {
+        month: 'short',
+        year: 'numeric',
+        timeZone: 'UTC',
+    }).format(new Date(month + '-01T00:00:00Z'));
 
-interface MonthlyBucket {
-    key: string;       // "2024-08"
-    revenue: number;
-    count: number;
-    month: number;     // 0-11 calendar month
-    timestamp: Date;
-}
-
-interface ForecastPoint {
-    month: string;
-    revenue: number | null;
-    predicted: number | null;
-    predictedUpper: number | null;
-    predictedLower: number | null;
-    backtestPredicted: number | null;
-}
-
-interface BacktestResult {
-    mape: number;
-    accuracy: number;
-    predictions: Array<{
-        monthKey: string;
-        actual: number;
-        predicted: number;
-    }>;
-}
-
-type SentimentType = 'positive' | 'cautious' | 'mixed' | 'recovering';
-
-interface MarketSentiment {
-    label: string;
-    type: SentimentType;
-}
-
-interface ForecastStats {
-    totalRevenue: number;
-    avgMonthlyRevenue: number;
-    predictedNextMonth: number;
-    growthRate: string;
-    topCategory: string;
-    upcomingEvent: string;
-    nextMonthLower: number;
-    nextMonthUpper: number;
-}
-
-// --- Pure Forecasting Functions ---
-
-function computeWMA(values: number[], maxWindow: number = 6): number {
-    const window = values.slice(-maxWindow);
-    const n = window.length;
-    if (n === 0) return 0;
-    let weightedSum = 0;
-    let weightTotal = 0;
-    for (let i = 0; i < n; i++) {
-        const weight = i + 1;
-        weightedSum += window[i] * weight;
-        weightTotal += weight;
-    }
-    return weightedSum / weightTotal;
-}
-
-function linearRegression(values: number[]): { slope: number; intercept: number; rSquared: number } {
-    const n = values.length;
-    if (n < 2) return { slope: 0, intercept: values[0] || 0, rSquared: 0 };
-
-    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
-    for (let i = 0; i < n; i++) {
-        sumX += i;
-        sumY += values[i];
-        sumXY += i * values[i];
-        sumXX += i * i;
-    }
-
-    const denom = n * sumXX - sumX * sumX;
-    const slope = denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom;
-    const intercept = (sumY - slope * sumX) / n;
-
-    const meanY = sumY / n;
-    let ssRes = 0, ssTot = 0;
-    for (let i = 0; i < n; i++) {
-        const predicted = slope * i + intercept;
-        ssRes += (values[i] - predicted) ** 2;
-        ssTot += (values[i] - meanY) ** 2;
-    }
-    const rSquared = ssTot === 0 ? 0 : Math.max(0, 1 - ssRes / ssTot);
-
-    return { slope, intercept, rSquared };
-}
-
-function computeSeasonalFactors(buckets: MonthlyBucket[]): number[] {
-    const monthTotals = new Array(12).fill(0);
-    const monthCounts = new Array(12).fill(0);
-
-    buckets.forEach(bucket => {
-        monthTotals[bucket.month] += bucket.revenue;
-        monthCounts[bucket.month] += 1;
-    });
-
-    const monthAverages = monthTotals.map((total: number, i: number) =>
-        monthCounts[i] > 0 ? total / monthCounts[i] : 0
-    );
-
-    const validAverages = monthAverages.filter((a: number) => a > 0);
-    const overallAvg = validAverages.length > 0
-        ? validAverages.reduce((a: number, b: number) => a + b, 0) / validAverages.length
-        : 0;
-
-    if (overallAvg === 0) return new Array(12).fill(1);
-
-    return monthAverages.map((avg: number, i: number) =>
-        monthCounts[i] >= 2 ? avg / overallAvg : 1.0
-    );
-}
-
-function computeStdDev(values: number[]): number {
-    const n = values.length;
-    if (n < 2) return 0;
-    const mean = values.reduce((a, b) => a + b, 0) / n;
-    const variance = values.reduce((sum, v) => sum + (v - mean) ** 2, 0) / n;
-    return Math.sqrt(variance);
-}
-
-function generateForecast(
-    monthlyRevenues: number[],
-    seasonalFactors: number[],
-    lastCalendarMonth: number,
-    monthsAhead: number
-): Array<{ predicted: number; upper: number; lower: number }> {
-    const n = monthlyRevenues.length;
-    const wma = computeWMA(monthlyRevenues);
-    const { slope, intercept } = linearRegression(monthlyRevenues);
-    const stddev = computeStdDev(monthlyRevenues);
-
-    const results: Array<{ predicted: number; upper: number; lower: number }> = [];
-
-    for (let i = 1; i <= monthsAhead; i++) {
-        const targetMonth = (lastCalendarMonth + i) % 12;
-        const sf = seasonalFactors[targetMonth];
-
-        const trendValue = slope * (n - 1 + i) + intercept;
-        const baseline = 0.6 * wma + 0.4 * trendValue;
-        const predicted = baseline * sf;
-
-        // 80% confidence interval, widening with sqrt(horizon)
-        const z = 1.28;
-        const margin = z * stddev * Math.sqrt(i) * sf;
-
-        results.push({
-            predicted: Math.max(0, predicted),
-            upper: Math.max(0, predicted + margin),
-            lower: Math.max(0, predicted - margin)
-        });
-    }
-
-    return results;
-}
-
-function runBacktest(
-    monthlyRevenues: number[],
-    monthlyBuckets: MonthlyBucket[],
-    backtestWindow: number = 6
-): BacktestResult | null {
-    const n = monthlyRevenues.length;
-    if (n < backtestWindow + 6) return null;
-
-    const cutoff = n - backtestWindow;
-    const trainingData = monthlyRevenues.slice(0, cutoff);
-    const actualData = monthlyRevenues.slice(cutoff);
-
-    const trainingBuckets = monthlyBuckets.slice(0, cutoff);
-    const trainingSeasonals = computeSeasonalFactors(trainingBuckets);
-    const lastTrainingMonth = trainingBuckets[cutoff - 1].month;
-
-    const forecasted = generateForecast(trainingData, trainingSeasonals, lastTrainingMonth, backtestWindow);
-
-    let totalAbsPercentError = 0;
-    let validCount = 0;
-    const predictions: BacktestResult['predictions'] = [];
-
-    for (let i = 0; i < backtestWindow; i++) {
-        const actual = actualData[i];
-        const predicted = forecasted[i].predicted;
-        if (actual > 0) {
-            totalAbsPercentError += Math.abs(actual - predicted) / actual;
-            validCount++;
-        }
-        predictions.push({
-            monthKey: monthlyBuckets[cutoff + i].key,
-            actual,
-            predicted
-        });
-    }
-
-    const mape = validCount > 0 ? (totalAbsPercentError / validCount) * 100 : 100;
-    const accuracy = Math.max(0, Math.round(100 - mape));
-
-    return { mape: Math.round(mape * 10) / 10, accuracy, predictions };
-}
-
-function computeConfidenceLevel(
-    monthCount: number,
-    coefficientOfVariation: number,
-    rSquared: number
-): { label: string; score: number } {
-    const dataScore = Math.min(monthCount / 12, 1) * 40;
-    const varianceScore = Math.max(0, (1 - coefficientOfVariation)) * 30;
-    const trendScore = rSquared * 30;
-
-    const totalScore = Math.round(dataScore + varianceScore + trendScore);
-
-    let label: string;
-    if (totalScore >= 70) label = 'Very reliable prediction';
-    else if (totalScore >= 45) label = 'Fairly reliable prediction';
-    else label = 'Rough estimate - need more sales data';
-
-    return { label, score: totalScore };
-}
-
-function computeMarketSentiment(
-    monthlyRevenues: number[],
-    slope: number
-): MarketSentiment {
-    const n = monthlyRevenues.length;
-    if (n < 3) return { label: 'Insufficient Data', type: 'mixed' };
-
-    const recent = monthlyRevenues.slice(-3);
-    const recentGrowths: number[] = [];
-    for (let i = 1; i < recent.length; i++) {
-        if (recent[i - 1] > 0) {
-            recentGrowths.push((recent[i] - recent[i - 1]) / recent[i - 1]);
-        }
-    }
-    const recentAvgGrowth = recentGrowths.length > 0
-        ? recentGrowths.reduce((a, b) => a + b, 0) / recentGrowths.length
-        : 0;
-
-    const overallTrendPositive = slope > 0;
-    const recentTrendPositive = recentAvgGrowth > 0;
-
-    if (overallTrendPositive && recentTrendPositive) {
-        return { label: 'Sales are growing well!', type: 'positive' };
-    } else if (overallTrendPositive && !recentTrendPositive) {
-        return { label: 'Sales dipped recently, but overall trend is good', type: 'mixed' };
-    } else if (!overallTrendPositive && recentTrendPositive) {
-        return { label: 'Sales are picking up again!', type: 'recovering' };
-    } else {
-        return { label: 'Sales are slowing down - take action', type: 'cautious' };
-    }
-}
-
-// --- Component ---
+const methods = {
+    AVERAGE: 'Recent completed-month average',
+    TREND: 'Bounded damped trend',
+    NAIVE: 'Last completed-month pace',
+    DAILY_RUN_RATE: 'Early daily run-rate projection',
+    NONE: 'Insufficient recorded sales',
+};
 
 export const Forecasting: React.FC = () => {
-    const user = useAuthStore((state) => state.user);
-    const canViewInsights = !!user && (user.role === 'ADMIN' || user.permViewInsights);
-    const [loading, setLoading] = useState(true);
-    const [stats, setStats] = useState<ForecastStats | null>(null);
-    const [forecastData, setForecastData] = useState<ForecastPoint[]>([]);
-    const [seasonalInsights, setSeasonalInsights] = useState<any[]>([]);
-    const [forecastMonths, setForecastMonths] = useState<number>(6);
-    const [confidenceLabel, setConfidenceLabel] = useState<string>('Analysing...');
-    const [confidenceScore, setConfidenceScore] = useState<number>(0);
-    const [marketSentiment, setMarketSentiment] = useState<MarketSentiment>({ label: 'Analysing...', type: 'positive' });
-    const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
+    const user = useAuthStore((s) => s.user);
+    const allowed = !!user && user.isActive !== false && (user.role === 'ADMIN' || user.permViewInsights);
+    const [data, setData] = useState<BusinessInsights | null>(null);
+    const [error, setError] = useState('');
+    const [retry, setRetry] = useState(0);
+    const [horizon, setHorizon] = useState(6);
+    const [leadDays, setLeadDays] = useState(7);
+    const [bufferDays, setBufferDays] = useState(21);
+    const [stockFilter, setStockFilter] = useState('ALL');
+    const [search, setSearch] = useState('');
 
     useEffect(() => {
-        if (canViewInsights) analyzeSales();
-    }, [forecastMonths, canViewInsights]);
-
-    if (!canViewInsights) {
-        return <Navigate to="/pos" replace />;
-    }
-
-    const analyzeSales = async () => {
-        try {
-            setLoading(true);
-            const twoYearsAgo = subYears(new Date(), 2);
-
-            const [sales, allProducts] = await Promise.all([
-                db.sales.findMany({
-                    where: {
-                        status: 'COMPLETED',
-                        createdAt: { gte: twoYearsAgo }
-                    },
-                    include: { items: true },
-                    orderBy: { createdAt: 'asc' }
-                }),
-                db.products.findMany({
-                    include: {
-                        category: true,
-                        variants: { select: { id: true } }
-                    }
-                })
-            ]);
-
-            if (sales.length === 0) {
-                setLoading(false);
-                return;
-            }
-
-            // Build variantId -> categoryName lookup
-            const variantCategoryMap: Record<string, string> = {};
-            allProducts.forEach((product: any) => {
-                const catName = product.category?.name || 'Uncategorized';
-                product.variants.forEach((v: any) => {
-                    variantCategoryMap[v.id] = catName;
-                });
-            });
-
-            // Monthly bucketing
-            const monthlyMap: Record<string, MonthlyBucket> = {};
-            sales.forEach((sale: any) => {
-                const date = new Date(sale.createdAt);
-                const key = format(date, 'yyyy-MM');
-                if (!monthlyMap[key]) {
-                    monthlyMap[key] = { key, revenue: 0, count: 0, month: date.getMonth(), timestamp: date };
+        let current = true;
+        setData(null);
+        setError('');
+        if (!allowed) return;
+        (async () => {
+            try {
+                if (!window.electronAPI?.insights) {
+                    throw new Error('Restart the updated desktop POS or its web preview to load sales forecasting.');
                 }
-                monthlyMap[key].revenue += sale.grandTotal;
-                monthlyMap[key].count += 1;
-            });
-
-            const sortedKeys = Object.keys(monthlyMap).sort();
-            const buckets = sortedKeys.map(k => monthlyMap[k]);
-            const revenues = buckets.map(b => b.revenue);
-
-            // Compute forecasting components
-            const seasonalFactors = computeSeasonalFactors(buckets);
-            const { slope, rSquared } = linearRegression(revenues);
-            const stddev = computeStdDev(revenues);
-            const mean = revenues.reduce((a, b) => a + b, 0) / revenues.length;
-            const cv = mean > 0 ? stddev / mean : 1;
-
-            const lastBucket = buckets[buckets.length - 1];
-            const lastCalMonth = lastBucket.month;
-
-            // Generate forecast
-            const forecast = generateForecast(revenues, seasonalFactors, lastCalMonth, forecastMonths);
-
-            // Build chart data
-            const chartData: ForecastPoint[] = [];
-
-            buckets.forEach(b => {
-                chartData.push({
-                    month: format(b.timestamp, 'MMM yyyy'),
-                    revenue: b.revenue,
-                    predicted: null,
-                    predictedUpper: null,
-                    predictedLower: null,
-                    backtestPredicted: null
-                });
-            });
-
-            forecast.forEach((f, i) => {
-                const futureDate = new Date(lastBucket.timestamp.getFullYear(), lastBucket.timestamp.getMonth() + 1 + i, 1);
-                chartData.push({
-                    month: format(futureDate, 'MMM yyyy'),
-                    revenue: null,
-                    predicted: f.predicted,
-                    predictedUpper: f.upper,
-                    predictedLower: f.lower,
-                    backtestPredicted: null
-                });
-            });
-
-            // Backtest
-            const btResult = runBacktest(revenues, buckets);
-            setBacktestResult(btResult);
-
-            if (btResult) {
-                btResult.predictions.forEach(bp => {
-                    const chartPoint = chartData.find(
-                        cd => cd.month === format(new Date(bp.monthKey + '-01'), 'MMM yyyy')
-                    );
-                    if (chartPoint) {
-                        chartPoint.backtestPredicted = bp.predicted;
-                    }
-                });
+                const result = await window.electronAPI.insights.get();
+                if (!result.success || !result.data?.monthly) {
+                    throw new Error(result.error || 'Restart the updated app to load monthly forecasts.');
+                }
+                if (current) setData(result.data);
+            } catch (e) {
+                if (current) setError((e as Error).message);
             }
+        })();
+        return () => {
+            current = false;
+        };
+    }, [retry, allowed, user?.id]);
 
-            // Category intelligence using real categories
-            const catMap: Record<string, { name: string; quantity: number; revenue: number }> = {};
-            sales.forEach((s: any) => {
-                s.items.forEach((item: any) => {
-                    const cat = variantCategoryMap[item.variantId] || 'Uncategorized';
-                    if (!catMap[cat]) catMap[cat] = { name: cat, quantity: 0, revenue: 0 };
-                    catMap[cat].quantity += item.quantity;
-                    catMap[cat].revenue += item.total;
-                });
-            });
-            const sortedCategories = Object.values(catMap).sort((a, b) => b.revenue - a.revenue);
-            const topCategory = sortedCategories[0]?.name || 'N/A';
+    if (!allowed) return <Navigate to="/pos" replace />;
 
-            // Seasonal insights
-            const seasons = [
-                { id: 'vishu', name: 'Vishu Season', months: [3, 4], weight: 0 },
-                { id: 'onam', name: 'Onam Peak', months: [7, 8], weight: 0 },
-                { id: 'wedding', name: 'Wedding Windows', months: [0, 1, 4, 9], weight: 0 },
-                { id: 'year_end', name: 'Year End / Xmas', months: [11], weight: 0 }
-            ];
-            sales.forEach((sale: any) => {
-                const month = new Date(sale.createdAt).getMonth();
-                const season = seasons.find(s => s.months.includes(month));
-                if (season) season.weight += sale.grandTotal;
-            });
-            setSeasonalInsights(seasons.sort((a, b) => b.weight - a.weight));
+    const planning = data?.monthly;
+    const projections = planning?.projections.slice(0, horizon) || [];
+    const total =
+        projections.length && projections.every((p) => p.predictedPaise !== null)
+            ? projections.reduce((n, p) => n + p.predictedPaise!, 0)
+            : null;
 
-            // Confidence & sentiment
-            const confidence = computeConfidenceLevel(revenues.length, cv, rSquared);
-            setConfidenceLabel(confidence.label);
-            setConfidenceScore(confidence.score);
+    const chart = planning
+        ? [
+              ...planning.history.slice(-12).map((m) => ({
+                  month: m.month,
+                  actual: m.amountPaise / 100,
+                  predicted: null as number | null,
+                  partial: null as number | null,
+              })),
+              {
+                  month: planning.currentMonth.month,
+                  actual: null,
+                  predicted: null,
+                  partial: planning.currentMonth.actualPaise / 100,
+              },
+              ...projections.map((p) => ({
+                  month: p.month,
+                  actual: null,
+                  predicted: p.predictedPaise === null ? null : p.predictedPaise / 100,
+                  partial: null,
+              })),
+          ]
+        : [];
 
-            const sentiment = computeMarketSentiment(revenues, slope);
-            setMarketSentiment(sentiment);
+    const reorder = (row: BusinessInsights['stock'][number]) =>
+        row.daysCover === null
+            ? null
+            : Math.max(0, Math.ceil((row.netUnits28 / 28) * (leadDays + bufferDays)) - row.stock);
 
-            // Upcoming festivals
-            const currentMonth = new Date().getMonth();
-            const upcomingFestivals = KERALA_FESTIVALS.filter(f => {
-                if (f.month !== null && f.month !== undefined) return f.month >= currentMonth && f.month <= currentMonth + 2;
-                return false;
-            });
-
-            // Stats
-            const totalRev = revenues.reduce((a, b) => a + b, 0);
-            const lastMonthRev = revenues[revenues.length - 1];
-            const prevMonthRev = revenues.length > 1 ? revenues[revenues.length - 2] : lastMonthRev;
-            const realGrowthRate = prevMonthRev > 0 ? ((lastMonthRev - prevMonthRev) / prevMonthRev) * 100 : 0;
-            const nextMonthPrediction = forecast[0]?.predicted || lastMonthRev * 1.05;
-
-            setForecastData(chartData);
-            setStats({
-                totalRevenue: totalRev,
-                avgMonthlyRevenue: totalRev / (revenues.length || 1),
-                predictedNextMonth: nextMonthPrediction,
-                growthRate: realGrowthRate.toFixed(1),
-                topCategory,
-                upcomingEvent: upcomingFestivals[0]?.name || 'Regular Season',
-                nextMonthLower: forecast[0]?.lower || 0,
-                nextMonthUpper: forecast[0]?.upper || 0,
-            });
-
-        } catch (error) {
-            console.error('Forecasting error:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    if (loading) return <div className="p-8 text-center">Analysing market patterns...</div>;
-
-    const sentimentColors = {
-        positive: { bg: 'bg-emerald-50 dark:bg-emerald-900/20', border: 'border-emerald-200', icon: 'text-emerald-600', title: 'text-emerald-800', text: 'text-emerald-700' },
-        mixed: { bg: 'bg-amber-50 dark:bg-amber-900/20', border: 'border-amber-200', icon: 'text-amber-600', title: 'text-amber-800', text: 'text-amber-700' },
-        recovering: { bg: 'bg-blue-50 dark:bg-blue-900/20', border: 'border-blue-200', icon: 'text-blue-600', title: 'text-blue-800', text: 'text-blue-700' },
-        cautious: { bg: 'bg-rose-50 dark:bg-rose-900/20', border: 'border-rose-200', icon: 'text-rose-600', title: 'text-rose-800', text: 'text-rose-700' }
-    };
-    const sc = sentimentColors[marketSentiment.type];
+    const candidates =
+        data?.stock.filter(
+            (row) =>
+                (stockFilter === 'ALL' ||
+                    (stockFilter === 'REVIEW' ? (reorder(row) ?? 0) > 0 : row.status === stockFilter)) &&
+                `${row.name} ${row.barcode} ${row.size} ${row.category}`.toLowerCase().includes(search.toLowerCase())
+        ) || [];
 
     return (
-        <div className="space-y-6">
-            {/* Header - stacks on small, side-by-side on large */}
-            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
-                <div>
-                    <h1 className="text-2xl md:text-3xl font-black text-gray-900 dark:text-white flex items-center gap-2">
-                        <BrainCircuit className="w-7 h-7 md:w-8 md:h-8 text-primary-600 shrink-0" />
-                        SALES FORECASTER
-                    </h1>
-                    <p className="text-sm text-gray-500">See how your business is doing and what to expect next</p>
+        <div className="space-y-6 text-gray-800 dark:text-gray-100 pb-12">
+            {/* Top Controls Toolbar (Unboxed) */}
+            <header className="flex flex-wrap items-center justify-between gap-3">
+                <h1 className="sr-only">Sales Forecasting & Business Planning</h1>
+                <p className="sr-only">Upcoming sales, restocking directions, seasonal alerts and comparisons.</p>
+
+                <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary-50 dark:bg-primary-950/40 text-primary-700 dark:text-primary-300 border border-primary-200/50 dark:border-primary-800/40 text-xs font-medium">
+                        <TrendingUp className="w-3.5 h-3.5 text-primary-600" />
+                        <span>Sales Outlook & Restocking</span>
+                    </span>
+                    {data && (
+                        <span className="hidden sm:inline">
+                            · Records through <strong>{data.through}</strong>
+                        </span>
+                    )}
                 </div>
-                <div className="flex flex-wrap items-center gap-3">
-                    {/* Forecast Period Control */}
-                    <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 p-1 rounded-xl">
-                        {([
-                            { months: 3, label: '3M' },
-                            { months: 6, label: '6M' },
-                            { months: 12, label: '1Y' }
-                        ] as const).map(opt => (
-                            <button
-                                key={opt.months}
-                                onClick={() => setForecastMonths(opt.months)}
-                                className={`px-3 py-1.5 text-xs font-black rounded-lg transition-all whitespace-nowrap ${
-                                    forecastMonths === opt.months
-                                        ? 'bg-primary-600 text-white shadow-sm'
-                                        : 'text-gray-500 hover:text-gray-700'
+
+                <div className="flex items-center gap-2.5 ml-auto">
+                    <div className="flex items-center gap-2 bg-white dark:bg-dark-card px-3 py-1.5 rounded-xl border border-gray-200 dark:border-dark-border shadow-xs">
+                        <span className="text-xs font-semibold text-gray-600 dark:text-gray-400">Forecast horizon</span>
+                        <select
+                            aria-label="Forecast horizon"
+                            className="bg-transparent text-gray-800 dark:text-gray-100 text-sm font-medium focus:outline-none cursor-pointer"
+                            value={horizon}
+                            onChange={(e) => setHorizon(Number(e.target.value))}
+                        >
+                            {[1, 2, 3, 4, 5, 6].map((n) => (
+                                <option key={n} value={n}>
+                                    {n} {n === 1 ? 'month' : 'months'}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <button
+                        className="btn btn-primary btn-sm flex items-center gap-1.5 px-3.5 py-1.5 text-xs shadow-xs disabled:opacity-40"
+                        disabled={!data && !error}
+                        onClick={() => setRetry((n) => n + 1)}
+                    >
+                        <RefreshCw size={14} className={!data && !error ? 'animate-spin' : ''} />
+                        Refresh
+                    </button>
+                </div>
+            </header>
+
+            {error ? (
+                <div role="alert" className="card p-6 border border-red-200 dark:border-red-900/50 bg-red-50/70 dark:bg-red-950/20 text-red-700 dark:text-red-300 rounded-2xl flex items-start gap-4">
+                    <div className="p-2 rounded-xl bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400 shrink-0">
+                        <AlertTriangle className="w-5 h-5" />
+                    </div>
+                    <div className="space-y-2">
+                        <h3 className="font-semibold text-base">Forecast Data Unavailable</h3>
+                        <p className="text-sm opacity-90">{error}</p>
+                        <button
+                            className="btn btn-danger btn-sm text-xs mt-2 underline"
+                            onClick={() => setRetry((n) => n + 1)}
+                        >
+                            Try again
+                        </button>
+                    </div>
+                </div>
+            ) : !data || !planning ? (
+                <div role="status" className="card p-12 text-center space-y-4 border border-gray-200 dark:border-dark-border bg-white dark:bg-dark-card rounded-2xl">
+                    <RefreshCw className="w-8 h-8 text-primary-600 animate-spin mx-auto" />
+                    <p className="text-base font-medium text-gray-700 dark:text-gray-300">
+                        Preparing sales forecasts and planning comparisons…
+                    </p>
+                    <p className="text-xs text-gray-500">
+                        Training statistical model across completed calendar months and evaluating recent product velocity.
+                    </p>
+                </div>
+            ) : (
+                <>
+                    {/* Metadata & Audit Subtitle */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400 px-1">
+                        <p>
+                            Records through <strong className="text-gray-800 dark:text-gray-200">{data.through}</strong> ·{' '}
+                            <span className="font-medium text-gray-700 dark:text-gray-300">{planning.history.length} completed calendar months</span> ·{' '}
+                            Updated {new Date(data.asOf).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}. Today’s partial sales, historical imports and labelled demo bills are excluded.
+                        </p>
+                    </div>
+
+                    {/* Forecast Basis Banner */}
+                    <div
+                        className={`rounded-2xl p-5 border text-sm transition-colors ${
+                            planning.basis === 'BILLED'
+                                ? 'bg-amber-50/70 border-amber-200 dark:bg-amber-950/20 dark:border-amber-800/50 text-amber-900 dark:text-amber-200'
+                                : 'bg-primary-50/60 border-primary-100 dark:bg-primary-950/20 dark:border-primary-900/40 text-primary-950 dark:text-primary-200'
+                        }`}
+                    >
+                        <div className="flex items-start gap-3.5">
+                            <div
+                                className={`p-2 rounded-xl shrink-0 mt-0.5 ${
+                                    planning.basis === 'BILLED'
+                                        ? 'bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300'
+                                        : 'bg-primary-100 dark:bg-primary-900/50 text-primary-700 dark:text-primary-300'
                                 }`}
                             >
-                                {opt.label}
-                            </button>
-                        ))}
-                    </div>
-                    {/* Market Sentiment Badge */}
-                    <div className={`${sc.bg} border ${sc.border} p-2.5 md:p-3 rounded-2xl flex items-center gap-2`}>
-                        <Sparkles className={`w-4 h-4 md:w-5 md:h-5 ${sc.icon} shrink-0`} />
-                        <div>
-                            <p className={`text-[10px] uppercase font-black ${sc.title} tracking-widest`}>Your Business</p>
-                            <p className={`text-xs md:text-sm font-bold ${sc.text}`}>{marketSentiment.label}</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Prediction Cards */}
-            <div className={`grid grid-cols-1 sm:grid-cols-2 ${backtestResult ? 'lg:grid-cols-5' : 'lg:grid-cols-4'} gap-4`}>
-                <div className="card bg-white dark:bg-dark-card border-none shadow-sm relative overflow-hidden group">
-                    <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-125 transition-transform">
-                        <TrendingUp className="w-12 h-12" />
-                    </div>
-                    <p className="text-xs font-black text-gray-400 uppercase tracking-widest">Expected Next Month Sales</p>
-                    <p className="text-2xl font-black mt-2 text-primary-600">
-                        {formatIndianCurrency(stats?.predictedNextMonth || 0)}
-                    </p>
-                    <div className={`flex items-center gap-1 mt-2 ${parseFloat(stats?.growthRate || '0') >= 0 ? 'text-emerald-600' : 'text-rose-600'} text-xs font-bold`}>
-                        {parseFloat(stats?.growthRate || '0') >= 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
-                        <span>{stats?.growthRate}% {parseFloat(stats?.growthRate || '0') >= 0 ? 'up from last month' : 'down from last month'}</span>
-                    </div>
-                    <p className="text-[9px] text-gray-400 mt-1">
-                        Could be between {formatIndianCurrency(stats?.nextMonthLower || 0)} and {formatIndianCurrency(stats?.nextMonthUpper || 0)}
-                    </p>
-                </div>
-
-                <div className="card bg-white dark:bg-dark-card border-none shadow-sm">
-                    <p className="text-xs font-black text-gray-400 uppercase tracking-widest">Your Monthly Average</p>
-                    <p className="text-2xl font-black mt-2 text-gray-900 dark:text-white">
-                        {formatIndianCurrency(stats?.avgMonthlyRevenue || 0)}
-                    </p>
-                    <p className="text-[10px] text-gray-500 mt-2 font-medium">This is how much you typically sell per month</p>
-                </div>
-
-                <div className="card bg-gradient-to-br from-indigo-600 to-violet-700 text-white border-none shadow-lg">
-                    <p className="text-xs font-black text-white/70 uppercase tracking-widest">Stock Up Budget (3 Months)</p>
-                    <p className="text-xl md:text-2xl font-black mt-2">{formatIndianCurrency((stats?.avgMonthlyRevenue || 0) * 2.5)}</p>
-                    <p className="text-[10px] text-white/50 mt-2 font-medium italic">{confidenceLabel} for {stats?.upcomingEvent}</p>
-                </div>
-
-                <div className="card bg-white dark:bg-dark-card border-none shadow-sm">
-                    <p className="text-xs font-black text-gray-400 uppercase tracking-widest">Best Selling Category</p>
-                    <p className="text-2xl font-black mt-2 text-emerald-600">{stats?.topCategory}</p>
-                    <p className="text-[10px] text-gray-500 mt-2 font-medium">This category brings in the most money</p>
-                </div>
-
-                {backtestResult && (
-                    <div className="card bg-white dark:bg-dark-card border-none shadow-sm">
-                        <p className="text-xs font-black text-gray-400 uppercase tracking-widest">Prediction Accuracy</p>
-                        <p className={`text-2xl font-black mt-2 ${backtestResult.accuracy >= 80 ? 'text-emerald-600' : backtestResult.accuracy >= 60 ? 'text-amber-600' : 'text-rose-600'}`}>
-                            {backtestResult.accuracy}%
-                        </p>
-                        <p className="text-[10px] text-gray-500 mt-2 font-medium">
-                            {backtestResult.accuracy >= 80 ? 'Our predictions are very close to reality' : backtestResult.accuracy >= 60 ? 'Our predictions are fairly close' : 'Predictions may vary - more data will improve this'}
-                        </p>
-                    </div>
-                )}
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Main Forecast Chart */}
-                <div className="card lg:col-span-2 shadow-sm border-none bg-white dark:bg-dark-card">
-                    <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-6 gap-4">
-                        <div>
-                            <h3 className="font-black text-gray-900 dark:text-white uppercase tracking-tight flex items-center gap-2 text-base md:text-lg">
-                                <Calendar className="w-5 h-5 text-primary-600 shrink-0" />
-                                Your Sales Chart
-                            </h3>
-                            <p className="text-xs text-gray-500 font-medium">Past sales (what actually happened) vs Future predictions (what we expect)</p>
-                        </div>
-
-                        <div className="flex flex-wrap gap-3 bg-gray-50 dark:bg-gray-800/50 p-2.5 rounded-2xl border border-gray-100 dark:border-gray-700">
-                            <div className="flex items-center gap-1.5">
-                                <div className="w-6 h-1 bg-primary-500 rounded-full shrink-0"></div>
-                                <p className="text-[10px] font-bold whitespace-nowrap">Actual Sales</p>
+                                {planning.basis === 'BILLED' ? (
+                                    <AlertTriangle className="w-5 h-5" />
+                                ) : (
+                                    <CheckCircle2 className="w-5 h-5" />
+                                )}
                             </div>
-                            <div className="flex items-center gap-1.5">
-                                <div className="w-6 h-1 bg-violet-400 border-t-2 border-dashed border-violet-500 shrink-0"></div>
-                                <p className="text-[10px] font-bold text-violet-600 whitespace-nowrap">Prediction</p>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                                <div className="w-6 h-[1px] border-t-2 border-dashed border-violet-300 shrink-0"></div>
-                                <p className="text-[10px] font-bold text-violet-400 whitespace-nowrap">Best/Worst</p>
-                            </div>
-                            {backtestResult && (
-                                <div className="flex items-center gap-1.5">
-                                    <div className="w-6 h-[1px] border-t-2 border-dashed border-amber-400 shrink-0"></div>
-                                    <p className="text-[10px] font-bold text-amber-500 whitespace-nowrap">Accuracy ({backtestResult.accuracy}%)</p>
+                            <div className="space-y-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <strong className="text-base font-semibold">
+                                        Forecast basis: {planning.basis === 'NET' ? 'Net recorded sales' : 'Billed sales before returns'}
+                                    </strong>
+                                    <span
+                                        className={`badge ${
+                                            planning.basis === 'NET' ? 'badge-info' : 'badge-warning'
+                                        }`}
+                                    >
+                                        {planning.basis === 'NET' ? 'Reconciled Net' : 'Provisional Billed'}
+                                    </span>
                                 </div>
-                            )}
+                                <p className="opacity-90 leading-relaxed text-sm">{planning.basisNote}</p>
+                                {planning.basis === 'BILLED' && (
+                                    <p className="mt-2 text-xs font-medium text-amber-800 dark:text-amber-300 bg-amber-100/60 dark:bg-amber-900/40 p-2.5 rounded-lg border border-amber-200/50 dark:border-amber-800/40">
+                                        Net forecasting needs exchange reconciliation. Billed-sales projections remain available so you can still plan, with this limitation visible.
+                                    </p>
+                                )}
+                            </div>
                         </div>
                     </div>
 
-                    <div className="h-[280px] md:h-[350px]">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={forecastData}>
-                                <defs>
-                                    <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.1} />
-                                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                                    </linearGradient>
-                                    <linearGradient id="colorPred" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.05} />
-                                        <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
-                                    </linearGradient>
-                                </defs>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                                <XAxis
-                                    dataKey="month"
-                                    axisLine={false}
-                                    tickLine={false}
-                                    tick={{ fontSize: 10, fontWeight: 700 }}
-                                />
-                                <YAxis
-                                    axisLine={false}
-                                    tickLine={false}
-                                    tick={{ fontSize: 10, fontWeight: 700 }}
-                                    tickFormatter={(v) => `₹${v / 1000}k`}
-                                />
-                                <Tooltip
-                                    cursor={{ stroke: '#3b82f6', strokeWidth: 1, strokeDasharray: '5 5' }}
-                                    contentStyle={{
-                                        borderRadius: '16px',
-                                        border: 'none',
-                                        boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04)',
-                                        padding: '12px'
-                                    }}
-                                    content={({ active, payload, label }) => {
-                                        if (active && payload && payload.length) {
-                                            const dataPoint = payload[0].payload as ForecastPoint;
-                                            const isPast = dataPoint.revenue !== null;
-                                            const isFuture = dataPoint.predicted !== null;
-
-                                            return (
-                                                <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-700 max-w-xs">
-                                                    <p className="text-[10px] font-black uppercase text-gray-400 mb-2 border-b pb-1">{label}</p>
-                                                    <div className="space-y-2">
-                                                        {isPast && (
-                                                            <div>
-                                                                <div className="flex justify-between items-center gap-8">
-                                                                    <span className="text-xs font-bold text-blue-600">You actually sold:</span>
-                                                                    <span className="text-sm font-black">{formatIndianCurrency(dataPoint.revenue!)}</span>
-                                                                </div>
-                                                                <p className="text-[9px] text-gray-400 mt-1">This is real data from your billing records</p>
-                                                            </div>
-                                                        )}
-                                                        {isFuture && (
-                                                            <div>
-                                                                <div className="flex justify-between items-center gap-8">
-                                                                    <span className="text-xs font-bold text-violet-500">We expect you to sell:</span>
-                                                                    <span className="text-sm font-black">{formatIndianCurrency(dataPoint.predicted!)}</span>
-                                                                </div>
-                                                                {dataPoint.predictedUpper !== null && (
-                                                                    <p className="text-[9px] text-gray-400 mt-1">
-                                                                        Best case: {formatIndianCurrency(dataPoint.predictedUpper)} | Worst case: {formatIndianCurrency(dataPoint.predictedLower!)}
-                                                                    </p>
-                                                                )}
-                                                            </div>
-                                                        )}
-                                                        {dataPoint.backtestPredicted !== null && (
-                                                            <div className="flex justify-between items-center gap-8 pt-1 border-t border-dashed">
-                                                                <span className="text-xs font-bold text-amber-500">We had predicted:</span>
-                                                                <span className="text-sm font-black">{formatIndianCurrency(dataPoint.backtestPredicted)}</span>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            );
-                                        }
-                                        return null;
-                                    }}
-                                />
-                                <Area
-                                    type="monotone"
-                                    dataKey="revenue"
-                                    stroke="#3b82f6"
-                                    strokeWidth={4}
-                                    fillOpacity={1}
-                                    fill="url(#colorRev)"
-                                    name="Actual Revenue"
-                                    activeDot={{ r: 6, strokeWidth: 0 }}
-                                />
-                                <Area
-                                    type="monotone"
-                                    dataKey="predicted"
-                                    stroke="#8b5cf6"
-                                    strokeWidth={2}
-                                    strokeDasharray="6 4"
-                                    fillOpacity={1}
-                                    fill="url(#colorPred)"
-                                    name="Forecasting"
-                                />
-                                <Area
-                                    type="monotone"
-                                    dataKey="predictedUpper"
-                                    stroke="#8b5cf680"
-                                    strokeWidth={1}
-                                    strokeDasharray="4 4"
-                                    fill="none"
-                                    dot={false}
-                                />
-                                <Area
-                                    type="monotone"
-                                    dataKey="predictedLower"
-                                    stroke="#8b5cf680"
-                                    strokeWidth={1}
-                                    strokeDasharray="4 4"
-                                    fill="none"
-                                    dot={false}
-                                />
-                                <Area
-                                    type="monotone"
-                                    dataKey="backtestPredicted"
-                                    stroke="#f59e0b"
-                                    strokeWidth={2}
-                                    strokeDasharray="6 3"
-                                    fill="none"
-                                    dot={{ r: 3, fill: '#f59e0b', strokeWidth: 0 }}
-                                />
-                            </AreaChart>
-                        </ResponsiveContainer>
-                    </div>
-                </div>
-
-                {/* Regional Insights */}
-                <div className="space-y-6">
-                    <div className="card shadow-sm border-none bg-white dark:bg-dark-card h-full">
-                        <h3 className="font-black text-gray-900 dark:text-white uppercase tracking-tight mb-4 flex items-center gap-2">
-                            <Filter className="w-5 h-5 text-primary-600" />
-                            When Do You Sell Most?
-                        </h3>
-                        <div className="space-y-3">
-                            {seasonalInsights.map((season) => (
-                                <div key={season.id} className="p-3 md:p-4 rounded-2xl bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700">
-                                    <div className="flex justify-between items-start mb-2">
-                                        <span className="font-black text-[10px] md:text-xs uppercase tracking-widest text-gray-500">{season.name}</span>
-                                        <span className="text-[10px] md:text-xs font-bold text-primary-600 bg-white dark:bg-gray-700 px-2 py-0.5 md:py-1 rounded-lg shrink-0 ml-2">
-                                            Busy Period
-                                        </span>
-                                    </div>
-                                    <div className="flex justify-between items-end gap-3">
-                                        <div className="min-w-0">
-                                            <p className="text-base md:text-lg font-black truncate">{formatIndianCurrency(season.weight)}</p>
-                                            <p className="text-[10px] text-gray-400">Total sales during this season</p>
-                                        </div>
-                                        <div className="h-2 w-24 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                                            <div
-                                                className="h-full bg-primary-600 rounded-full"
-                                                style={{ width: `${(season.weight / (stats?.totalRevenue || 1)) * 100 * 5}%` }}
-                                            />
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Action Plan & Understanding Guide */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="card shadow-sm border-none bg-white dark:bg-dark-card">
-                    <h3 className="font-black text-gray-900 dark:text-white uppercase tracking-tight mb-6 flex items-center gap-2">
-                        <Target className="w-5 h-5 text-primary-600" />
-                        What Should You Do Next?
-                    </h3>
-                    <div className="space-y-4">
-                        {/* Stock Up Recommendation */}
-                        <div className="flex gap-3">
-                            <div className="w-10 h-10 md:w-12 md:h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-900/30 flex items-center justify-center shrink-0">
-                                <ShoppingBag className="w-5 h-5 md:w-6 md:h-6 text-indigo-600" />
-                            </div>
-                            <div>
-                                <p className="font-bold text-sm">Stock up on "{stats?.topCategory}"</p>
-                                <p className="text-xs text-gray-500 mt-1">This is your #1 selling category. Order 20% extra before {stats?.upcomingEvent} so you don't run out when customers come in.</p>
-                            </div>
-                        </div>
-
-                        {/* Budget Suggestion */}
-                        <div className="flex gap-3">
-                            <div className="w-10 h-10 md:w-12 md:h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-900/30 flex items-center justify-center shrink-0">
-                                <IndianRupee className="w-5 h-5 md:w-6 md:h-6 text-emerald-600" />
-                            </div>
-                            <div>
-                                <p className="font-bold text-sm">Keep {formatIndianCurrency((stats?.avgMonthlyRevenue || 0) * 2.5)} ready for purchasing</p>
-                                <p className="text-xs text-gray-500 mt-1">Based on your monthly sales of {formatIndianCurrency(stats?.avgMonthlyRevenue || 0)}, this is how much stock you need to buy for the next 3 months.</p>
-                            </div>
-                        </div>
-
-                        {/* Growth / Decline Strategy */}
-                        {parseFloat(stats?.growthRate || '0') >= 0 ? (
-                            <div className="flex gap-3">
-                                <div className="w-10 h-10 md:w-12 md:h-12 rounded-2xl bg-amber-50 dark:bg-amber-900/30 flex items-center justify-center shrink-0">
-                                    <TrendingUp className="w-5 h-5 md:w-6 md:h-6 text-amber-600" />
-                                </div>
+                    {/* 4 Hero Stat Cards */}
+                    <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                        {/* Card 1: Next Month Forecast */}
+                        <div className="card !p-4 bg-white dark:bg-dark-card border border-gray-200 dark:border-dark-border rounded-xl shadow-xs flex flex-col justify-between">
+                            <div className="flex items-start justify-between gap-3">
                                 <div>
-                                    <p className="font-bold text-sm">Your sales are growing - invest more</p>
-                                    <p className="text-xs text-gray-500 mt-1">Last month you grew by {stats?.growthRate}%. This is a good time to try new products, increase ads, or open for longer hours to capture more sales.</p>
+                                    <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
+                                        Next month forecast
+                                    </p>
+                                    <strong className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white block">
+                                        {money(projections[0]?.predictedPaise ?? null)}
+                                    </strong>
                                 </div>
+                                <div className="p-2 rounded-xl bg-violet-50 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400 border border-violet-100 dark:border-violet-800/40">
+                                    <TrendingUp className="w-5 h-5" />
+                                </div>
+                            </div>
+                            <div className="mt-2.5 pt-2.5 border-t border-gray-100 dark:border-dark-border/60">
+                                <p className="text-xs text-gray-500 dark:text-gray-400">
+                                    {projections[0] ? monthName(projections[0].month) : 'Awaiting records'}
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Card 2: Projected Total for Horizon */}
+                        <div className="card !p-4 bg-white dark:bg-dark-card border border-gray-200 dark:border-dark-border rounded-xl shadow-xs flex flex-col justify-between">
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                    <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
+                                        Next {horizon} {horizon === 1 ? 'month' : 'months'} · projected total
+                                    </p>
+                                    <strong className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white block">
+                                        {money(total)}
+                                    </strong>
+                                </div>
+                                <div className="p-2 rounded-xl bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-400 border border-primary-100 dark:border-primary-800/40">
+                                    <Layers className="w-5 h-5" />
+                                </div>
+                            </div>
+                            <div className="mt-2.5 pt-2.5 border-t border-gray-100 dark:border-dark-border/60">
+                                <p className="text-xs text-gray-500 dark:text-gray-400">
+                                    Same basis as the chart; not profit or a guaranteed target.
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Card 3: Current Month Recorded So Far */}
+                        <div className="card !p-4 bg-white dark:bg-dark-card border border-gray-200 dark:border-dark-border rounded-xl shadow-xs flex flex-col justify-between">
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                    <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
+                                        {monthName(planning.currentMonth.month)} · recorded so far
+                                    </p>
+                                    <strong className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white block">
+                                        {money(planning.currentMonth.actualPaise)}
+                                    </strong>
+                                </div>
+                                <div className="p-2 rounded-xl bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400 border border-amber-100 dark:border-amber-800/40">
+                                    <Clock className="w-5 h-5" />
+                                </div>
+                            </div>
+                            <div className="mt-2.5 pt-2.5 border-t border-gray-100 dark:border-dark-border/60">
+                                <p className="text-xs text-gray-500 dark:text-gray-400">
+                                    {planning.currentMonth.elapsedDays} completed days. Current-month pace: {money(planning.currentMonth.projectedPaise)}.
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Card 4: Restocking Checks */}
+                        <div className="card !p-4 bg-white dark:bg-dark-card border border-gray-200 dark:border-dark-border rounded-xl shadow-xs flex flex-col justify-between">
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                    <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
+                                        Restocking checks
+                                    </p>
+                                    <strong className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white block">
+                                        {String(data.stock.filter((row) => (reorder(row) ?? 0) > 0).length)}
+                                    </strong>
+                                </div>
+                                <div className="p-2 rounded-xl bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400 border border-emerald-100 dark:border-emerald-800/40">
+                                    <Package className="w-5 h-5" />
+                                </div>
+                            </div>
+                            <div className="mt-2.5 pt-2.5 border-t border-gray-100 dark:border-dark-border/60">
+                                <p className="text-xs text-gray-500 dark:text-gray-400">
+                                    {data.inventory.tracked} active audited barcodes; generic stock checks remain separate.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Sales Forecast Chart & Scenario Table */}
+                    <section className="card p-5 space-y-5 shadow-sm border border-gray-200 dark:border-dark-border bg-white dark:bg-dark-card rounded-xl">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-gray-100 dark:border-dark-border pb-4">
+                            <div>
+                                <h2 className="font-bold text-lg text-gray-900 dark:text-white flex items-center gap-2.5">
+                                    <Calendar className="w-5 h-5 text-primary-600" />
+                                    <span>Sales forecast · next {horizon} {horizon === 1 ? 'month' : 'months'}</span>
+                                </h2>
+                                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{planning.reason}</p>
+                            </div>
+                        </div>
+
+                        {planning.history.length > 0 || projections.some((p) => p.predictedPaise !== null) ? (
+                            <div className="h-80 w-full pt-2">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <LineChart data={chart} margin={{ top: 10, right: 30, left: 10, bottom: 0 }}>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" className="dark:opacity-20" />
+                                        <XAxis
+                                            dataKey="month"
+                                            tickFormatter={monthName}
+                                            minTickGap={30}
+                                            stroke="#9ca3af"
+                                            tick={{ fontSize: 12 }}
+                                        />
+                                        <YAxis
+                                            width={88}
+                                            tickFormatter={(v) => `₹${Number(v).toLocaleString('en-IN')}`}
+                                            stroke="#9ca3af"
+                                            tick={{ fontSize: 12 }}
+                                        />
+                                        <Tooltip
+                                            contentStyle={{
+                                                backgroundColor: '#1f2937',
+                                                borderColor: '#374151',
+                                                borderRadius: '0.75rem',
+                                                color: '#f9fafb',
+                                                boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
+                                            }}
+                                            labelFormatter={(v) => monthName(String(v))}
+                                            formatter={(v: any, name: any) => [money(Math.round(Number(v) * 100)), name]}
+                                        />
+                                        <Legend wrapperStyle={{ paddingTop: '16px', fontSize: '13px' }} />
+                                        <Line
+                                            type="linear"
+                                            dataKey="actual"
+                                            name="Completed-month sales"
+                                            stroke="#0284c7"
+                                            strokeWidth={2.5}
+                                            dot={false}
+                                        />
+                                        <Line
+                                            type="linear"
+                                            dataKey="partial"
+                                            name="Current month so far"
+                                            stroke="#f59e0b"
+                                            strokeWidth={0}
+                                            dot={{ r: 5, fill: '#f59e0b' }}
+                                        />
+                                        <Line
+                                            type="linear"
+                                            dataKey="predicted"
+                                            name="Monthly forecast"
+                                            stroke="#8b5cf6"
+                                            strokeWidth={2.5}
+                                            strokeDasharray="5 4"
+                                            dot={{ r: 4, fill: '#8b5cf6' }}
+                                        />
+                                    </LineChart>
+                                </ResponsiveContainer>
                             </div>
                         ) : (
-                            <div className="flex gap-3">
-                                <div className="w-10 h-10 md:w-12 md:h-12 rounded-2xl bg-rose-50 dark:bg-rose-900/30 flex items-center justify-center shrink-0">
-                                    <AlertTriangle className="w-5 h-5 md:w-6 md:h-6 text-rose-600" />
-                                </div>
-                                <div>
-                                    <p className="font-bold text-sm">Sales dipped {Math.abs(parseFloat(stats?.growthRate || '0')).toFixed(1)}% - take action</p>
-                                    <p className="text-xs text-gray-500 mt-1">Consider running offers or discounts, check if any popular items are out of stock, and make sure your shop is visible on Google Maps and social media.</p>
+                            <div className="p-8 text-center bg-gray-50 dark:bg-dark-bg/40 rounded-xl border border-dashed border-gray-200 dark:border-dark-border">
+                                <p className="text-gray-500 dark:text-gray-400 text-sm">
+                                    Estimate withheld until enough sales are recorded. All six forecast months remain listed below.
+                                </p>
+                            </div>
+                        )}
+
+                        {/* Upcoming Months Table */}
+                        <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-dark-border">
+                            <table className="table w-full text-left text-sm">
+                                <thead>
+                                    <tr>
+                                        {['Upcoming month', 'Forecast', 'Planning scenario range', 'Same month last year', 'Projected change vs last year'].map((h) => (
+                                            <th key={h} className="px-4 py-3 bg-gray-50 dark:bg-dark-bg/70 text-xs font-semibold text-gray-600 dark:text-gray-300">
+                                                {h}
+                                            </th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-200 dark:divide-dark-border">
+                                    {projections.map((p) => {
+                                        const change =
+                                            p.predictedPaise !== null && p.lastYearPaise !== null && p.lastYearPaise > 0
+                                                ? ((p.predictedPaise - p.lastYearPaise) / p.lastYearPaise) * 100
+                                                : null;
+                                        return (
+                                            <tr className="hover:bg-gray-50 dark:hover:bg-dark-bg/40 transition-colors" key={p.month}>
+                                                <td className="px-4 py-3 font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                                                    <Calendar className="w-4 h-4 text-primary-500 shrink-0" />
+                                                    <span>{monthName(p.month)}</span>
+                                                </td>
+                                                <td className="px-4 py-3 font-bold text-gray-900 dark:text-white">
+                                                    {money(p.predictedPaise)}
+                                                </td>
+                                                <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
+                                                    {p.lowerPaise === null ? (
+                                                        <span className="text-gray-400 italic">Unavailable</span>
+                                                    ) : (
+                                                        <span className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 dark:bg-dark-bg text-xs font-mono">
+                                                             {money(p.lowerPaise)} – {money(p.upperPaise)}
+                                                        </span>
+                                                    )}
+                                                </td>
+                                                <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
+                                                    {p.lastYearPaise === null ? (
+                                                        <span className="text-gray-400 italic">No comparable history</span>
+                                                    ) : (
+                                                        money(p.lastYearPaise)
+                                                    )}
+                                                </td>
+                                                <td className="px-4 py-3">
+                                                    {change === null ? (
+                                                        <span className="text-gray-400 italic text-xs">Unavailable</span>
+                                                    ) : (
+                                                        <span className={`badge ${change >= 0 ? 'badge-success' : 'badge-danger'} font-semibold text-xs`}>
+                                                            {change > 0 ? '+' : ''}{change.toFixed(1)}%
+                                                        </span>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <p className="text-xs text-gray-500 leading-relaxed">
+                            Scenario ranges widen further into the future. They show planning uncertainty, not statistically calibrated confidence intervals. Forecasts include GST and are not profit estimates. No fixed growth uplift or festival-sales boost is invented.
+                        </p>
+
+                        {planning.history.some((m) => m.bills === 0) && (
+                            <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs flex items-center gap-2">
+                                <AlertTriangle className="w-4 h-4 shrink-0" />
+                                <span>
+                                    Some completed months have no recorded bills. They remain zero in this record-based projection; check for missing data or closures before using the estimates.
+                                </span>
+                            </div>
+                        )}
+
+                        {/* Forecast Method & Reliability Accordion */}
+                        <details className="group border border-gray-200 dark:border-dark-border rounded-xl p-4 bg-gray-50/50 dark:bg-dark-bg/20 transition-all text-sm">
+                            <summary className="font-semibold text-gray-800 dark:text-gray-200 cursor-pointer flex items-center justify-between list-none">
+                                <span className="flex items-center gap-2">
+                                    <Activity className="w-4 h-4 text-primary-600" />
+                                    Forecast method & reliability
+                                </span>
+                                <span className="text-xs text-primary-600 font-medium group-open:rotate-180 transition-transform">
+                                    ▼
+                                </span>
+                            </summary>
+                            <div className="mt-3 pt-3 border-t border-gray-200 dark:border-dark-border space-y-2 text-xs text-gray-600 dark:text-gray-300 leading-relaxed">
+                                <p>
+                                    <strong>Method:</strong> <span className="font-medium text-gray-800 dark:text-gray-200">{methods[planning.method]}</span>. Completed calendar months train the model; the current partial month is shown separately. Calendar-month lengths are taken into account. {planning.seasonality ? 'Two annual cycles are available for a bounded seasonal adjustment.' : 'There are fewer than two full annual cycles; seasonal reminders are shown, but a recurring sales uplift is not inferred.'}
+                                </p>
+                                {planning.backtest ? (
+                                    <div className="p-3 bg-white dark:bg-dark-card rounded-lg border border-gray-200 dark:border-dark-border space-y-1">
+                                        <p className="font-semibold text-gray-800 dark:text-gray-200">
+                                            Past-only monthly tests: {planning.backtest.months} · Mean miss: {money(planning.backtest.maePaise)} · Absolute error ratio: {planning.backtest.wapePercent === null ? 'Unavailable' : `${planning.backtest.wapePercent}%`}.
+                                        </p>
+                                        <p className="text-gray-500">
+                                            This tests next-month performance, not the accuracy of all six future months.
+                                        </p>
+                                    </div>
+                                ) : (
+                                    <p className="text-gray-500 italic">
+                                        Monthly validation is not available yet. Treat long-range figures as provisional planning estimates.
+                                    </p>
+                                )}
+                            </div>
+                        </details>
+                    </section>
+
+                    {/* Sales Comparisons Section */}
+                    <section className="card p-5 space-y-4 shadow-sm border border-gray-200 dark:border-dark-border bg-white dark:bg-dark-card rounded-xl">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-gray-100 dark:border-dark-border pb-3">
+                            <div>
+                                <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                                    <BarChart3 className="w-5 h-5 text-primary-600" />
+                                    Sales comparisons
+                                </h2>
+                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                    Same basis as the forecast. Month-to-date comparisons match the number of completed days; missing previous records remain unavailable.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-dark-border">
+                            <table className="table w-full text-sm text-left">
+                                <thead>
+                                    <tr>
+                                        {['Comparison', 'Current period', 'Previous period', 'Change'].map((h) => (
+                                            <th key={h} className="px-4 py-3 bg-gray-50 dark:bg-dark-bg/70 text-xs font-semibold text-gray-600 dark:text-gray-300">
+                                                {h}
+                                            </th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-200 dark:divide-dark-border">
+                                    {planning.comparisons.map((c) => (
+                                        <tr key={c.label} className="hover:bg-gray-50 dark:hover:bg-dark-bg/40 transition-colors">
+                                            <td className="px-4 py-3 font-semibold text-gray-900 dark:text-white">
+                                                {c.label}
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <span className="text-xs text-gray-500 block">{c.currentLabel}</span>
+                                                <p className="font-bold text-gray-900 dark:text-white mt-0.5">{money(c.currentPaise)}</p>
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <span className="text-xs text-gray-500 block">{c.previousLabel}</span>
+                                                <p className="font-bold text-gray-900 dark:text-white mt-0.5">{money(c.previousPaise)}</p>
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                {c.changePercent === null ? (
+                                                    <span className="text-gray-400 italic text-xs">Not comparable</span>
+                                                ) : (
+                                                    <span className={`badge ${c.changePercent >= 0 ? 'badge-success' : 'badge-danger'} font-semibold text-xs`}>
+                                                        {c.changePercent > 0 ? '+' : ''}{c.changePercent.toFixed(1)}%
+                                                    </span>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+
+                    {/* Season Alerts */}
+                    <ForecastSeasons
+                        today={new Date(data.asOf).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })}
+                        horizon={horizon}
+                        userId={user.id}
+                    />
+
+                    {/* What to Restock & Purchase Planning */}
+                    <section className="card p-5 space-y-4 shadow-sm border border-gray-200 dark:border-dark-border bg-white dark:bg-dark-card rounded-xl">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-gray-100 dark:border-dark-border pb-3">
+                            <div>
+                                <h2 className="font-bold text-lg text-gray-900 dark:text-white flex items-center gap-2">
+                                    <Package className="w-5 h-5 text-primary-600" />
+                                    What to restock & purchase planning
+                                </h2>
+                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                    Recent category demand includes traditional billing; exact stock-based purchase quantities use audited barcodes. Check physical pieces, supplier minimums and goods already ordered before buying.
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Category Demand Pills */}
+                        {data.categoryDemand.length > 0 && (
+                            <div className="space-y-2">
+                                <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                                    Category Velocity (Last 28 Days)
+                                </p>
+                                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                                    {data.categoryDemand.slice(0, 6).map((c) => (
+                                        <div
+                                            key={c.category}
+                                            className="p-3.5 rounded-xl border border-gray-200 dark:border-dark-border bg-gray-50/70 dark:bg-dark-bg/40 hover:border-primary-300 dark:hover:border-primary-700 transition-all flex flex-col justify-between"
+                                        >
+                                            <div>
+                                                <strong className="text-sm font-semibold text-gray-900 dark:text-white truncate block" title={c.category}>
+                                                    {c.category}
+                                                </strong>
+                                                <p className="text-xs font-bold text-primary-600 dark:text-primary-400 mt-1">
+                                                    {c.netUnits28} net pieces · last 28 days
+                                                </p>
+                                            </div>
+                                            <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2 line-clamp-2">
+                                                {c.netUnits28 > 0
+                                                    ? 'Check fast-selling sizes before the next delivery.'
+                                                    : 'Review demand and existing stock before reordering.'}
+                                            </p>
+                                        </div>
+                                    ))}
                                 </div>
                             </div>
                         )}
 
-                        {/* Seasonal Advice */}
-                        <div className="flex gap-3">
-                            <div className="w-10 h-10 md:w-12 md:h-12 rounded-2xl bg-violet-50 dark:bg-violet-900/30 flex items-center justify-center shrink-0">
-                                <Lightbulb className="w-5 h-5 md:w-6 md:h-6 text-violet-600" />
+                        {/* Interactive Filter Controls */}
+                        <div className="bg-gray-50 dark:bg-dark-bg p-4 rounded-xl border border-gray-200 dark:border-dark-border grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                            <div>
+                                <label className="label text-xs">Supplier lead time (days)</label>
+                                <input
+                                    aria-label="Supplier lead time"
+                                    type="number"
+                                    min={0}
+                                    max={90}
+                                    value={leadDays}
+                                    className="input text-sm py-2"
+                                    onWheel={(e) => e.currentTarget.blur()}
+                                    onChange={(e) => setLeadDays(Math.max(0, Math.min(90, Math.trunc(Number(e.target.value)) || 0)))}
+                                />
                             </div>
                             <div>
-                                <p className="font-bold text-sm">
-                                    {stats?.upcomingEvent !== 'Regular Season'
-                                        ? `${stats?.upcomingEvent} is coming - prepare now!`
-                                        : 'No festival coming soon - focus on regular sales'}
+                                <label className="label text-xs">Extra stock buffer (days)</label>
+                                <input
+                                    aria-label="Stock buffer"
+                                    type="number"
+                                    min={1}
+                                    max={90}
+                                    value={bufferDays}
+                                    className="input text-sm py-2"
+                                    onWheel={(e) => e.currentTarget.blur()}
+                                    onChange={(e) => setBufferDays(Math.max(1, Math.min(90, Math.trunc(Number(e.target.value)) || 1)))}
+                                />
+                            </div>
+                            <div>
+                                <label className="label text-xs">Filter stock</label>
+                                <select
+                                    className="input text-sm py-2"
+                                    value={stockFilter}
+                                    onChange={(e) => setStockFilter(e.target.value)}
+                                >
+                                    <option value="ALL">All audited stock</option>
+                                    <option value="REVIEW">Reorder review</option>
+                                    <option value="CHECK_COUNT">Count problems</option>
+                                    <option value="OBSERVING">Still observing</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="label text-xs">Find item / size / barcode</label>
+                                <div className="relative">
+                                    <input
+                                        className="input text-sm py-2 pl-9"
+                                        placeholder="Search name, barcode..."
+                                        value={search}
+                                        onChange={(e) => setSearch(e.target.value)}
+                                    />
+                                    <Search className="w-4 h-4 text-gray-400 absolute left-3 top-2.5" />
+                                </div>
+                            </div>
+                        </div>
+
+                        <p className="text-xs text-gray-500 leading-relaxed">
+                            Review quantity = recent net daily demand × ({leadDays} lead-time days + {bufferDays} buffer days) − recorded stock, rounded up. This is a transparent scenario, not an automatic order or purchase budget. Newly audited or sparse items keep their quantity unavailable.
+                        </p>
+
+                        {/* Stock Candidates Table */}
+                        <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-dark-border">
+                            <table className="table w-full text-sm text-left">
+                                <thead>
+                                    <tr>
+                                        {['Item / barcode', 'Size', 'Stock', 'Net pieces · 28 days', 'Estimated cover', 'Review purchase quantity', 'Direction'].map((h) => (
+                                            <th key={h} className="px-4 py-3 bg-gray-50 dark:bg-dark-bg/70 text-xs font-semibold text-gray-600 dark:text-gray-300">
+                                                {h}
+                                            </th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-200 dark:divide-dark-border">
+                                    {candidates.slice(0, 30).map((row) => {
+                                        const quantity = reorder(row);
+                                        return (
+                                            <tr key={row.id} className="hover:bg-gray-50 dark:hover:bg-dark-bg/40 transition-colors">
+                                                <td className="px-4 py-3">
+                                                    <strong className="font-semibold text-gray-900 dark:text-white block">{row.name}</strong>
+                                                    <p className="text-xs text-gray-500">{row.barcode} · {row.category}</p>
+                                                </td>
+                                                <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{row.size || 'Not specified'}</td>
+                                                <td className="px-4 py-3 font-semibold text-gray-800 dark:text-gray-200">{row.stock}</td>
+                                                <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{row.netUnits28}</td>
+                                                <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
+                                                    {row.daysCover === null ? 'Unavailable' : `${row.daysCover} days`}
+                                                </td>
+                                                <td className="px-4 py-3 font-semibold">{quantity === null ? 'Awaiting reliable counts / demand' : quantity}</td>
+                                                <td className="px-4 py-3">
+                                                    <span className={`badge ${
+                                                        row.status === 'CHECK_COUNT'
+                                                            ? 'badge-danger'
+                                                            : quantity !== null && quantity > 0
+                                                            ? 'badge-warning font-semibold'
+                                                            : row.status === 'OBSERVING'
+                                                            ? 'badge-info'
+                                                            : 'bg-gray-100 dark:bg-dark-bg text-gray-700 dark:text-gray-300'
+                                                    }`}>
+                                                        {row.status === 'CHECK_COUNT'
+                                                            ? 'Correct the count first'
+                                                            : quantity !== null && quantity > 0
+                                                            ? 'Check supplier availability and pending deliveries'
+                                                            : row.status === 'OBSERVING'
+                                                            ? 'Still collecting sales'
+                                                            : row.status === 'NO_DEMAND'
+                                                            ? 'Review slow-moving stock before buying'
+                                                            : 'Monitor size availability'}
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                            {!data.stock.length && (
+                                <p className="p-6 text-center text-sm text-gray-500">
+                                    No active audited stock to assess. Category demand can guide checks, but exact purchase quantities need verified stock.
                                 </p>
-                                <p className="text-xs text-gray-500 mt-1">
-                                    {stats?.upcomingEvent !== 'Regular Season'
-                                        ? `Customers will shop more during ${stats?.upcomingEvent}. Make sure your best products are in stock and your shop is well decorated for the season.`
-                                        : 'Use this quiet period to organize inventory, train staff, clear old stock with discounts, and plan purchases for the next festival.'}
+                            )}
+                            {data.stock.length > 0 && (
+                                <div className="px-4 py-3 bg-gray-50/50 dark:bg-dark-bg/20 border-t border-gray-200 dark:border-dark-border">
+                                    <p className="text-xs text-gray-500">
+                                        Showing {Math.min(30, candidates.length)} of {candidates.length} matching barcodes. Use search or filters to find the rest.
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+                    </section>
+
+                    {/* Data Checks & Next Actions */}
+                    <section className="card p-5 space-y-4 shadow-sm border border-gray-200 dark:border-dark-border bg-white dark:bg-dark-card rounded-xl">
+                        <div className="flex items-center gap-2.5 border-b border-gray-100 dark:border-dark-border pb-3">
+                            <ShieldCheck className="w-5 h-5 text-primary-600" />
+                            <h2 className="font-bold text-lg text-gray-900 dark:text-white">Data checks & next actions</h2>
+                        </div>
+
+                        <div className="grid sm:grid-cols-2 gap-4">
+                            <div className="p-4 rounded-xl bg-gray-50 dark:bg-dark-bg/40 border border-gray-200 dark:border-dark-border text-sm space-y-1.5">
+                                <div className="flex items-center gap-2 font-semibold text-gray-800 dark:text-gray-200">
+                                    <Package className="w-4 h-4 text-primary-600" />
+                                    <span>Inventory Audit Coverage</span>
+                                </div>
+                                <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
+                                    {data.inventory.legacy} generic barcodes have no audited stock count; {data.inventory.observing} audited barcodes need more observation or sales. They do not stop the sales forecast.
+                                </p>
+                            </div>
+
+                            <div className="p-4 rounded-xl bg-gray-50 dark:bg-dark-bg/40 border border-gray-200 dark:border-dark-border text-sm space-y-1.5">
+                                <div className="flex items-center gap-2 font-semibold text-gray-800 dark:text-gray-200">
+                                    <TrendingUp className="w-4 h-4 text-emerald-600" />
+                                    <span>Promotions & Margin Prudence</span>
+                                </div>
+                                <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
+                                    Promotions should use reliable purchase costs, GST treatment and your minimum margin. The forecast does not automatically recommend a discount that could erase profit.
                                 </p>
                             </div>
                         </div>
-                    </div>
-                </div>
 
-                <div className="card shadow-sm border-2 border-primary-50 bg-primary-50/20 dark:bg-primary-900/5 dark:border-primary-900/20">
-                    <h3 className="font-black text-primary-900 dark:text-primary-400 uppercase tracking-tight mb-4 flex items-center gap-2">
-                        <Sparkles className="w-5 h-5" />
-                        Understanding This Page
-                    </h3>
-                    <div className="space-y-4">
-                        <div className="p-3 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-primary-100 dark:border-primary-800">
-                            <p className="text-xs font-bold text-primary-700 mb-1 flex items-center gap-1">
-                                <CheckCircle2 className="w-3.5 h-3.5" /> What is this page?
-                            </p>
-                            <p className="text-[10px] text-gray-500 font-medium leading-relaxed">
-                                This page looks at all your past sales and tries to guess how much you will sell in the coming months. Think of it like a weather forecast - it gives you a good idea of what's coming so you can prepare.
-                            </p>
+                        {data.unresolvedExchangeBills > 0 && (
+                            <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-sm space-y-2">
+                                <div className="flex items-center gap-2 font-semibold text-amber-800 dark:text-amber-300">
+                                    <AlertTriangle className="w-5 h-5" />
+                                    <span>Exchange Reconciliation Required</span>
+                                </div>
+                                <p className="text-xs leading-relaxed">
+                                    Net sales need reconciliation for {data.unresolvedExchangeBills} exchange-related bills. The monthly projection is explicitly labelled billed sales until this is resolved.
+                                </p>
+                                <ul className="text-xs space-y-1 list-disc list-inside mt-2 font-mono">
+                                    {data.exchangeIssues.map((issue) => (
+                                        <li key={issue.billNo}>
+                                            Check bill <strong>#{issue.billNo}</strong> · {issue.date}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
+
+                        <div className="pt-2">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">Quick Navigation</p>
+                            <div className="flex flex-wrap gap-2.5">
+                                <Link className="btn btn-outline btn-sm text-xs flex items-center gap-1.5" to="/stock">
+                                    <span>Review stock</span>
+                                    <ArrowRight size={14} />
+                                </Link>
+                                <Link className="btn btn-outline btn-sm text-xs" to="/purchases">
+                                    Plan purchases
+                                </Link>
+                                <Link className="btn btn-outline btn-sm text-xs" to="/sales">
+                                    Review sales
+                                </Link>
+                                <Link className="btn btn-outline btn-sm text-xs" to="/profit">
+                                    Check profit and costs
+                                </Link>
+                            </div>
                         </div>
-                        <div className="p-3 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-primary-100 dark:border-primary-800">
-                            <p className="text-xs font-bold text-primary-700 mb-1 flex items-center gap-1">
-                                <CheckCircle2 className="w-3.5 h-3.5" /> What does the chart show?
-                            </p>
-                            <p className="text-[10px] text-gray-500 font-medium leading-relaxed">
-                                The <strong>blue line</strong> is your real sales - money you actually earned each month.
-                                The <strong>purple dashed line</strong> is our prediction of future sales.
-                                The <strong>faint lines</strong> around it show the best and worst case.
-                                {backtestResult && <> The <strong>orange dots</strong> show what we would have predicted for past months - you can compare them with the blue line to see how accurate we are.</>}
-                            </p>
-                        </div>
-                        <div className="p-3 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-primary-100 dark:border-primary-800">
-                            <p className="text-xs font-bold text-primary-700 mb-1 flex items-center gap-1">
-                                <CheckCircle2 className="w-3.5 h-3.5" /> How accurate is this?
-                            </p>
-                            <p className="text-[10px] text-gray-500 font-medium leading-relaxed">
-                                {backtestResult
-                                    ? `We tested our predictions against your last 6 months of real sales and we were ${backtestResult.accuracy}% accurate. ${backtestResult.accuracy >= 75 ? 'That\'s quite reliable!' : 'It will improve as we get more months of data.'}`
-                                    : 'We need at least 12 months of sales data to test our accuracy. Keep using the system and this will automatically improve!'}
-                                {' '}The more sales data you have, the better the predictions become.
-                            </p>
-                        </div>
-                        <div className="p-3 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-primary-100 dark:border-primary-800">
-                            <p className="text-xs font-bold text-primary-700 mb-1 flex items-center gap-1">
-                                <CheckCircle2 className="w-3.5 h-3.5" /> What should I do with this info?
-                            </p>
-                            <p className="text-[10px] text-gray-500 font-medium leading-relaxed">
-                                Use the "Expected Next Month Sales" number to plan how much stock to buy.
-                                Check the "Best Selling Category" to know what customers want most.
-                                Look at the seasonal section to prepare for busy festival periods ahead of time.
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            </div>
+                    </section>
+                </>
+            )}
         </div>
     );
 };

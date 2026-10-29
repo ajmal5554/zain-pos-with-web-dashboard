@@ -45,6 +45,27 @@ warn(exists('dist/index.html'), 'Renderer build output does not exist yet. Run n
 warn(exists('dist-electron/main.js'), 'Electron build output does not exist yet. Run npm run build before packaging.');
 warn(exists('prisma/pos.db'), 'Bundled database file prisma/pos.db is missing.');
 
+// Verify electron/main.ts permission queries match Prisma client schema
+try {
+  const { Prisma } = require(path.join(root, 'prisma/generated/client'));
+  if (Prisma?.UserScalarFieldEnum) {
+    const validFields = new Set(Object.keys(Prisma.UserScalarFieldEnum));
+    const mainTs = fs.readFileSync(path.join(root, 'electron/main.ts'), 'utf8');
+    const match = mainTs.match(/getUserPermissions[\s\S]*?select:\s*\{([\s\S]*?)\}/);
+    if (match) {
+      const fields = match[1]
+        .split('\n')
+        .map(l => l.trim().split(':')[0].trim())
+        .filter(f => f && !f.startsWith('//'));
+      for (const field of fields) {
+        check(validFields.has(field), `getUserPermissions selects field "${field}" which does not exist in Prisma User schema!`);
+      }
+    }
+  }
+} catch (e) {
+  warn(false, `Could not verify Prisma client scalar fields: ${e.message}`);
+}
+
 if (failures.length > 0) {
   console.error('Release smoke check failed:\n');
   for (const failure of failures) {

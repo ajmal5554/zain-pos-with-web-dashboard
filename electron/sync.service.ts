@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { PrismaClient } from '@prisma/client';
+import { prepareCatalogueSync, acknowledgeCatalogueSync, CATALOGUE_METADATA_VERSION } from './catalogue-sync.service';
 
 // We need a local prisma client instance here since we're in the electron process
 // Using 'any' to avoid strict type checks against the generated client if paths differ
@@ -306,32 +307,28 @@ class CloudSyncService {
             let productsCount = 0;
             let exchangesCount = 0;
             let refundsCount = 0;
+            let cataloguePending = 0;
 
             // 3. Delta Sync: Products (only unsynced products or products with updated variant stock)
-            const unsyncedProducts = await prisma.product.findMany({
-                where: {
-                    OR: [
-                        { isSynced: false },
-                        { variants: { some: { isSynced: false } } }
-                    ]
-                },
-                include: { category: true, variants: true },
-                take: 100
-            });
-
-            if (unsyncedProducts.length > 0) {
+            let productCursor: string | undefined;
+            while (true) {
+                const unsyncedProducts = await prisma.product.findMany({
+                    where: {
+                        OR: [{ isSynced: false }, { variants: { some: { isSynced: false } } }],
+                        ...(productCursor ? { id: { gt: productCursor } } : {}),
+                    },
+                    include: { category: true, variants: true },
+                    orderBy: { id: 'asc' },
+                    take: 100,
+                });
+                if (unsyncedProducts.length === 0) break;
+                productCursor = unsyncedProducts[unsyncedProducts.length - 1].id;
                 console.log(`⚡ [Smart Sync] Syncing ${unsyncedProducts.length} unsynced products...`);
-                await this.syncInventory(unsyncedProducts);
-                const pIds = unsyncedProducts.map((p: any) => p.id);
-                await prisma.product.updateMany({
-                    where: { id: { in: pIds } },
-                    data: { isSynced: true, lastSyncedAt: new Date() }
-                });
-                await prisma.productVariant.updateMany({
-                    where: { productId: { in: pIds } },
-                    data: { isSynced: true, lastSyncedAt: new Date() }
-                });
-                productsCount += unsyncedProducts.length;
+                const inventoryResult = await this.syncInventory(unsyncedProducts, cloudStatus);
+                if (!inventoryResult.success) throw new Error(inventoryResult.error);
+                await acknowledgeCatalogueSync(prisma, inventoryResult.syncedProducts);
+                cataloguePending += inventoryResult.pendingProducts.length;
+                productsCount += inventoryResult.syncedProducts.length;
             }
 
             // 4. Delta Sync: Sales & Voids
@@ -438,9 +435,12 @@ class CloudSyncService {
             }
 
             const totalSynced = salesCount + productsCount + exchangesCount + refundsCount;
-            const message = totalSynced === 0
+            const baseMessage = totalSynced === 0
                 ? 'All data is fully synchronized with cloud.'
                 : `Synced: ${salesCount} sales/voids, ${productsCount} products, ${exchangesCount} exchanges, ${refundsCount} refunds.`;
+            const message = cataloguePending > 0
+                ? `Sales sync completed. ${cataloguePending} catalogue products remain safely on this PC pending a compatible cloud catalogue update.`
+                : baseMessage;
 
             console.log(`✅ [Smart Sync] Finished. ${message}`);
             return {
@@ -449,7 +449,8 @@ class CloudSyncService {
                 salesSynced: salesCount,
                 productsSynced: productsCount,
                 exchangesSynced: exchangesCount,
-                refundsSynced: refundsCount
+                refundsSynced: refundsCount,
+                cataloguePending
             };
         } catch (error: any) {
             console.error('[Smart Sync] Error during sync:', error.message);
@@ -473,15 +474,24 @@ class CloudSyncService {
         }
     }
 
-    async syncInventory(products: any[]) {
-        if (!this.apiUrl) return;
+    async syncInventory(products: any[], knownCloudStatus?: any): Promise<any> {
+        if (!this.apiUrl || !prisma) return { success: false, error: 'Cloud sync is not configured.', syncedProducts: [], pendingProducts: products };
         try {
-            await axios.post(`${this.apiUrl}/api/sync/inventory`, { products }, {
-                headers: this.getSyncHeaders()
-            });
-            return { success: true };
+            const cloudStatus = knownCloudStatus === undefined ? await this.getCloudStatus() : knownCloudStatus;
+            const batch = await prepareCatalogueSync(prisma, products, cloudStatus);
+            if (batch.ready.length > 0) {
+                const response = await axios.post(`${this.apiUrl}/api/sync/inventory`, {
+                    products: batch.ready,
+                    ...(batch.supportsMetadata ? { catalogueMetadataVersion: CATALOGUE_METADATA_VERSION } : {}),
+                }, { headers: this.getSyncHeaders() });
+                if (response.data?.success === false) throw new Error(response.data.error || 'Cloud rejected inventory sync.');
+                if (batch.supportsMetadata && Number(response.data?.catalogueMetadataVersion || 0) < CATALOGUE_METADATA_VERSION) {
+                    throw new Error('Cloud did not acknowledge catalogue metadata; records remain pending.');
+                }
+            }
+            return { success: true, syncedProducts: batch.ready, pendingProducts: batch.pending };
         } catch (error: any) {
-            return { success: false, error: error.message };
+            return { success: false, error: error.message, syncedProducts: [], pendingProducts: products };
         }
     }
 
@@ -547,6 +557,7 @@ class CloudSyncService {
 
             const totalRecords = unsyncedSales + unsyncedProducts + unsyncedVariants + unsyncedCustomers + unsyncedInventory + unsyncedExchanges + unsyncedRefunds;
             let syncedRecords = 0;
+            let cataloguePending = 0;
 
             console.log(`📊 Found ${totalRecords} unsynced records:`, {
                 sales: unsyncedSales,
@@ -574,30 +585,19 @@ class CloudSyncService {
             if (unsyncedProducts > 0 || unsyncedVariants > 0) {
                 updateProgress('Syncing products...');
                 const products = await prisma.product.findMany({
-                    where: { isSynced: false },
+                    where: { OR: [{ isSynced: false }, { variants: { some: { isSynced: false } } }] },
                     include: { variants: true, category: true }
                 });
 
                 const batchSize = 100;
                 for (let i = 0; i < products.length; i += batchSize) {
                     const batch = products.slice(i, i + batchSize);
-                    await this.syncInventory(batch);
-                    
-                    // Mark products and variants as synced
-                    const productIds = batch.map((p: any) => p.id);
-                    const variantIds = batch.flatMap((p: any) => p.variants.map((v: any) => v.id));
-                    
-                    await prisma.product.updateMany({
-                        where: { id: { in: productIds } },
-                        data: { isSynced: true, lastSyncedAt: new Date() }
-                    });
-                    
-                    if (variantIds.length > 0) {
-                        await prisma.productVariant.updateMany({
-                            where: { id: { in: variantIds } },
-                            data: { isSynced: true, lastSyncedAt: new Date() }
-                        });
-                    }
+                    const inventoryResult = await this.syncInventory(batch);
+                    if (!inventoryResult.success) throw new Error(inventoryResult.error);
+                    await acknowledgeCatalogueSync(prisma, inventoryResult.syncedProducts);
+                    cataloguePending += inventoryResult.pendingProducts.length;
+                    const productIds = inventoryResult.syncedProducts.map((p: any) => p.id);
+                    const variantIds = inventoryResult.syncedProducts.flatMap((p: any) => p.variants.map((v: any) => v.id));
 
                     syncedRecords += productIds.length + variantIds.length;
                     updateProgress(`Syncing products... ${syncedRecords}/${totalRecords}`);
@@ -732,11 +732,17 @@ class CloudSyncService {
                 }
             }
 
-            updateProgress('Bulk sync complete!');
+            updateProgress(cataloguePending > 0 ? 'Sales sync complete; catalogue update pending.' : 'Bulk sync complete!');
             this.bulkSyncProgress = null;
 
             console.log(`✅ Bulk sync completed! ${syncedRecords} records synced.`);
-            return { success: true, message: `Successfully synced ${syncedRecords} records` };
+            return {
+                success: true,
+                cataloguePending,
+                message: cataloguePending > 0
+                    ? `Synced ${syncedRecords} records. ${cataloguePending} catalogue products remain on this PC pending a compatible cloud catalogue update.`
+                    : `Successfully synced ${syncedRecords} records`,
+            };
 
         } catch (error: any) {
             console.error('Bulk sync failed:', error);

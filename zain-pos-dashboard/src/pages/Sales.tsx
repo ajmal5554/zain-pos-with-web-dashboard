@@ -317,13 +317,13 @@ export default function Sales() {
                     variant={totalItems > 0 ? 'success' : 'default'}
                 />
                 <StatCard 
-                    title="Revenue" 
+                    title="Bill value (this page)" 
                     value={formatCurrency(totalRevenue)} 
                     icon={<TrendingUp className="h-4 w-4" />} 
                     loading={loading}
                 />
                 <StatCard 
-                    title="Average Order" 
+                    title="Average bill (this page)" 
                     value={formatCurrency(avgInvoice)} 
                     icon={<Activity className="h-4 w-4" />} 
                     loading={loading}

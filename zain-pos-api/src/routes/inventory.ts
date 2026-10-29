@@ -42,15 +42,8 @@ router.get('/products', async (req, res) => {
             const activeVariants = product.variants.filter(v => v.isActive);
 
             if (activeVariants.length === 0) {
-                // Return product as a single item if no active variants exist
-                return [{
-                    id: product.id,
-                    name: product.name,
-                    price: 0,
-                    stock: 0,
-                    category: product.category,
-                    status: 'No Variants'
-                }];
+                // A product without sellable variants is not an out-of-stock SKU.
+                return [];
             }
 
             return activeVariants.map(variant => ({
@@ -58,6 +51,9 @@ router.get('/products', async (req, res) => {
                 name: product.name + (variant.size ? ` (${variant.size}${variant.color ? ` ${variant.color}` : ''})` : ''),
                 price: variant.sellingPrice,
                 stock: variant.stock,
+                barcode: variant.barcode,
+                minStock: variant.minStock,
+                updatedAt: variant.updatedAt,
                 category: product.category
             }));
         });
@@ -77,7 +73,8 @@ router.get('/low-stock', async (req, res) => {
         const variants = await prisma.productVariant.findMany({
             where: {
                 stock: { lte: threshold },
-                isActive: true
+                isActive: true,
+                product: { isActive: true }
             },
             include: {
                 product: {

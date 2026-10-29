@@ -1,35 +1,18 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import JsBarcode from 'jsbarcode';
 import { Modal } from './Modal';
 import { Button } from './Button';
 import { formatIndianCurrency } from '../../lib/format';
 import { db } from '../../lib/db';
 import { ChevronDown, ChevronUp, Settings } from 'lucide-react';
+import { showToast } from './Toast';
+import { escapeHtml } from '../../lib/catalogueDescription';
+import { useAuthStore } from '../../store/authStore';
 
-// Copied from LabelDesigner.tsx to avoid complex imports
-export interface LabelBlock {
-    id: string;
-    type: 'shop_name' | 'product_name' | 'price' | 'barcode' | 'product_code' | 'meta_row' | 'text' | 'divider' | 'spacer';
-    content?: string;
-    styles: {
-        align?: 'left' | 'center' | 'right';
-        fontSize?: number;
-        bold?: boolean;
-        marginTop?: number;
-        marginBottom?: number;
-        height?: number; // for barcode height or spacer
-    };
-    visible: boolean;
-}
-
-const DEFAULT_LABEL_LAYOUT: LabelBlock[] = [
-    { id: '1', type: 'shop_name', styles: { align: 'left', fontSize: 10, bold: true, marginBottom: 0 }, visible: true },
-    { id: '2', type: 'product_name', styles: { align: 'left', fontSize: 8, bold: false, marginBottom: 2 }, visible: true },
-    { id: '3', type: 'barcode', styles: { align: 'left', height: 45, marginBottom: 0 }, visible: true },
-    { id: '4', type: 'text', content: '4649350', styles: { align: 'left', fontSize: 8, bold: false, marginBottom: 0 }, visible: true },
-    { id: '5', type: 'price', styles: { align: 'left', fontSize: 12, bold: true, marginBottom: 0 }, visible: true },
-];
-
+import { DEFAULT_LABEL_LAYOUT, DEFAULT_STICKER_CONFIG as DEFAULT_PRINT_CONFIG, restoreLegacyLabelCode, validateStickerConfig, labelOverflow } from '../../lib/labelTemplate';
+import type { LabelBlock } from '../../lib/labelTemplate';
+export type { LabelBlock } from '../../lib/labelTemplate';
+import { LabelStickerPreview } from './LabelStickerPreview';
 interface StickerPrintModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -52,31 +35,33 @@ export const StickerPrintModal: React.FC<StickerPrintModalProps> = ({
     const [layout, setLayout] = useState<LabelBlock[]>(DEFAULT_LABEL_LAYOUT);
     const [shopSettings, setShopSettings] = useState<any>({ shopName: 'Zain POS' });
     const [showConfig, setShowConfig] = useState(false);
+    const [isPrinting, setIsPrinting] = useState(false);
+    const [settingsLoading, setSettingsLoading] = useState(true);
+    const [settingsError, setSettingsError] = useState('');
+    const printing = useRef(false);
+    const settingsLoadId = useRef(0);
+    const { user } = useAuthStore();
+    const canPrintLabels = user?.role === 'ADMIN' || Boolean(user?.permPrintSticker);
 
     // Print Configuration State (Defaults updated to match user's physical configuration)
-    const [config, setConfig] = useState({
-        width: 32,      // mm
-        height: 18,     // mm
-        perRow: 2,
-        gapX: 2,        // mm
-        gapY: 1,         // mm
-        marginLeft: 2,
-        marginTop: 0,
-        contentScale: 75, // Percentage
-        rowDelayMs: 1200
-    });
+    const [config, setConfig] = useState(DEFAULT_PRINT_CONFIG);
 
 
 
 
     useEffect(() => {
         if (isOpen) {
+            setQuantity(1);
             loadSettings();
         }
-    }, [isOpen]);
+        return () => { settingsLoadId.current++; };
+    }, [isOpen, variant?.id]);
 
     // Load saved settings
     const loadSettings = async () => {
+        const loadId = ++settingsLoadId.current;
+        setSettingsLoading(true);
+        setSettingsError('');
         try {
             const [layoutResult, shopResult, configResult] = await Promise.all([
                 db.settings.findUnique({ where: { key: 'LABEL_LAYOUT' } }),
@@ -84,102 +69,26 @@ export const StickerPrintModal: React.FC<StickerPrintModalProps> = ({
                 db.settings.findUnique({ where: { key: 'STICKER_PRINT_CONFIG' } })
             ]);
 
-            if (layoutResult && layoutResult.value) {
-                setLayout(JSON.parse(layoutResult.value));
+            const nextLayout = restoreLegacyLabelCode(layoutResult?.value ? JSON.parse(layoutResult.value) : DEFAULT_LABEL_LAYOUT);
+            const nextShop = shopResult?.value ? JSON.parse(shopResult.value) : { shopName: 'Zain POS' };
+            const savedConfig = validateStickerConfig(configResult?.value ? JSON.parse(configResult.value) : DEFAULT_PRINT_CONFIG);
+            if (!Array.isArray(nextLayout) || nextLayout.some(block => !block || typeof block.type !== 'string' || !block.styles) ||
+                !nextShop || typeof nextShop !== 'object' || Array.isArray(nextShop) ||
+                !savedConfig || typeof savedConfig !== 'object' || Array.isArray(savedConfig)) {
+                throw new Error('Saved label settings are invalid. Check printer settings and retry.');
             }
-
-            if (shopResult && shopResult.value) {
-                setShopSettings(JSON.parse(shopResult.value));
-            }
-
-            if (configResult && configResult.value) {
-                setConfig(prev => ({ ...prev, ...JSON.parse(configResult.value) }));
-            }
+            if (loadId !== settingsLoadId.current) return;
+            setLayout(nextLayout);
+            setShopSettings(nextShop);
+            setConfig({ ...DEFAULT_PRINT_CONFIG, ...savedConfig });
         } catch (error) {
+            if (loadId !== settingsLoadId.current) return;
             console.error('Failed to load settings:', error);
+            setSettingsError((error as Error).message || 'Could not load saved label settings.');
+        } finally {
+            if (loadId === settingsLoadId.current) setSettingsLoading(false);
         }
     };
-
-    // Render barcode for preview
-    useEffect(() => {
-        if (isOpen && (variant?.barcode || variant?.sku) && layout.some(b => b.type === 'barcode' && b.visible)) {
-            // Use setTimeout to ensure DOM is updated
-            setTimeout(() => {
-                try {
-                    document.querySelectorAll('.preview-barcode').forEach((element) => {
-                        JsBarcode(element, variant.barcode || variant.sku, {
-                            format: 'CODE128',
-                            width: BARCODE_MODULE_WIDTH,
-                            height: 40,
-                            displayValue: false,
-                            fontSize: 10,
-                            margin: BARCODE_QUIET_MARGIN,
-                            lineColor: '#000000',
-                            background: '#ffffff'
-                        });
-                    });
-                } catch (error) {
-                    console.error('Failed to generate barcode:', error);
-                }
-            }, 100);
-        }
-    }, [isOpen, variant, layout, config]);
-
-    const renderBlockOnScreen = (block: LabelBlock) => {
-        if (!block.visible) return null;
-
-        const style: React.CSSProperties = {
-            textAlign: block.styles.align,
-            fontSize: `${block.styles.fontSize || 10}pt`, // Use pt to match print output
-            fontWeight: block.styles.bold ? 'bold' : 'normal',
-            marginTop: `${(block.styles.marginTop || 0)}px`,
-            marginBottom: `${(block.styles.marginBottom || 0)}px`,
-            lineHeight: 1.2,
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis'
-        };
-
-        switch (block.type) {
-            case 'shop_name':
-                return <div key={block.id} style={style}>{block.content || shopSettings.shopName}</div>;
-            case 'product_name':
-                return <div key={block.id} style={style}>{block.content || product.name}</div>;
-            case 'price':
-                return <div key={block.id} style={style}>{formatIndianCurrency(variant.mrp)}</div>;
-            case 'barcode':
-                return (
-                    <div key={block.id} style={{ ...style, display: 'flex', justifyContent: block.styles.align || 'center' }}>
-                        <svg className="preview-barcode" style={{ height: block.styles.height ? `${block.styles.height}px` : '40px', maxWidth: '100%' }}></svg>
-                    </div>
-                );
-            case 'text':
-                return <div key={block.id} style={style}>{block.content}</div>;
-            case 'product_code':
-                return <div key={block.id} style={style}>{variant.barcode || variant.sku}</div>;
-            case 'meta_row':
-                return (
-                    <div key={block.id} style={{ ...style, display: 'flex', justifyContent: 'space-between' }}>
-                        <span>{variant.barcode || variant.sku}</span>
-                        <span>{formatIndianCurrency(variant.sellingPrice)}</span>
-                    </div>
-                );
-            case 'divider':
-                return <div key={block.id} className="border-t border-black my-1" />;
-            case 'spacer':
-                return <div key={block.id} style={{ height: (block.styles.height || 10) }}></div>;
-            default:
-                return null;
-        }
-    };
-
-    const escapeHtml = (value: string) =>
-        value
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
 
     const createBarcodeSvgMarkup = (code: string, height: number) => {
         try {
@@ -201,6 +110,33 @@ export const StickerPrintModal: React.FC<StickerPrintModalProps> = ({
     };
 
     const handlePrint = async () => {
+        if (printing.current) return;
+        if (settingsLoading || settingsError) {
+            showToast(settingsError || 'Wait for saved label settings to load before printing.', 'error');
+            return;
+        }
+        if (!canPrintLabels) {
+            showToast('Permission denied: you cannot print labels.', 'warning');
+            return;
+        }
+        if (!product?.id || !variant?.id || variant.id.startsWith('temp-') || !(variant.barcode || variant.sku)) {
+            showToast('Save this variant with a unique code before printing labels.', 'warning');
+            return;
+        }
+        if (typeof quantity !== 'number' || !Number.isInteger(quantity) || quantity < 1 || quantity > 100) {
+            showToast('Enter a whole number of labels from 1 to 100.', 'error');
+            return;
+        }
+        if (!Number.isInteger(config.perRow) || config.perRow < 1 || config.perRow > 10 ||
+            !Number.isFinite(config.width) || config.width <= 0 ||
+            !Number.isFinite(config.height) || config.height <= 0 ||
+            !Number.isFinite(config.contentScale) || config.contentScale <= 0) {
+            showToast('Printer calibration is invalid. Check label settings before printing.', 'error');
+            return;
+        }
+        printing.current = true;
+        setIsPrinting(true);
+        try {
         let labelPrinterName: string | undefined;
         try {
             const printerSetting = await db.settings.findUnique({ where: { key: 'PRINTER_CONFIG' } });
@@ -214,7 +150,7 @@ export const StickerPrintModal: React.FC<StickerPrintModalProps> = ({
             console.error('Failed to load printer config for label print:', error);
         }
 
-        const safeQuantity = Math.max(1, Number(quantity) || 1);
+        const safeQuantity = quantity;
         const safeMarginLeft = Math.max(0, Number(config.marginLeft) || 0);
         const safeMarginTop = Math.max(0, Number(config.marginTop) || 0);
         const rowDelayMs = Math.max(300, Number((config as any).rowDelayMs) || 1200);
@@ -241,9 +177,10 @@ export const StickerPrintModal: React.FC<StickerPrintModalProps> = ({
 
                 switch (block.type) {
                     case 'shop_name':
-                        return `<div style="${style}">${block.content || shopSettings.shopName}</div>`;
-                    case 'product_name':
-                        return `<div style="${style}">${block.content || product.name}</div>`;
+                        return `<div style="${style}">${escapeHtml(block.content || shopSettings.shopName || '')}</div>`;
+                    case 'product_name': {
+                        return `<div style="${style}">${escapeHtml(String(block.content || product.name))}</div>`;
+                    }
                     case 'price':
                         return `<div style="${style}">MRP: ${formatIndianCurrency(variant.mrp)}</div>`;
                     case 'barcode':
@@ -257,10 +194,10 @@ export const StickerPrintModal: React.FC<StickerPrintModalProps> = ({
                     case 'text':
                         return `<div style="${style}">${escapeHtml(block.content || '')}</div>`;
                     case 'product_code':
-                        return `<div style="${style}">SKU: ${escapeHtml(String(variant.sku || ''))}</div>`;
+                        return `<div style="${style}">${escapeHtml(String(variant.barcode || variant.sku || ''))}</div>`;
                     case 'meta_row':
                         return `<div style="${style} display: flex; justify-content: space-between;">
-                                    <span>${escapeHtml(String(variant.sku || ''))}</span>
+                                    <span>${escapeHtml(String(variant.barcode || variant.sku || ''))}</span>
                                     <span>${formatIndianCurrency(variant.sellingPrice)}</span>
                                 </div>`;
                     case 'divider':
@@ -291,7 +228,7 @@ export const StickerPrintModal: React.FC<StickerPrintModalProps> = ({
                     <!DOCTYPE html>
                     <html>
                     <head>
-                        <title>Print Stickers - ${product.name}</title>
+                        <title>Print Stickers - ${escapeHtml(product.name)}</title>
                         <style>
                             @media print {
                                 @page {
@@ -340,6 +277,7 @@ export const StickerPrintModal: React.FC<StickerPrintModalProps> = ({
                             .sticker > div {
                                 font-size: 10pt;
                             }
+                            .content-wrapper svg { max-width: 100%; height: auto; flex-shrink: 1; }
                             .content-wrapper {
                                 transform: scale(${config.contentScale / 100});
                                 transform-origin: top left;
@@ -356,6 +294,10 @@ export const StickerPrintModal: React.FC<StickerPrintModalProps> = ({
 
                 const result = await window.electronAPI.print.label({
                     html,
+                    variantId: variant.id,
+                    productId: product.id,
+                    barcode: String(variant.barcode || variant.sku),
+                    expectedUpdatedAt: product.updatedAt,
                     options: {
                         pageWidthMm,
                         pageHeightMm,
@@ -363,7 +305,7 @@ export const StickerPrintModal: React.FC<StickerPrintModalProps> = ({
                     }
                 });
                 if (!result?.success) {
-                    alert(`Label print failed on row ${row + 1}: ${result?.error || 'Unknown error'}`);
+                    showToast(`Label print failed on row ${row + 1}: ${result?.error || 'Unknown error'}`, 'error');
                     return;
                 }
 
@@ -372,53 +314,68 @@ export const StickerPrintModal: React.FC<StickerPrintModalProps> = ({
                     await new Promise((resolve) => setTimeout(resolve, rowDelayMs));
                 }
             }
+            showToast(`Print job completed for ${safeQuantity} sticker${safeQuantity > 1 ? 's' : ''}.`, 'success');
         } catch (error: any) {
-            alert(`Label print failed: ${error?.message || error}`);
+            showToast(`Label print failed: ${error?.message || error}`, 'error');
+        }
+        } finally {
+            printing.current = false;
+            setIsPrinting(false);
         }
     };
 
     if (!product || !variant) return null;
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title="Print Product Sticker">
+        <Modal isOpen={isOpen} onClose={() => { if (!printing.current) onClose(); }} title="Print Product Sticker">
             <div className="space-y-4">
 
                 <div className="flex items-center gap-2 p-3 bg-blue-50 dark:bg-blue-900/10 rounded-lg border border-blue-100 dark:border-blue-900/30">
                     <Settings className="w-4 h-4 text-blue-600" />
                     <span className="text-xs font-semibold text-blue-700 uppercase">Printer Calibration: {config.width}x{config.height}mm</span>
                 </div>
+                {variant.isPrepared && <p className="text-sm text-amber-700 dark:text-amber-300">Preparation/test labels only. Keep selling stock under its current labels until conversion is ready.</p>}
+                {settingsLoading && <p role="status" className="text-sm text-gray-500">Loading saved label settings...</p>}
+                {settingsError && <div role="alert" className="text-sm text-red-600 dark:text-red-400 space-y-2">
+                    <p>{settingsError}</p>
+                    <Button variant="secondary" onClick={() => void loadSettings()} disabled={settingsLoading}>Retry loading label settings</Button>
+                </div>}
 
                 {/* Preview */}
-                <div className="flex justify-center bg-gray-100 dark:bg-gray-900 p-4 rounded overflow-hidden">
-                    <div className="flex flex-wrap" style={{ width: `${(config.width + config.gapX) * config.perRow}mm`, maxWidth: '100%' }}>
+                {!settingsLoading && !settingsError && <div className="flex justify-center bg-gray-100 dark:bg-gray-900 p-4 rounded overflow-auto">
+                    <div className="grid shrink-0" style={{ gridTemplateColumns: `repeat(${config.perRow}, ${config.width}mm)`, columnGap: `${config.gapX}mm`, rowGap: `${config.gapY}mm`, width: `${config.width * config.perRow + config.gapX * (config.perRow - 1)}mm` }}>
                         {/* Show just enough stickers to visualize the row and gap */}
                         {Array.from({ length: Math.min(config.perRow * 2, 4) }).map((_, i) => (
                             <div
                                 key={i}
-                                className="bg-white border border-dashed border-gray-400 overflow-hidden flex flex-col relative"
+                                className="bg-white outline outline-1 outline-dashed outline-gray-400 overflow-hidden relative shrink-0"
                                 style={{
                                     width: `${config.width}mm`,
                                     height: `${config.height}mm`,
-                                    marginRight: (i + 1) % config.perRow === 0 ? 0 : `${config.gapX}mm`,
-                                    marginBottom: `${config.gapY}mm`,
-                                    padding: '2mm',
+                                    
+                                    
+                                    padding: 0,
                                     transform: 'scale(1)', // render 1:1 roughly
                                 }}
                             >
                                 <div className="absolute top-0 right-0 bg-gray-200 text-[8px] px-1 opacity-50">#{i + 1}</div>
-                                {layout.map(block => renderBlockOnScreen(block))}
+                                <LabelStickerPreview blocks={layout} config={config} shopName={shopSettings.shopName} productName={product.name} code={String(variant.barcode || variant.sku || '')} mrp={variant.mrp} sellingPrice={variant.sellingPrice} />
                             </div>
                         ))}
                     </div>
-                </div>
+                </div>}
 
+                {labelOverflow(layout, config) && <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">This layout may clip the code or price. Open Settings → label designer and use Fit content to height, or reduce barcode/font height.</p>}
                 {/* Quantity */}
                 <div className="mt-4">
                     <label className="block text-sm font-medium mb-2">Number of Stickers</label>
                     <input
                         type="number"
                         inputMode="numeric"
+                        min="1"
                         max="100"
+                        step="1"
+                        disabled={isPrinting}
                         value={quantity}
                         onChange={(e) => {
                             const raw = e.target.value;
@@ -426,14 +383,9 @@ export const StickerPrintModal: React.FC<StickerPrintModalProps> = ({
                                 setQuantity('');
                                 return;
                             }
-                            const parsed = parseInt(raw, 10);
+                            const parsed = Number(raw);
                             if (Number.isFinite(parsed)) {
                                 setQuantity(parsed);
-                            }
-                        }}
-                        onBlur={() => {
-                            if (quantity === '' || Number(quantity) < 1) {
-                                setQuantity(1);
                             }
                         }}
                         className="w-full px-3 py-2 border rounded-lg"
@@ -442,17 +394,17 @@ export const StickerPrintModal: React.FC<StickerPrintModalProps> = ({
 
                 {/* Info */}
                 <div className="text-xs text-gray-500">
-                    <p>Total Print Width: ~{Math.ceil((config.width + config.gapX) * config.perRow)}mm</p>
+                    <p>Total Print Width: ~{Math.ceil(config.width * config.perRow + config.gapX * (config.perRow - 1) + config.marginLeft)}mm</p>
                 </div>
 
                 {/* Actions */}
                 <div className="flex gap-2 justify-end">
-                    <Button variant="secondary" onClick={onClose}>
+                    <Button variant="secondary" onClick={onClose} disabled={isPrinting}>
                         Cancel
                     </Button>
-                    <Button onClick={handlePrint}>
+                    <Button onClick={handlePrint} disabled={isPrinting || !canPrintLabels || settingsLoading || Boolean(settingsError)}>
                         <PrinterIcon className="w-4 h-4 mr-2" />
-                        Print {Math.max(1, Number(quantity) || 1)} Sticker{Math.max(1, Number(quantity) || 1) > 1 ? 's' : ''}
+                        {isPrinting ? 'Printing...' : 'Print Labels'}
                     </Button>
                 </div>
             </div>

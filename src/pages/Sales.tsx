@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Printer, Search, Trash2, Filter, Calendar as CalendarIcon, ChevronDown, ChevronUp, Tag, Banknote, CreditCard, QrCode } from 'lucide-react';
+import { Printer, Search, Trash2, Filter, Calendar as CalendarIcon, ChevronDown, ChevronUp, Tag, Banknote, CreditCard, QrCode, X, Globe, AlertCircle, ArrowLeftRight, ArrowDownRight, ArrowUpRight, History, Minus, Plus, Undo2 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
+import { SaleCostSummary } from '../components/sales/SaleCostSummary';
 import { ReplacementProductPicker } from '../components/sales/ReplacementProductPicker';
 import { Skeleton } from '../components/ui/Skeleton';
 import { Input } from '../components/ui/Input';
@@ -13,9 +14,13 @@ import { useAuthStore } from '../store/authStore';
 import { useCartStore } from '../store/cartStore';
 import { useNavigate } from 'react-router-dom';
 import { showToast } from '../components/ui/Toast';
-import { AlertCircle, ArrowLeftRight, ArrowDownRight, ArrowUpRight, History, Minus, Plus, Undo2 } from 'lucide-react';
+import { getReturnableItems, quoteRefund } from '../lib/refund';
+import { formatVariantDescription } from '../lib/catalogueDescription';
+import { ReturnStockSelector, validReturnStockChoice } from '../components/stock/ReturnStockSelector';
+import type { ReturnStockChoice } from '../types/returnStock';
 
 type TimePeriod = 'day' | 'week' | 'month' | 'year' | 'all';
+export type TransactionTypeFilter = 'all' | 'regular' | 'exchange' | 'refund' | 'voided';
 
 const formatDateInputValue = (date: Date): string => {
     const year = date.getFullYear();
@@ -52,6 +57,8 @@ const isReplacementSale = (sale: any): boolean =>
 export const Sales: React.FC = () => {
     const [sales, setSales] = useState<any[]>([]);
     const [searchQuery, setSearchQuery] = useState('');
+    const [searchScope, setSearchScope] = useState<'all' | 'period'>('all');
+    const [transactionType, setTransactionType] = useState<TransactionTypeFilter>('all');
     const [timePeriod, setTimePeriod] = useState<TimePeriod>('day');
     const [selectedDate, setSelectedDate] = useState(formatDateInputValue(new Date()));
     const [paymentFilter, setPaymentFilter] = useState<string>('all');
@@ -83,7 +90,9 @@ export const Sales: React.FC = () => {
                 const res = await window.electronAPI.sales.getExchangeDetails({
                     billNo: sale.billNo,
                     saleId: sale.id,
-                    remarks: sale.remarks
+                    remarks: sale.remarks,
+                    isOriginal: Boolean(sale.exchanges && sale.exchanges.length > 0) || (sale.remarks || '').includes('[EXCHANGE'),
+                    isReplacement: isReplacementSale(sale)
                 });
                 if (res.success && res.data) {
                     setExchangeDetailsMap(prev => ({ ...prev, [sale.id]: res.data }));
@@ -112,8 +121,26 @@ export const Sales: React.FC = () => {
     const [exchangeNewItems, setExchangeNewItems] = useState<any[]>([]); // New items being taken
     const [allProducts, setAllProducts] = useState<any[]>([]);
     const [refundReason, setRefundReason] = useState('');
+    const [refundDiscount, setRefundDiscount] = useState('');
+    const [returnStockChoices, setReturnStockChoices] = useState<Record<string, ReturnStockChoice>>({});
+    const [refundPaymentMode, setRefundPaymentMode] = useState<'CASH' | 'UPI' | 'CARD'>('CASH');
+    const [isRefunding, setIsRefunding] = useState(false);
+    const refundInFlight = React.useRef(false);
+    const refundRequestId = React.useRef('');
+    const refundPreview = useMemo(() => {
+        if (!isRefundModalOpen || !selectedSaleForAction) return { quote: null, error: '' };
+        try {
+            const selected = returnItems.filter(item => item.refundQty > 0).map(item => ({ id: item.variantId, qty: item.refundQty }));
+            if (!selected.length) return { quote: null, error: 'Select items to refund.' };
+            return { quote: quoteRefund(selectedSaleForAction, selected, refundDiscount.trim() === '' ? undefined : Number(refundDiscount)), error: '' };
+        } catch (error) {
+            return { quote: null, error: (error as Error).message };
+        }
+    }, [isRefundModalOpen, selectedSaleForAction, returnItems, refundDiscount]);
     const [replacementPaymentMethod, setReplacementPaymentMethod] = useState<'CASH' | 'CARD' | 'UPI'>('CASH');
     const [diffAmount, setDiffAmount] = useState(0);
+    const [exchangeDiscount, setExchangeDiscount] = useState<number>(0);
+    const [showExchangeDiscountConfirm, setShowExchangeDiscountConfirm] = useState(false);
 
     const getEffectiveLineTotal = (item: any) => {
         const explicitTotal = Number(item?.total ?? 0);
@@ -139,8 +166,8 @@ export const Sales: React.FC = () => {
         return Math.round((lineTotal / baseQty + Number.EPSILON) * 100) / 100;
     };
 
-    const getReturnValue = (item: any, qtyKey: 'returnQty' | 'refundQty', sale?: any) =>
-        getEffectiveUnitAmount(item, sale) * Number(item?.[qtyKey] || 0);
+    const getReturnValue = (item: any, qtyKey: 'returnQty' | 'refundQty', _sale?: any) =>
+        Number(item?.sellingPrice || item?.mrp || 0) * Number(item?.[qtyKey] || 0);
 
     // New stats states for entire filtered range
     const [totalMatchedRevenue, setTotalMatchedRevenue] = useState(0);
@@ -162,7 +189,7 @@ export const Sales: React.FC = () => {
             loadSales();
         }, 250);
         return () => clearTimeout(timer);
-    }, [timePeriod, selectedDate, searchQuery, paymentFilter, staffFilter, page, pageSize]);
+    }, [timePeriod, selectedDate, searchQuery, searchScope, transactionType, paymentFilter, staffFilter, page, pageSize]);
 
     useEffect(() => {
         loadShopSettings();
@@ -171,7 +198,7 @@ export const Sales: React.FC = () => {
 
     useEffect(() => {
         setPage(1);
-    }, [timePeriod, selectedDate, searchQuery, paymentFilter, staffFilter, pageSize]);
+    }, [timePeriod, selectedDate, searchQuery, searchScope, transactionType, paymentFilter, staffFilter, pageSize]);
 
     const loadShopSettings = async () => {
         try {
@@ -202,47 +229,146 @@ export const Sales: React.FC = () => {
         try {
             setLoading(true);
 
-            let where: any = {};
+            const andConditions: any[] = [];
 
-            const baseDate = parseDateInputValue(selectedDate);
+            const isSearching = searchQuery.trim().length > 0;
+            const applyDateFilter = !isSearching || searchScope === 'period';
 
-            if (timePeriod === 'day') {
-                const start = startOfDay(baseDate);
-                const end = endOfDay(baseDate);
-                where.createdAt = { gte: start, lte: end };
-            } else if (timePeriod === 'week') {
-                where.createdAt = { gte: startOfWeek(baseDate, { weekStartsOn: 1 }), lte: endOfWeek(baseDate, { weekStartsOn: 1 }) };
-            } else if (timePeriod === 'month') {
-                where.createdAt = { gte: startOfMonth(baseDate), lte: endOfMonth(baseDate) };
-            } else if (timePeriod === 'year') {
-                where.createdAt = { gte: startOfYear(baseDate), lte: endOfYear(baseDate) };
+            if (applyDateFilter && timePeriod !== 'all') {
+                const baseDate = parseDateInputValue(selectedDate);
+                if (timePeriod === 'day') {
+                    const start = startOfDay(baseDate);
+                    const end = endOfDay(baseDate);
+                    andConditions.push({ createdAt: { gte: start, lte: end } });
+                } else if (timePeriod === 'week') {
+                    andConditions.push({
+                        createdAt: {
+                            gte: startOfWeek(baseDate, { weekStartsOn: 1 }),
+                            lte: endOfWeek(baseDate, { weekStartsOn: 1 })
+                        }
+                    });
+                } else if (timePeriod === 'month') {
+                    andConditions.push({
+                        createdAt: {
+                            gte: startOfMonth(baseDate),
+                            lte: endOfMonth(baseDate)
+                        }
+                    });
+                } else if (timePeriod === 'year') {
+                    andConditions.push({
+                        createdAt: {
+                            gte: startOfYear(baseDate),
+                            lte: endOfYear(baseDate)
+                        }
+                    });
+                }
             }
 
             // Add payment filter
             if (paymentFilter !== 'all') {
-                where.paymentMethod = paymentFilter;
+                andConditions.push({ paymentMethod: paymentFilter });
             }
 
             if (staffFilter !== 'all') {
-                where.userId = staffFilter;
+                andConditions.push({ userId: staffFilter });
             }
 
-            // Add search filter
-            if (searchQuery) {
-                where.OR = [
-                    { billNo: { contains: searchQuery } },
-                    { customerName: { contains: searchQuery } },
-                    { customerPhone: { contains: searchQuery } },
-                    { items: { some: { productName: { contains: searchQuery } } } },
-                    { user: { name: { contains: searchQuery } } }
-                ];
+            // Transaction Type filter (regular, exchange, refund, voided, all)
+            if (transactionType === 'regular') {
+                andConditions.push({
+                    status: { not: 'VOIDED' },
+                    paymentMethod: { not: 'EXCHANGE' },
+                    exchanges: { none: {} },
+                    refunds: { none: {} },
+                    NOT: [
+                        { remarks: { contains: 'Replacement' } },
+                        { remarks: { contains: '[EXCHANGE' } }
+                    ]
+                });
+            } else if (transactionType === 'exchange') {
+                andConditions.push({
+                    OR: [
+                        { exchanges: { some: {} } },
+                        { paymentMethod: 'EXCHANGE' },
+                        { remarks: { contains: 'Replacement' } },
+                        { remarks: { contains: '[EXCHANGE' } }
+                    ]
+                });
+            } else if (transactionType === 'refund') {
+                andConditions.push({
+                    refunds: { some: {} }
+                });
+            } else if (transactionType === 'voided') {
+                andConditions.push({
+                    status: 'VOIDED'
+                });
             }
+
+            // Smart Search filter
+            if (isSearching) {
+                const trimmedQuery = searchQuery.trim();
+                const billQuery = trimmedQuery.replace(/^#/, '');
+                const numericVal = parseFloat(trimmedQuery.replace(/[₹,\s]/g, ''));
+                const isValidNumber = !isNaN(numericVal) && isFinite(numericVal);
+
+                const searchOrConditions: any[] = [
+                    { billNo: { contains: billQuery } },
+                    { customerName: { contains: trimmedQuery } },
+                    { customerPhone: { contains: trimmedQuery } },
+                    { user: { name: { contains: trimmedQuery } } },
+                    { remarks: { contains: trimmedQuery } },
+                    {
+                        items: {
+                            some: {
+                                OR: [
+                                    { productName: { contains: trimmedQuery } },
+                                    { variantInfo: { contains: trimmedQuery } },
+                                    { variant: { sku: { contains: trimmedQuery } } },
+                                    { variant: { barcode: { contains: trimmedQuery } } }
+                                ]
+                            }
+                        }
+                    }
+                ];
+
+                if (isValidNumber && numericVal > 0) {
+                    searchOrConditions.push(
+                        { grandTotal: { gte: numericVal - 0.5, lte: numericVal + 0.5 } },
+                        { subtotal: { gte: numericVal - 0.5, lte: numericVal + 0.5 } },
+                        {
+                            items: {
+                                some: {
+                                    OR: [
+                                        { sellingPrice: { gte: numericVal - 0.5, lte: numericVal + 0.5 } },
+                                        { mrp: { gte: numericVal - 0.5, lte: numericVal + 0.5 } },
+                                        { total: { gte: numericVal - 0.5, lte: numericVal + 0.5 } }
+                                    ]
+                                }
+                            }
+                        }
+                    );
+                }
+
+                andConditions.push({ OR: searchOrConditions });
+            }
+
+            const where: any = andConditions.length > 0 ? { AND: andConditions } : {};
+
+            const statsWhere = transactionType === 'voided'
+                ? where
+                : { AND: [...andConditions, { status: { not: 'VOIDED' } }] };
 
             const [data, totalStats, totalCount, exchangeCreditStats] = await Promise.all([
                 db.sales.findMany({
                     where,
                     include: {
-                        items: true,
+                        items: {
+                            include: {
+                                variant: {
+                                    select: { sku: true, barcode: true }
+                                }
+                            }
+                        },
                         payments: true,
                         user: { select: { name: true } },
                         exchanges: { include: { items: true } },
@@ -253,7 +379,7 @@ export const Sales: React.FC = () => {
                     skip: (page - 1) * pageSize,
                 }),
                 db.sales.aggregate({
-                    where: { ...where, status: { not: 'VOIDED' } },
+                    where: statsWhere,
                     _sum: { grandTotal: true },
                     _count: { id: true }
                 }),
@@ -264,7 +390,7 @@ export const Sales: React.FC = () => {
                 db.invoicePayments.aggregate({
                     where: {
                         paymentMode: 'EXCHANGE_CREDIT',
-                        sale: { ...where, status: { not: 'VOIDED' } }
+                        sale: statsWhere
                     },
                     _sum: { amount: true }
                 }).catch(() => ({ _sum: { amount: 0 } }))
@@ -380,12 +506,14 @@ export const Sales: React.FC = () => {
         }
 
         try {
-            const variants = await db.productVariants.findMany({
+            if (!window.electronAPI?.catalogue?.listVariants) throw new Error('Catalogue service is unavailable. Restart the app.');
+            const result = await window.electronAPI.catalogue.listVariants({
                 where: { isActive: true },
-                include: { product: true }
+                include: { product: true },
+                userId: user?.id,
             });
-
-            const normalizedVariants = (variants || []).filter((variant: any) => variant?.product?.name).map((variant: any) => ({
+            if (!result?.success || !Array.isArray(result.data)) throw new Error(result?.error || 'Could not load replacement products.');
+            const normalizedVariants = result.data.filter((variant: any) => variant?.product?.name).map((variant: any) => ({
                 ...variant,
                 stock: Number(variant.stock ?? 0),
                 sellingPrice: Number(variant.sellingPrice ?? 0),
@@ -397,31 +525,31 @@ export const Sales: React.FC = () => {
         } catch (e) {
             console.error("Failed to load products for exchange", e);
             setAllProducts([]);
+            showToast((e as Error).message || 'Could not load replacement products.', 'error');
         }
 
         setSelectedSaleForAction(sale);
         setReturnItems(preparedReturnItems);
         setExchangeNewItems([]);
+        setReturnStockChoices({});
         setReplacementPaymentMethod((sale.paymentMethod === 'CARD' || sale.paymentMethod === 'UPI') ? sale.paymentMethod : 'CASH');
         setDiffAmount(0);
+        setExchangeDiscount(0);
+        setShowExchangeDiscountConfirm(false);
         setIsExchangeModalOpen(true);
     };
 
     const handleRefundClick = (sale: any) => {
-        const preparedReturnItems = sale.items
-            .map((item: any) => {
-                const returnedQty = (sale.exchanges || []).reduce((sum: number, ex: any) =>
-                    sum + (ex.items || [])
-                        .filter((ei: any) => ei.returnedItemId === item.variantId)
-                        .reduce((s: number, ei: any) => s + (ei.returnedQty || 0), 0), 0);
-                const refundedQty = (sale.refunds || []).reduce((sum: number, ref: any) =>
-                    sum + (ref.items || [])
-                        .filter((ri: any) => ri.variantId === item.variantId)
-                        .reduce((s: number, ri: any) => s + (ri.quantity || 0), 0), 0);
-                const availableQty = Math.max(0, item.quantity - returnedQty - refundedQty);
-                return { ...item, quantity: availableQty, refundQty: 0 };
-            })
-            .filter((item: any) => item.quantity > 0);
+        let preparedReturnItems: any[];
+        try {
+            preparedReturnItems = getReturnableItems(sale).filter(item => item.availableQty > 0).map(item => ({
+                ...sale.items.find((original: any) => original.variantId === item.variantId),
+                ...item, quantity: item.availableQty, refundQty: 0
+            }));
+        } catch (error) {
+            showToast((error as Error).message, 'error');
+            return;
+        }
 
         if (preparedReturnItems.length === 0) {
             showToast('No refundable items left for this bill.', 'warning');
@@ -435,6 +563,10 @@ export const Sales: React.FC = () => {
         setSelectedSaleForAction(sale);
         setReturnItems(preparedReturnItems);
         setRefundReason('');
+        setReturnStockChoices({});
+        refundRequestId.current = crypto.randomUUID();
+        setRefundDiscount('');
+        setRefundPaymentMode(sale.paymentMethod === 'UPI' ? 'UPI' : 'CASH');
         setIsRefundModalOpen(true);
     };
 
@@ -446,23 +578,43 @@ export const Sales: React.FC = () => {
             showToast("Exchange requires at least one returned item. Please set return quantity in Step 1.", 'error');
             return;
         }
+        if (returns.some(item => !validReturnStockChoice(returnStockChoices[item.variantId]))) {
+            showToast('Identify and confirm the physical stock destination for every returned garment.', 'warning');
+            return;
+        }
 
         if (exchangeNewItems.length === 0) {
             showToast("Exchange requires at least one replacement item. Please select replacement items in Step 2.", 'error');
             return;
         }
 
-        const totalReturnedValue = returnItems.reduce((sum, it) => sum + getReturnValue(it, 'returnQty'), 0);
+        // Exchange credit uses MRP (sellingPrice), not net-paid-after-discount
+        const totalReturnedValue = returnItems.reduce((sum, it) => sum + (Number(it.sellingPrice || 0) * (it.returnQty || 0)), 0);
         const totalNewValue = exchangeNewItems.reduce((sum, it) => sum + (it.sellingPrice * it.quantity), 0);
-        const difference = totalNewValue - totalReturnedValue;
+        const discount = Math.max(0, exchangeDiscount || 0);
+        const netNewValue = totalNewValue - discount;
+        const difference = netNewValue - totalReturnedValue;
+
+        if (discount > totalNewValue) {
+            showToast('Discount cannot exceed the new item total.', 'warning');
+            return;
+        }
+
+        // Warn if discount is zero and there are new items
+        if (exchangeNewItems.length > 0 && discount <= 0 && !showExchangeDiscountConfirm) {
+            setShowExchangeDiscountConfirm(true);
+            return;
+        }
+        setShowExchangeDiscountConfirm(false);
 
         try {
             const returns = returnItems.filter(ri => ri.returnQty > 0).map(ri => ({
                 returnedId: ri.variantId,
+                stockChoice: returnStockChoices[ri.variantId],
                 returnedQty: ri.returnQty,
                 newId: null,
                 newQty: 0,
-                priceDiff: -getReturnValue(ri, 'returnQty')
+                priceDiff: -(Number(ri.sellingPrice || 0) * ri.returnQty)
             }));
 
             const news = exchangeNewItems.map(ni => ({
@@ -477,6 +629,7 @@ export const Sales: React.FC = () => {
                 originalInvoiceId: selectedSaleForAction.id,
                 userId: user?.id,
                 differenceAmount: difference,
+                discount,
                 notes: `Exchange for Bill #${selectedSaleForAction.billNo}`,
                 replacementPaymentMethod,
                 items: [...returns, ...news],
@@ -500,6 +653,7 @@ export const Sales: React.FC = () => {
     };
 
     const submitRefund = async () => {
+        if (refundInFlight.current) return;
         if (!selectedSaleForAction || !refundReason.trim()) {
             showToast("Reason is mandatory for refunds.", 'warning');
             return;
@@ -510,23 +664,32 @@ export const Sales: React.FC = () => {
             showToast("Select at least one item to refund.", 'warning');
             return;
         }
+        if (itemsToRefund.some(item => !validReturnStockChoice(returnStockChoices[item.variantId]))) {
+            showToast('Identify and confirm the physical stock destination for every returned garment.', 'warning');
+            return;
+        }
 
+        const quote = refundPreview.quote;
+        if (!quote || quote.requiresDiscount) {
+            showToast(refundPreview.error || 'Enter the original discount for the selected items (enter 0 if none).', 'warning');
+            return;
+        }
+        refundInFlight.current = true;
+        setIsRefunding(true);
         try {
-            const refundAmount = itemsToRefund.reduce((sum, it) => sum + getReturnValue(it, 'refundQty'), 0);
+            const refundAmount = quote.total;
             const refundData = {
+                requestId: refundRequestId.current,
                 originalInvoiceId: selectedSaleForAction.id,
                 userId: user?.id,
                 totalAmount: refundAmount,
                 reason: refundReason,
-                items: itemsToRefund.map(it => ({
-                    id: it.variantId,
-                    qty: it.refundQty,
-                    amount: getReturnValue(it, 'refundQty')
-                })),
-                payments: [{
-                    paymentMode: selectedSaleForAction.paymentMethod || 'CASH',
+                originalDiscount: quote.discount,
+                items: quote.items.map(item => ({ ...item, stockChoice: returnStockChoices[item.id] })),
+                payments: refundAmount > 0 ? [{
+                    paymentMode: refundPaymentMode,
                     amount: refundAmount
-                }]
+                }] : []
             };
 
             const result = await window.electronAPI.sales.refund(refundData);
@@ -539,6 +702,9 @@ export const Sales: React.FC = () => {
             }
         } catch (error: any) {
             showToast(`Refund Failed: ${error.message}`, 'error');
+        } finally {
+            refundInFlight.current = false;
+            setIsRefunding(false);
         }
     };
 
@@ -546,6 +712,10 @@ export const Sales: React.FC = () => {
     const exchangeSelectableProducts = allProducts.filter((p: any) => !!p?.product?.name);
 
     const handleAddReplacementProduct = (variant: any) => {
+        if (variant.isPrepared) {
+            showToast('Stock conversion pending for this item. Cannot be sold until converted.', 'warning');
+            return;
+        }
         setExchangeNewItems(prev => {
             const existingIdx = prev.findIndex(ni => ni.variantId === variant.id);
             if (existingIdx >= 0) {
@@ -555,8 +725,8 @@ export const Sales: React.FC = () => {
             }
             return [...prev, {
                 variantId: variant.id,
-                productName: variant.product.name,
-                variantInfo: `${variant.size || ''} ${variant.color || ''}`.trim(),
+                productName: formatVariantDescription(variant.product.name, variant),
+                variantInfo: '',
                 sellingPrice: variant.sellingPrice,
                 quantity: 1
             }];
@@ -720,6 +890,7 @@ export const Sales: React.FC = () => {
                 logo: shopSettings?.logo,
                 customerName: sale.customerName,
                 items: sale.items.map((item: any) => ({
+                    variantId: item.variantId,
                     name: item.productName,
                     variantInfo: item.variantInfo,
                     quantity: item.quantity,
@@ -746,12 +917,21 @@ export const Sales: React.FC = () => {
                 isReplacementBill: isReplBill && exchCreditAmt > 0,
                 originalBillNo: origBillNo,
                 exchangeCreditAmount: exchCreditAmt,
+                // Refund fields
+                totalRefundAmount: (sale.refunds || []).reduce((sum: number, r: any) => sum + Number(r.totalRefundAmount || 0), 0) > 0
+                    ? (sale.refunds || []).reduce((sum: number, r: any) => sum + Number(r.totalRefundAmount || 0), 0)
+                    : undefined,
+                refundStatus: (sale.refunds || []).length > 0
+                    ? ((sale.refunds || []).reduce((sum: number, r: any) => sum + Number(r.totalRefundAmount || 0), 0) >= Number(sale.grandTotal || 0) - 0.009
+                        ? ('REFUNDED' as const)
+                        : ('PARTIALLY_REFUNDED' as const))
+                    : undefined,
             };
 
             await printService.printReceipt(receiptData);
         } catch (error) {
             console.error('Failed to print receipt:', error);
-            showToast('Failed to print receipt', 'error');
+            showToast(error instanceof Error ? error.message : 'Failed to print receipt', 'error');
         }
     };
 
@@ -800,6 +980,31 @@ export const Sales: React.FC = () => {
         return '';
     };
 
+    const getMatchedItems = (sale: any) => {
+        if (!searchQuery.trim()) return [];
+        const q = searchQuery.trim().toLowerCase().replace(/^#/, '');
+        const num = parseFloat(q.replace(/[₹,\s]/g, ''));
+        const isNum = !isNaN(num) && isFinite(num) && num > 0;
+
+        return (sale.items || []).filter((item: any) => {
+            const nameMatch = (item.productName || '').toLowerCase().includes(q);
+            const variantMatch = (item.variantInfo || '').toLowerCase().includes(q);
+            const skuMatch = (item.variant?.sku || '').toLowerCase().includes(q);
+            const barcodeMatch = (item.variant?.barcode || '').toLowerCase().includes(q);
+            if (nameMatch || variantMatch || skuMatch || barcodeMatch) return true;
+
+            if (isNum) {
+                const sp = Number(item.sellingPrice || 0);
+                const mrp = Number(item.mrp || 0);
+                const tot = Number(item.total || 0);
+                if (Math.abs(sp - num) <= 0.5 || Math.abs(mrp - num) <= 0.5 || Math.abs(tot - num) <= 0.5) {
+                    return true;
+                }
+            }
+            return false;
+        });
+    };
+
     const filteredSales = sales;
     const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
     const showingFrom = totalRecords === 0 ? 0 : (page - 1) * pageSize + 1;
@@ -814,38 +1019,79 @@ export const Sales: React.FC = () => {
         <div className="space-y-6">
             {/* Header with Search and Filters */}
             <div className="flex flex-col gap-4">
-                <div className="flex justify-between items-center gap-4">
-                    <div className="flex items-center gap-2 flex-1 max-w-2xl">
-                        <div className="relative flex-1">
+                <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4">
+                    <div className="flex flex-wrap items-center gap-2 flex-1 max-w-3xl">
+                        <div className="relative flex-1 min-w-[280px]">
                             <Search className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
                             <Input
                                 type="text"
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
-                                placeholder="Search by Bill No, Customer, Items..."
-                                className="pl-10"
+                                placeholder="Search Bill #, Customer, Item, Barcode, or Price (e.g. 499)..."
+                                className="pl-10 pr-9"
                             />
+                            {searchQuery && (
+                                <button
+                                    onClick={() => setSearchQuery('')}
+                                    className="absolute right-3 top-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                                    title="Clear search"
+                                >
+                                    <X className="w-4 h-4" />
+                                </button>
+                            )}
                         </div>
 
-                        {timePeriod !== 'all' && (
-                            <div className="flex items-center gap-2 bg-white dark:bg-gray-800 border-2 border-gray-100 dark:border-gray-700 rounded-lg px-3 py-1.5 shadow-sm">
-                                <CalendarIcon className="w-5 h-5 text-primary-500" />
-                                <input
-                                    type="date"
-                                    value={selectedDate}
-                                    onChange={(e) => setSelectedDate(e.target.value)}
-                                    className="bg-transparent border-none outline-none text-sm font-medium"
-                                />
-                                <span className="text-xs text-gray-400 border-l border-gray-200 dark:border-gray-600 pl-2">{getRangeLabel()}</span>
+                        {/* Search Scope Switcher (Visible when searching) */}
+                        {searchQuery.trim() ? (
+                            <div className="flex items-center gap-1.5">
+                                {searchScope === 'all' ? (
+                                    <button
+                                        onClick={() => setSearchScope('period')}
+                                        className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 rounded-lg border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-all shadow-sm"
+                                        title="Currently searching all-time. Click to restrict search to selected date only"
+                                    >
+                                        <Globe className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                                        <span>Searching All Time</span>
+                                        <span className="text-[11px] underline opacity-80 ml-1 font-bold">Restrict to Date</span>
+                                    </button>
+                                ) : (
+                                    <button
+                                        onClick={() => setSearchScope('all')}
+                                        className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 rounded-lg border border-amber-200 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-all shadow-sm"
+                                        title="Currently restricted to selected date. Click to search all-time"
+                                    >
+                                        <CalendarIcon className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                                        <span>In {getRangeLabel()}</span>
+                                        <span className="text-[11px] underline opacity-80 ml-1 font-bold">Search All Time</span>
+                                    </button>
+                                )}
                             </div>
+                        ) : (
+                            timePeriod !== 'all' && (
+                                <div className="flex items-center gap-2 bg-white dark:bg-gray-800 border-2 border-gray-100 dark:border-gray-700 rounded-lg px-3 py-1.5 shadow-sm">
+                                    <CalendarIcon className="w-5 h-5 text-primary-500" />
+                                    <input
+                                        type="date"
+                                        value={selectedDate}
+                                        onChange={(e) => setSelectedDate(e.target.value)}
+                                        className="bg-transparent border-none outline-none text-sm font-medium"
+                                    />
+                                    <span className="text-xs text-gray-400 border-l border-gray-200 dark:border-gray-600 pl-2">{getRangeLabel()}</span>
+                                </div>
+                            )
                         )}
                     </div>
+
                     <Button
                         variant="secondary"
                         onClick={() => setShowFilters(!showFilters)}
+                        className={showFilters || transactionType !== 'all' || paymentFilter !== 'all' || staffFilter !== 'all' ? 'border-primary-500 text-primary-600 dark:text-primary-400' : ''}
                     >
                         <Filter className="w-4 h-4" />
                         Filters
+                        {(transactionType !== 'all' || paymentFilter !== 'all' || staffFilter !== 'all') && (
+                            <span className="w-2 h-2 rounded-full bg-primary-600 ml-1"></span>
+                        )}
                     </Button>
                 </div>
 
@@ -853,32 +1099,49 @@ export const Sales: React.FC = () => {
                 {showFilters && (
                     <div className="card p-4">
                         <div className="flex flex-wrap gap-4 items-center">
+                            <label className="text-sm font-medium">Type:</label>
+                            <select
+                                value={transactionType}
+                                onChange={(e) => setTransactionType(e.target.value as any)}
+                                className="px-3 py-2 border rounded-lg bg-white dark:bg-gray-800 text-sm font-medium"
+                            >
+                                <option value="all">All Types</option>
+                                <option value="regular">Regular Sales</option>
+                                <option value="exchange">Exchanges</option>
+                                <option value="refund">Returns / Refunds</option>
+                                <option value="voided">Voided</option>
+                            </select>
+
                             <label className="text-sm font-medium">Payment Method:</label>
                             <select
                                 value={paymentFilter}
                                 onChange={(e) => setPaymentFilter(e.target.value)}
-                                className="px-3 py-2 border rounded-lg bg-white dark:bg-gray-800"
+                                className="px-3 py-2 border rounded-lg bg-white dark:bg-gray-800 text-sm font-medium"
                             >
                                 <option value="all">All Methods</option>
                                 <option value="CASH">Cash</option>
                                 <option value="CARD">Card</option>
                                 <option value="UPI">UPI</option>
                             </select>
+
                             <label className="text-sm font-medium">Staff:</label>
                             <select
                                 value={staffFilter}
                                 onChange={(e) => setStaffFilter(e.target.value)}
-                                className="px-3 py-2 border rounded-lg bg-white dark:bg-gray-800"
+                                className="px-3 py-2 border rounded-lg bg-white dark:bg-gray-800 text-sm font-medium"
                             >
                                 <option value="all">All Staff</option>
                                 {staffOptions.map((s) => (
                                     <option key={s.id} value={s.id}>{s.name}</option>
                                 ))}
                             </select>
+
                             <Button
                                 variant="secondary"
                                 onClick={() => {
                                     setSearchQuery('');
+                                    setSearchScope('all');
+                                    setTransactionType('all');
                                     setPaymentFilter('all');
                                     setStaffFilter('all');
                                     setSelectedDate(formatDateInputValue(new Date()));
@@ -896,25 +1159,25 @@ export const Sales: React.FC = () => {
             {/* Time Period Tabs */}
             <div className="flex flex-wrap gap-2">
                 <button
-                    onClick={() => setTimePeriod('day')}
+                    onClick={() => { setTimePeriod('day'); setSearchScope('period'); }}
                     className={`px-4 py-2 text-sm font-medium rounded-lg transition-all ${timePeriod === 'day' ? 'bg-primary-600 text-white shadow-lg shadow-primary-200' : 'bg-white dark:bg-gray-800 text-gray-600 hover:bg-gray-50 border border-gray-100 dark:border-gray-700'}`}
                 >
                     Day
                 </button>
                 <button
-                    onClick={() => setTimePeriod('week')}
+                    onClick={() => { setTimePeriod('week'); setSearchScope('period'); }}
                     className={`px-4 py-2 text-sm font-medium rounded-lg transition-all ${timePeriod === 'week' ? 'bg-primary-600 text-white shadow-lg shadow-primary-200' : 'bg-white dark:bg-gray-800 text-gray-600 hover:bg-gray-50 border border-gray-100 dark:border-gray-700'}`}
                 >
                     Week
                 </button>
                 <button
-                    onClick={() => setTimePeriod('month')}
+                    onClick={() => { setTimePeriod('month'); setSearchScope('period'); }}
                     className={`px-4 py-2 text-sm font-medium rounded-lg transition-all ${timePeriod === 'month' ? 'bg-primary-600 text-white shadow-lg shadow-primary-200' : 'bg-white dark:bg-gray-800 text-gray-600 hover:bg-gray-50 border border-gray-100 dark:border-gray-700'}`}
                 >
                     Month
                 </button>
                 <button
-                    onClick={() => setTimePeriod('year')}
+                    onClick={() => { setTimePeriod('year'); setSearchScope('period'); }}
                     className={`px-4 py-2 text-sm font-medium rounded-lg transition-all ${timePeriod === 'year' ? 'bg-primary-600 text-white shadow-lg shadow-primary-200' : 'bg-white dark:bg-gray-800 text-gray-600 hover:bg-gray-50 border border-gray-100 dark:border-gray-700'}`}
                 >
                     Year
@@ -922,6 +1185,7 @@ export const Sales: React.FC = () => {
                 <button
                     onClick={() => {
                         setTimePeriod('all');
+                        setSearchScope('all');
                     }}
                     className={`px-4 py-2 text-sm font-medium rounded-lg transition-all ${timePeriod === 'all' ? 'bg-primary-600 text-white shadow-lg shadow-primary-200' : 'bg-white dark:bg-gray-800 text-gray-600 hover:bg-gray-50 border border-gray-100 dark:border-gray-700'}`}
                 >
@@ -1098,12 +1362,39 @@ export const Sales: React.FC = () => {
                                                             Exchanged
                                                         </span>
                                                     )}
-                                                    {sale.refunds?.length > 0 && (
-                                                        <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded border border-amber-200 font-black uppercase">
-                                                            Refunded
-                                                        </span>
-                                                    )}
+                                                    {(() => {
+                                                        if (!sale.refunds || sale.refunds.length === 0) return null;
+                                                        const totalRef = sale.refunds.reduce((sum: number, r: any) => sum + Number(r.totalRefundAmount || 0), 0);
+                                                        const isFull = totalRef >= Number(sale.grandTotal || 0) - 0.009;
+                                                        return isFull ? (
+                                                            <span className="text-[10px] bg-red-100 text-red-800 px-1.5 py-0.5 rounded border border-red-200 font-black uppercase">
+                                                                Refunded
+                                                            </span>
+                                                        ) : (
+                                                            <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded border border-amber-200 font-black uppercase">
+                                                                Partial Refund
+                                                            </span>
+                                                        );
+                                                    })()}
                                                 </div>
+                                                {/* Smart Search: Matched item preview */}
+                                                {(() => {
+                                                    const matched = getMatchedItems(sale);
+                                                    if (matched.length === 0) return null;
+                                                    return (
+                                                        <div className="mt-1 flex flex-wrap gap-1">
+                                                            {matched.slice(0, 2).map((it: any, idx: number) => (
+                                                                <span key={idx} className="text-[10px] bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 px-1.5 py-0.5 rounded border border-sky-200 dark:border-sky-800 font-medium flex items-center gap-1">
+                                                                    <Tag className="w-2.5 h-2.5 text-sky-500" />
+                                                                    {it.productName}{it.variantInfo ? ` (${it.variantInfo})` : ''} · ₹{Number(it.sellingPrice || 0).toFixed(0)}
+                                                                </span>
+                                                            ))}
+                                                            {matched.length > 2 && (
+                                                                <span className="text-[10px] text-gray-400 font-medium">+{matched.length - 2} more</span>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })()}
                                             </td>
                                             <td className={`whitespace-nowrap text-xs ${sale.status === 'VOIDED' ? 'line-through text-gray-400' : 'text-gray-600'}`}>
                                                 {formatDateSafe(sale.actualSaleDate || sale.createdAt, 'dd MMM yyyy, HH:mm')}
@@ -1121,14 +1412,29 @@ export const Sales: React.FC = () => {
                                                     const isRepl = isReplacementSale(sale);
                                                     const exchCreditPmt = (sale.payments || []).find((p: any) => p.paymentMode === 'EXCHANGE_CREDIT');
                                                     const exchCreditAmt = exchCreditPmt ? Number(exchCreditPmt.amount || 0) : 0;
+                                                    const totalRefunded = (sale.refunds || []).reduce((sum: number, r: any) => sum + Number(r.totalRefundAmount || 0), 0);
+
                                                     if (isRepl && exchCreditAmt > 0) {
                                                         const freshPaid = Math.max(0, Number(sale.grandTotal || 0) - exchCreditAmt);
                                                         return formatIndianCurrency(freshPaid);
                                                     }
+
+                                                    if (totalRefunded > 0) {
+                                                        const netRetained = Math.max(0, Number(sale.grandTotal || 0) - totalRefunded);
+                                                        return (
+                                                            <div className="flex flex-col">
+                                                                <span>{formatIndianCurrency(netRetained)}</span>
+                                                                <span className="text-[10px] font-medium text-rose-500">
+                                                                    (-{formatIndianCurrency(totalRefunded)} refunded)
+                                                                </span>
+                                                            </div>
+                                                        );
+                                                    }
+
                                                     return formatIndianCurrency(sale.grandTotal);
                                                 })()}
                                             </td>
-                                            <td>
+                                            <td className="whitespace-nowrap">
                                                 {(() => {
                                                     const isExchangeGeneratedSale = sale.paymentMethod === 'EXCHANGE' || (sale.remarks || '').includes('Replacement sale for Invoice');
                                                     const canUpdatePayment =
@@ -1153,10 +1459,10 @@ export const Sales: React.FC = () => {
                                                         <button
                                                             onClick={() => canUpdatePayment && handleUpdatePayment(sale.id, sale.paymentMethod)}
                                                             disabled={updatingPayment === sale.id || !canUpdatePayment}
-                                                            className={`transition-all ${canUpdatePayment ? 'cursor-pointer hover:scale-110 active:scale-90' : 'cursor-not-allowed opacity-70'}`}
+                                                            className={`inline-flex items-center transition-all ${canUpdatePayment ? 'cursor-pointer hover:scale-105 active:scale-95' : 'cursor-not-allowed opacity-70'}`}
                                                             title={canUpdatePayment ? 'Click to update payment method' : 'No permission to update payment method'}
                                                         >
-                                                            <span className={`badge py-1 px-3 ${sale.status === 'VOIDED' ? 'bg-red-100 text-red-800' : 'badge-info shadow-sm'} ${updatingPayment === sale.id ? 'opacity-50' : ''}`}>
+                                                            <span className={`badge whitespace-nowrap py-1 px-3 ${sale.status === 'VOIDED' ? 'bg-red-100 text-red-800' : 'badge-info shadow-sm'} ${updatingPayment === sale.id ? 'opacity-50' : ''}`}>
                                                                 {updatingPayment === sale.id ? '...' : (sale.status === 'VOIDED' ? 'VOIDED' : displayMethod)}
                                                             </span>
                                                         </button>
@@ -1212,13 +1518,17 @@ export const Sales: React.FC = () => {
                                             <tr className="bg-gray-50/50 dark:bg-gray-900/20 animate-in fade-in slide-in-from-top-2 duration-200">
                                                 <td colSpan={9} className="p-0 border-b border-gray-200 dark:border-gray-700">
                                                     <div className="px-14 py-4 bg-white dark:bg-gray-800/40 m-2 rounded-xl border border-gray-100 dark:border-gray-700 shadow-inner">
+                                                        <SaleCostSummary saleId={sale.id} version={sale.updatedAt} />
                                                         {(() => {
                                                             const exData = exchangeDetailsMap[sale.id];
                                                             const isExchange = isExchangeRelatedSale(sale);
                                                             if (!isExchange && !exData) return null;
 
-                                                            const origBillNo = exData?.originalBillNo || (isReplacementSale(sale) ? sale.remarks?.match(/Invoice #(\d+)/)?.[1] : sale.billNo);
-                                                            const replBillNo = exData?.replacementBillNo || extractReplacementBillNo(sale.remarks) || (isReplacementSale(sale) ? sale.billNo : null);
+                                                            const isRepl = isReplacementSale(sale);
+                                                            const hasExchangesOut = Boolean(sale?.exchanges && sale.exchanges.length > 0) || (sale?.remarks || '').includes('[EXCHANGE');
+
+                                                            const origBillNo = exData?.originalBillNo || (isRepl && !hasExchangesOut ? sale.remarks?.match(/Invoice #(\d+)/)?.[1] : sale.billNo);
+                                                            const replBillNo = exData?.replacementBillNo || extractReplacementBillNo(sale.remarks) || (isRepl ? sale.billNo : null);
 
                                                             const returnedItems = (exData?.returnedItems && exData.returnedItems.length > 0)
                                                                 ? exData.returnedItems
@@ -1275,6 +1585,11 @@ export const Sales: React.FC = () => {
                                                                             <span className="text-[11px] font-black uppercase tracking-wider text-indigo-900 dark:text-indigo-300">
                                                                                 Item Exchange Breakdown
                                                                             </span>
+                                                                            {exData?.incomingExchange?.originalBillNo && (
+                                                                                <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-100/70 dark:bg-indigo-900/50 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
+                                                                                    Generated from #{exData.incomingExchange.originalBillNo}
+                                                                                </span>
+                                                                            )}
                                                                         </div>
                                                                         <div className="flex items-center gap-2 font-mono text-xs">
                                                                             {origBillNo && (
@@ -1563,12 +1878,26 @@ export const Sales: React.FC = () => {
                                                                                 <div className="text-sm font-bold text-amber-600">-{formatIndianCurrency(exchangeCreditAmount)}</div>
                                                                             </div>
                                                                         )}
+                                                                        {(() => {
+                                                                            const totalRefunded = (sale.refunds || []).reduce((sum: number, r: any) => sum + Number(r.totalRefundAmount || 0), 0);
+                                                                            if (totalRefunded <= 0) return null;
+                                                                            return (
+                                                                                <div className="text-right">
+                                                                                    <div className="text-[10px] font-bold text-rose-600 uppercase">Refunded to Customer</div>
+                                                                                    <div className="text-sm font-bold text-rose-600">-{formatIndianCurrency(totalRefunded)}</div>
+                                                                                </div>
+                                                                            );
+                                                                        })()}
                                                                         <div className="text-right">
-                                                                            <div className={`text-[10px] font-bold uppercase ${isReplacement ? 'text-emerald-600' : 'text-primary-600'}`}>
-                                                                                {isReplacement ? 'Net Paid Today' : 'Total Paid'}
+                                                                            <div className={`text-[10px] font-bold uppercase ${isReplacement ? 'text-emerald-600' : (sale.refunds || []).length > 0 ? 'text-indigo-600' : 'text-primary-600'}`}>
+                                                                                {isReplacement ? 'Net Paid Today' : (sale.refunds || []).length > 0 ? 'Net Retained' : 'Total Paid'}
                                                                             </div>
-                                                                            <div className={`text-lg font-black ${isReplacement ? 'text-emerald-600' : 'text-primary-600'}`}>
-                                                                                {formatIndianCurrency(isReplacement && exchangeCreditAmount > 0 ? freshPaid : sale.grandTotal)}
+                                                                            <div className={`text-lg font-black ${isReplacement ? 'text-emerald-600' : (sale.refunds || []).length > 0 ? 'text-indigo-600' : 'text-primary-600'}`}>
+                                                                                {formatIndianCurrency(
+                                                                                    isReplacement && exchangeCreditAmount > 0
+                                                                                        ? freshPaid
+                                                                                        : Math.max(0, Number(sale.grandTotal || 0) - (sale.refunds || []).reduce((sum: number, r: any) => sum + Number(r.totalRefundAmount || 0), 0))
+                                                                                )}
                                                                             </div>
                                                                         </div>
                                                                     </div>
@@ -1678,7 +2007,7 @@ export const Sales: React.FC = () => {
             {/* Professional Refund Modal */}
             <Modal
                 isOpen={isRefundModalOpen}
-                onClose={() => setIsRefundModalOpen(false)}
+                onClose={() => { if (!isRefunding) setIsRefundModalOpen(false); }}
                 title={`Process Refund - Bill #${selectedSaleForAction?.billNo}`}
                 size="lg"
             >
@@ -1697,63 +2026,102 @@ export const Sales: React.FC = () => {
 
                     <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
                         {returnItems.map((item, idx) => (
-                            <div key={idx} className="flex justify-between items-center p-3 bg-white dark:bg-gray-800 border-2 border-gray-100 dark:border-gray-700 rounded-xl hover:border-red-200 transition-colors">
+                            <div key={idx} className="flex flex-wrap justify-between items-center p-3 bg-white dark:bg-gray-800 border-2 border-gray-100 dark:border-gray-700 rounded-xl hover:border-red-200 transition-colors">
                                 <div className="flex-1">
                                     <div className="font-bold text-sm">{item.productName}</div>
                                     <div className="text-[10px] text-gray-400 uppercase font-black">{item.variantInfo}</div>
                                 </div>
                                 <div className="flex items-center gap-4">
-                                    <div className="text-right">
-                                        <div className="text-xs font-bold text-gray-500">
-                                            Refund per unit: <span className="text-gray-800 dark:text-gray-200 font-bold">{formatIndianCurrency(getEffectiveUnitAmount(item, selectedSaleForAction))}</span>
-                                        </div>
-                                        <div className="text-[10px] text-gray-500">Max Qty: {item.quantity}</div>
-                                    </div>
+                                    {(() => {
+                                        const mrpUnit = Number(item.sellingPrice || item.mrp || 0);
+                                        return (
+                                            <div className="text-right">
+                                                <div className="text-xs font-bold text-gray-500">
+                                                    Original unit price: <span className="text-gray-800 dark:text-gray-200 font-bold">{formatIndianCurrency(mrpUnit)}</span>
+                                                </div>
+                                                <div className="text-[10px] text-gray-500">Max Qty: {item.quantity}</div>
+                                            </div>
+                                        );
+                                    })()}
                                     <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-900 p-1 rounded-lg border border-gray-200 dark:border-gray-700">
                                         <button
-                                            onClick={() => setReturnItems(prev => prev.map((it, i) => i === idx ? { ...it, refundQty: Math.max(0, it.refundQty - 1) } : it))}
+                                            disabled={isRefunding}
+                                            aria-label={`Reduce refund quantity for ${item.productName}`}
+                                            onClick={() => { setRefundDiscount(''); setReturnItems(prev => prev.map((it, i) => i === idx ? { ...it, refundQty: Math.max(0, it.refundQty - 1) } : it)); }}
                                             className="p-1 hover:bg-white rounded transition-colors"
                                         >
                                             <Minus className="w-3 h-3" />
                                         </button>
                                         <span className="w-6 text-center font-black text-sm">{item.refundQty}</span>
                                         <button
-                                            onClick={() => setReturnItems(prev => prev.map((it, i) => i === idx ? { ...it, refundQty: Math.min(it.quantity, it.refundQty + 1) } : it))}
+                                            disabled={isRefunding}
+                                            aria-label={`Increase refund quantity for ${item.productName}`}
+                                            onClick={() => { setRefundDiscount(''); setReturnItems(prev => prev.map((it, i) => i === idx ? { ...it, refundQty: Math.min(it.quantity, it.refundQty + 1) } : it)); }}
                                             className="p-1 hover:bg-white rounded transition-colors"
                                         >
                                             <Plus className="w-3 h-3" />
                                         </button>
                                     </div>
                                 </div>
+                                {item.refundQty > 0 && <div className="w-full"><ReturnStockSelector key={`${selectedSaleForAction?.id}:${item.variantId}`} sourceVariantId={item.variantId}
+                                    value={returnStockChoices[item.variantId]} disabled={isRefunding}
+                                    onChange={choice => setReturnStockChoices(prev => ({ ...prev, [item.variantId]: choice }))} /></div>}
                             </div>
                         ))}
                     </div>
 
                     <div className="space-y-4 pt-4 border-t border-dashed border-gray-200 dark:border-gray-700">
+                        <p className="text-sm text-gray-600 dark:text-gray-400">
+                            Original bill discount: {formatIndianCurrency(selectedSaleForAction?.discount || 0)}.
+                            Enter the discount originally given on the selected items, not a new discount.
+                        </p>
+                        {refundPreview.quote?.automatic ? (
+                            <p className="text-sm text-green-700 dark:text-green-400">
+                                Refund calculated automatically from the remaining bill payment.
+                                Original discount deducted: {formatIndianCurrency(refundPreview.quote.discount)}.
+                            </p>
+                        ) : (
+                            <Input label="Discount originally given on returned item(s)" type="number" min="0" step="0.01"
+                                placeholder="Enter amount, or 0 if no discount" value={refundDiscount} disabled={isRefunding}
+                                onWheel={event => event.currentTarget.blur()}
+                                onChange={e => setRefundDiscount(e.target.value)} />
+                        )}
+                        {refundPreview.error && <p role="alert" className="text-sm text-red-600">{refundPreview.error}</p>}
+                        {refundPreview.quote && !refundPreview.quote.automatic && (
+                            <p className="text-xs text-gray-500">Discount available for this return: {formatIndianCurrency(refundPreview.quote.minDiscount)}–{formatIndianCurrency(refundPreview.quote.maxDiscount)}. Confirm from the original agreement with the customer.</p>
+                        )}
+                        <label className="block text-sm font-medium">
+                            Refund through
+                            <select className="mt-1 block w-full rounded-lg border p-2 bg-white dark:bg-gray-800" value={refundPaymentMode}
+                                disabled={isRefunding} onChange={e => setRefundPaymentMode(e.target.value as 'CASH' | 'UPI' | 'CARD')}>
+                                <option value="CASH">Cash</option><option value="UPI">UPI</option>
+                            </select>
+                        </label>
                         <Input
                             label="Reason for Refund"
                             placeholder="e.g. Size mismatch, defective product..."
                             value={refundReason}
+                            disabled={isRefunding}
                             onChange={(e) => setRefundReason(e.target.value)}
                             required
                         />
                         <div className="flex justify-between items-center bg-gray-50 dark:bg-gray-900 p-4 rounded-2xl border-2 border-gray-100 dark:border-gray-700 shadow-inner">
                             <div className="text-gray-500 font-bold uppercase text-[10px] tracking-widest">Total Refund Amount</div>
                             <div className="text-2xl font-black text-red-600">
-                                {formatIndianCurrency(returnItems.reduce((sum, it) => sum + getReturnValue(it, 'refundQty'), 0))}
+                                {refundPreview.quote && !refundPreview.quote.requiresDiscount ? formatIndianCurrency(refundPreview.quote.total) : 'Confirm discount'}
                             </div>
                         </div>
                     </div>
 
                     <div className="flex justify-end gap-3 pt-2">
-                        <Button variant="secondary" onClick={() => setIsRefundModalOpen(false)}>Cancel</Button>
+                        <Button variant="secondary" disabled={isRefunding} onClick={() => setIsRefundModalOpen(false)}>Cancel</Button>
                         <Button
                             variant="danger"
                             className="px-8 font-black uppercase tracking-widest text-xs"
-                            disabled={!refundReason.trim() || returnItems.every(it => it.refundQty === 0)}
+                            disabled={isRefunding || !refundReason.trim() || !refundPreview.quote || refundPreview.quote.requiresDiscount || returnItems.some(item => item.refundQty > 0 && !validReturnStockChoice(returnStockChoices[item.variantId]))}
                             onClick={submitRefund}
                         >
-                            Confirm Refund & Restock
+                            {isRefunding ? 'Processing…' : 'Confirm Refund & Restock'}
                         </Button>
                     </div>
                 </div>
@@ -1787,19 +2155,12 @@ export const Sales: React.FC = () => {
                             </h4>
                             <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                                 {returnItems.map((item, idx) => {
-                                    const netUnit = getEffectiveUnitAmount(item, selectedSaleForAction);
-                                    const originalRate = Number(item.sellingPrice || item.mrp || 0);
-                                    const hasDiscount = originalRate > netUnit;
+                                    const mrpUnit = Number(item.sellingPrice || item.mrp || 0);
                                     return (
                                         <div key={idx} className="p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:border-orange-300">
                                             <div className="font-bold text-sm truncate">{item.productName}</div>
                                             <div className="text-[11px] text-gray-500 mt-0.5">
-                                                Credit per unit: <span className="font-bold text-gray-800 dark:text-gray-200">{formatIndianCurrency(netUnit)}</span>
-                                                {hasDiscount && (
-                                                    <span className="text-[10px] text-emerald-600 font-medium ml-1">
-                                                        (Net paid after {formatIndianCurrency(originalRate - netUnit)} disc)
-                                                    </span>
-                                                )}
+                                                Credit per unit: <span className="font-bold text-gray-800 dark:text-gray-200">{formatIndianCurrency(mrpUnit)}</span>
                                             </div>
                                             <div className="flex justify-between items-center mt-2">
                                                 <span className="text-[10px] text-gray-500 font-bold uppercase tracking-tight">{item.variantInfo}</span>
@@ -1809,6 +2170,9 @@ export const Sales: React.FC = () => {
                                                     <button onClick={() => setReturnItems(prev => prev.map((it, i) => i === idx ? { ...it, returnQty: Math.min(it.quantity, it.returnQty + 1) } : it))} className="p-0.5 hover:bg-white rounded"><Plus className="w-3 h-3" /></button>
                                                 </div>
                                             </div>
+                                            {item.returnQty > 0 && <ReturnStockSelector key={`${selectedSaleForAction?.id}:${item.variantId}`} sourceVariantId={item.variantId}
+                                                value={returnStockChoices[item.variantId]}
+                                                onChange={choice => setReturnStockChoices(prev => ({ ...prev, [item.variantId]: choice }))} />}
                                         </div>
                                     );
                                 })}
@@ -1852,11 +2216,11 @@ export const Sales: React.FC = () => {
 
                     {/* Summary Footer */}
                     <div className="pt-4 border-t border-dashed border-gray-200 dark:border-gray-700">
-                        <div className="grid grid-cols-3 gap-4">
+                        <div className="grid grid-cols-4 gap-3">
                             <div className="text-center p-3 rounded-xl bg-gray-50 border border-gray-100">
                                 <div className="text-[10px] font-bold text-gray-400 uppercase">Returned Value</div>
                                 <div className="text-sm font-black text-gray-700">
-                                    {formatIndianCurrency(returnItems.reduce((sum, it) => sum + getReturnValue(it, 'returnQty'), 0))}
+                                    {formatIndianCurrency(returnItems.reduce((sum, it) => sum + (Number(it.sellingPrice || 0) * (it.returnQty || 0)), 0))}
                                 </div>
                             </div>
                             <div className="text-center p-3 rounded-xl bg-gray-50 border border-gray-100">
@@ -1865,12 +2229,32 @@ export const Sales: React.FC = () => {
                                     {formatIndianCurrency(exchangeNewItems.reduce((sum, it) => sum + (it.sellingPrice * it.quantity), 0))}
                                 </div>
                             </div>
-                            <div className="text-center p-3 rounded-xl bg-blue-50 border border-blue-100">
-                                <div className="text-[10px] font-bold text-blue-400 uppercase">Final Difference</div>
-                                <div className={`text-lg font-black ${exchangeNewItems.reduce((sum, it) => sum + (it.sellingPrice * it.quantity), 0) - returnItems.reduce((sum, it) => sum + getReturnValue(it, 'returnQty'), 0) > 0 ? 'text-blue-700' : 'text-green-700'}`}>
-                                    {formatIndianCurrency(exchangeNewItems.reduce((sum, it) => sum + (it.sellingPrice * it.quantity), 0) - returnItems.reduce((sum, it) => sum + getReturnValue(it, 'returnQty'), 0))}
-                                </div>
+                            <div className="text-center p-3 rounded-xl bg-amber-50 border border-amber-200 dark:bg-amber-900/10 dark:border-amber-900/30">
+                                <div className="text-[10px] font-bold text-amber-500 uppercase">Discount</div>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    step="1"
+                                    value={exchangeDiscount || ''}
+                                    onChange={(e) => setExchangeDiscount(Math.max(0, parseFloat(e.target.value) || 0))}
+                                    placeholder="0"
+                                    className="w-full text-center text-sm font-black text-amber-700 dark:text-amber-400 bg-transparent border-none outline-none focus:ring-0 p-0 mt-0.5 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                />
                             </div>
+                            {(() => {
+                                const returnedVal = returnItems.reduce((sum, it) => sum + (Number(it.sellingPrice || 0) * (it.returnQty || 0)), 0);
+                                const newVal = exchangeNewItems.reduce((sum, it) => sum + (it.sellingPrice * it.quantity), 0);
+                                const disc = Math.max(0, exchangeDiscount || 0);
+                                const balance = (newVal - disc) - returnedVal;
+                                return (
+                                    <div className={`text-center p-3 rounded-xl border ${balance > 0 ? 'bg-blue-50 border-blue-100' : 'bg-green-50 border-green-100'}`}>
+                                        <div className={`text-[10px] font-bold uppercase ${balance > 0 ? 'text-blue-400' : 'text-green-400'}`}>Balance to Collect</div>
+                                        <div className={`text-lg font-black ${balance > 0 ? 'text-blue-700' : 'text-green-700'}`}>
+                                            {formatIndianCurrency(balance)}
+                                        </div>
+                                    </div>
+                                );
+                            })()}
                         </div>
                         <div className="mt-4 flex items-center justify-end gap-3">
                             <label className="text-[10px] font-black uppercase tracking-widest text-gray-400">
@@ -1887,6 +2271,31 @@ export const Sales: React.FC = () => {
                             </select>
                         </div>
                     </div>
+
+                    {/* Discount Warning Banner */}
+                    {showExchangeDiscountConfirm && (
+                        <div className="flex items-center gap-3 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl">
+                            <span className="text-amber-600 text-lg">⚠️</span>
+                            <div className="flex-1">
+                                <p className="text-sm font-bold text-amber-800 dark:text-amber-300">No discount applied!</p>
+                                <p className="text-xs text-amber-600 dark:text-amber-400">Are you sure you want to finalize this exchange without any discount?</p>
+                            </div>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setShowExchangeDiscountConfirm(false)}
+                                    className="px-3 py-1.5 text-xs font-bold text-amber-700 bg-white border border-amber-300 rounded-lg hover:bg-amber-50"
+                                >
+                                    Go Back
+                                </button>
+                                <button
+                                    onClick={submitExchange}
+                                    className="px-3 py-1.5 text-xs font-bold text-white bg-orange-600 rounded-lg hover:bg-orange-700"
+                                >
+                                    Yes, Proceed
+                                </button>
+                            </div>
+                        </div>
+                    )}
 
                     <div className="flex flex-col sm:flex-row justify-between items-center gap-3 pt-2">
                         <div className="text-xs">
@@ -1909,7 +2318,7 @@ export const Sales: React.FC = () => {
                             <Button
                                 variant="primary"
                                 className="px-10 font-bold bg-orange-600 hover:bg-orange-700 shadow-lg shadow-orange-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                                disabled={exchangeNewItems.length === 0 || returnItems.every(it => (it.returnQty || 0) === 0)}
+                                disabled={exchangeNewItems.length === 0 || returnItems.every(it => (it.returnQty || 0) === 0) || returnItems.some(item => item.returnQty > 0 && !validReturnStockChoice(returnStockChoices[item.variantId]))}
                                 onClick={submitExchange}
                             >
                                 Finalize Exchange
@@ -2048,3 +2457,4 @@ export const Sales: React.FC = () => {
         </div >
     );
 };
+

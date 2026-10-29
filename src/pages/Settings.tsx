@@ -1,4 +1,6 @@
+import { printService } from '../services/print.service';
 import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
     Save,
     Trash2,
@@ -22,15 +24,22 @@ import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { showToast } from '../components/ui/Toast';
 import { ReceiptDesigner } from '../components/settings/ReceiptDesigner';
 import { LabelDesigner } from '../components/settings/LabelDesigner';
+import { VersionInfo } from '../components/settings/VersionInfo';
 import { db } from '../lib/db';
 import { useAuthStore } from '../store/authStore';
 import packageInfo from '../../package.json';
 
-type SettingsTab = 'general' | 'sync' | 'print' | 'data';
+type SettingsTab = 'general' | 'sync' | 'print' | 'data' | 'version';
 
 export const Settings: React.FC = () => {
     const { user } = useAuthStore();
-    const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+    const location = useLocation();
+    const [activeTab, setActiveTab] = useState<SettingsTab>(() =>
+        new URLSearchParams(location.search).get('tab') === 'sync' ? 'sync' : 'general'
+    );
+    useEffect(() => {
+        if (new URLSearchParams(location.search).get('tab') === 'sync') setActiveTab('sync');
+    }, [location.search]);
     const [shopSettings, setShopSettings] = useState({
         shopName: 'ZAIN GENTS PALACE',
         address: 'CHIRAMMAL TOWER, BEHIND CANARA BANK\nRAJA ROAD, NILESHWAR',
@@ -41,7 +50,7 @@ export const Settings: React.FC = () => {
     });
 
     const [printerSettings, setPrinterSettings] = useState({
-        receiptPrinter: 'Epson TM-T82',
+        receiptPrinter: '',
         labelPrinter: 'TSC TTP-244 Plus',
         pageSize: '80mm',
         contentWidth: 72,
@@ -50,10 +59,27 @@ export const Settings: React.FC = () => {
         isBold: false,
         showMRP: false,
         showRate: false,
+        showRateSubline: false,
         showItemDiscount: false,
         showPaidLine: false,
         showChangeLine: false,
     });
+
+    const [detectedPrinters, setDetectedPrinters] = useState<Array<{ name: string; isDefault: boolean }>>([]);
+    const [refreshingPrinters, setRefreshingPrinters] = useState(false);
+    const [receiptTestStatus, setReceiptTestStatus] = useState('');
+    const [testingReceipt, setTestingReceipt] = useState(false);
+    const refreshPrinters = async () => {
+        setRefreshingPrinters(true);
+        try {
+            const result = await window.electronAPI.print.listPrinters();
+            if (!result.success) throw new Error(result.error || 'Could not detect printers');
+            setDetectedPrinters(result.data || []);
+            if (!result.data?.length) showToast('No Windows printers detected. Check the driver and connection.', 'warning');
+        } catch (error) { showToast(error instanceof Error ? error.message : 'Printer discovery failed', 'error'); }
+        finally { setRefreshingPrinters(false); }
+    };
+    useEffect(() => { if (activeTab === 'print') void refreshPrinters(); }, [activeTab]);
 
     const [backupConfig, setBackupConfig] = useState({
         enabled: true,
@@ -182,56 +208,30 @@ export const Settings: React.FC = () => {
     };
 
     const handlePrintTestReceipt = async () => {
+        if (testingReceipt) return;
+        setReceiptTestStatus('Preparing test receipt…');
+        setTestingReceipt(true);
         try {
             if (!printerSettings.receiptPrinter?.trim()) {
                 showToast('Please set a Receipt Printer Name first', 'warning');
+                setReceiptTestStatus('Select a receipt printer above first.');
                 return;
             }
 
-            const testData = {
-                shopName: shopSettings.shopName || 'Zain POS',
-                billNo: 'TEST-001',
-                date: new Date().toLocaleString(),
-                customerName: 'Test Customer',
-                customerPhone: '9876543210',
-                items: [
-                    {
-                        name: 'Test Item 1',
-                        quantity: 2,
-                        price: 150.00,
-                        total: 300.00,
-                        variant: 'Blue / L',
-                        barcode: 'TEST-001'
-                    },
-                    {
-                        name: 'Test Item 2',
-                        quantity: 1,
-                        price: 250.00,
-                        total: 250.00,
-                        variant: 'Red / M',
-                        barcode: 'TEST-002'
-                    }
-                ],
-                subtotal: 550.00,
-                tax: 27.50,
-                discount: 15.00,
-                grandTotal: 562.50,
-                tendered: 600.00,
-                change: 37.60
-            };
-
-            const result = await window.electronAPI.print.testReceipt({
-                data: testData,
-                settings: printerSettings
-            });
-
-            if (result?.success) {
-                showToast('Test receipt sent to printer!', 'success');
-            } else {
-                throw new Error(result?.error || 'Unknown error');
-            }
+            await printService.printReceipt({
+                shopName: shopSettings.shopName, shopAddress: shopSettings.address, shopPhone: shopSettings.phone,
+                gstin: shopSettings.gstin, logo: shopSettings.logo, billNo: 'TEST-001', date: new Date(),
+                customerName: 'TEST RECEIPT — NOT A SALE', items: [{ name: 'Test item', quantity: 1, mrp: 100, rate: 100, total: 100 }],
+                subtotal: 100, discount: 0, cgst: 2.38, sgst: 2.38, grandTotal: 100,
+                paymentMethod: 'CASH', paidAmount: 100, changeAmount: 0, userName: user?.name || 'Test'
+            }, printerSettings);
+            showToast('Test job accepted by Windows. Please check the printed receipt.', 'success');
+            setReceiptTestStatus('Windows accepted the test job. This does not confirm physical printing. Check the receipt and Windows queue.');
         } catch (error) {
             showToast(`Failed to print test receipt: ${(error as Error).message}`, 'error');
+            setReceiptTestStatus(`Test failed: ${(error as Error).message}`);
+        } finally {
+            setTestingReceipt(false);
         }
     };
 
@@ -273,7 +273,7 @@ export const Settings: React.FC = () => {
             });
 
             if (result?.success) {
-                showToast(`Receipt printer connected: ${printerSettings.receiptPrinter}`, 'success');
+                showToast(`Windows lists ${printerSettings.receiptPrinter}. Use Test Receipt to check physical output.`, 'success');
             } else {
                 throw new Error(result?.error || 'Cannot connect to printer');
             }
@@ -431,8 +431,8 @@ export const Settings: React.FC = () => {
                         <TabButton id="sync" label="Cloud & Backup" icon={Globe} />
                         <TabButton id="print" label="Printer & Design" icon={Printer} />
                         <TabButton id="data" label="Data Tools" icon={Package} />
+                        <TabButton id="version" label="Version Info" icon={Tag} />
                     </div>
-                    <div className="text-xs text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded mr-6 shrink-0">v{packageInfo.version}</div>
                 </div>
 
                 {/* Tab Content */}
@@ -708,9 +708,61 @@ export const Settings: React.FC = () => {
 
                     {activeTab === 'print' && (
                         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                            <div className="max-w-2xl grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <Input label="Receipt Printer Name" value={printerSettings.receiptPrinter} onChange={(e) => setPrinterSettings({ ...printerSettings, receiptPrinter: e.target.value })} />
-                                <Input label="Label Printer Name" value={printerSettings.labelPrinter} onChange={(e) => setPrinterSettings({ ...printerSettings, labelPrinter: e.target.value })} />
+                            <div className="max-w-2xl space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Windows Printers</h3>
+                                        <p className="text-xs text-gray-500 dark:text-gray-400">Select connected printers for thermal receipts and barcode stickers.</p>
+                                    </div>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => void refreshPrinters()}
+                                        disabled={refreshingPrinters}
+                                        className="flex items-center gap-1.5"
+                                    >
+                                        <RefreshCw className={`w-3.5 h-3.5 ${refreshingPrinters ? 'animate-spin' : ''}`} />
+                                        <span>{refreshingPrinters ? 'Detecting...' : 'Refresh Printers'}</span>
+                                    </Button>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="label" htmlFor="receipt-printer">Receipt Printer</label>
+                                        <select
+                                            id="receipt-printer"
+                                            className="input"
+                                            value={printerSettings.receiptPrinter}
+                                            onChange={e => setPrinterSettings({ ...printerSettings, receiptPrinter: e.target.value })}
+                                        >
+                                            <option value="">Select a Windows printer</option>
+                                            {printerSettings.receiptPrinter && !detectedPrinters.some(p => p.name === printerSettings.receiptPrinter) && (
+                                                <option value={printerSettings.receiptPrinter}>{printerSettings.receiptPrinter} (not detected)</option>
+                                            )}
+                                            {detectedPrinters.map(p => (
+                                                <option key={p.name} value={p.name}>{p.name}{p.isDefault ? ' (Windows default)' : ''}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="label" htmlFor="label-printer">Label Printer</label>
+                                        <select
+                                            id="label-printer"
+                                            className="input"
+                                            value={printerSettings.labelPrinter}
+                                            onChange={e => setPrinterSettings({ ...printerSettings, labelPrinter: e.target.value })}
+                                        >
+                                            <option value="">Select a Windows printer</option>
+                                            {printerSettings.labelPrinter && !detectedPrinters.some(p => p.name === printerSettings.labelPrinter) && (
+                                                <option value={printerSettings.labelPrinter}>{printerSettings.labelPrinter} (not detected)</option>
+                                            )}
+                                            {detectedPrinters.map(p => (
+                                                <option key={p.name} value={p.name}>{p.name}{p.isDefault ? ' (Windows default)' : ''}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+                                <p className="text-xs text-gray-500 dark:text-gray-400">Save after selecting. Printer detection identifies installed Windows printer drivers.</p>
                             </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl">
@@ -738,7 +790,7 @@ export const Settings: React.FC = () => {
                                 </div>
                             </div>
 
-                            <div className="flex flex-wrap gap-6 p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700 max-w-2xl">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700 max-w-2xl">
                                 <label className="flex items-center gap-2 cursor-pointer select-none">
                                     <input type="checkbox" className="w-4 h-4 rounded text-blue-600" checked={printerSettings.showPaidLine} onChange={(e) => setPrinterSettings({ ...printerSettings, showPaidLine: e.target.checked })} />
                                     <span className="text-sm font-medium">Show Paid Line</span>
@@ -746,6 +798,20 @@ export const Settings: React.FC = () => {
                                 <label className="flex items-center gap-2 cursor-pointer select-none">
                                     <input type="checkbox" className="w-4 h-4 rounded text-blue-600" checked={printerSettings.showChangeLine} onChange={(e) => setPrinterSettings({ ...printerSettings, showChangeLine: e.target.checked })} />
                                     <span className="text-sm font-medium">Show Change Line</span>
+                                </label>
+                                <label className="flex items-start gap-2 cursor-pointer select-none">
+                                    <input type="checkbox" className="mt-0.5 w-4 h-4 rounded text-blue-600" checked={printerSettings.showRate} onChange={(e) => setPrinterSettings({ ...printerSettings, showRate: e.target.checked })} />
+                                    <div>
+                                        <span className="text-sm font-medium">Rate Column</span>
+                                        <p className="text-xs text-gray-500">Order: Item | Rate | Qty | Amt</p>
+                                    </div>
+                                </label>
+                                <label className="flex items-start gap-2 cursor-pointer select-none">
+                                    <input type="checkbox" className="mt-0.5 w-4 h-4 rounded text-blue-600" checked={printerSettings.showRateSubline} onChange={(e) => setPrinterSettings({ ...printerSettings, showRateSubline: e.target.checked })} />
+                                    <div>
+                                        <span className="text-sm font-medium">Rate Subline (when Qty &gt; 1)</span>
+                                        <p className="text-xs text-gray-500">Prints &quot;2 @ ₹700.00&quot; under item name</p>
+                                    </div>
                                 </label>
                             </div>
 
@@ -757,9 +823,9 @@ export const Settings: React.FC = () => {
                                 </Button>
                                 
                                 {/* Print and Connection Test Buttons */}
-                                <Button variant="secondary" size="sm" onClick={handlePrintTestReceipt} className="px-3">
+                                <Button variant="secondary" size="sm" onClick={handlePrintTestReceipt} disabled={testingReceipt} className="px-3">
                                     <Printer className="w-4 h-4" />
-                                    Test Receipt
+                                    {testingReceipt ? 'Testing receipt…' : 'Test Receipt'}
                                 </Button>
                                 <Button variant="secondary" size="sm" onClick={handlePrintTestLabel} className="px-3">
                                     <Tag className="w-4 h-4" />
@@ -775,6 +841,7 @@ export const Settings: React.FC = () => {
                                 </Button>
                             </div>
 
+                            {receiptTestStatus && <p role="status" className="p-3 rounded border text-sm">{receiptTestStatus}</p>}
                             <div className="grid grid-cols-1 gap-12 pt-8 border-t border-gray-200 dark:border-dark-border">
                                 <div className="space-y-4">
                                     <h4 className="font-bold flex items-center gap-2">
@@ -933,6 +1000,8 @@ export const Settings: React.FC = () => {
                             </div>
                         </div>
                     )}
+
+                    {activeTab === 'version' && <VersionInfo />}
                 </div>
             </div>
 

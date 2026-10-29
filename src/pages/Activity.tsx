@@ -67,7 +67,8 @@ const CATEGORY_MAP: Record<string, string[]> = {
     sales: [
         'SALE_CREATE', 'SALE_COMPLETED', 'SALE_REFUND', 'REFUND', 'SALE_RETURN',
         'SALE_VOID', 'SALE_DELETE', 'SALE_UPDATE', 'DISCOUNT_APPLIED',
-        'PRICE_OVERRIDE', 'EXCHANGE', 'PAYMENT_UPDATE'
+        'PRICE_OVERRIDE', 'EXCHANGE', 'PAYMENT_UPDATE',
+        'CUSTOMER_CREATE', 'CUSTOMER_UPDATE', 'CUSTOMER_DELETE'
     ],
     inventory: [
         'STOCK_ADD', 'STOCK_ADJUST', 'INVENTORY_ADJUSTMENT', 'PRODUCT_DELETE',
@@ -80,7 +81,9 @@ const CATEGORY_MAP: Record<string, string[]> = {
     ],
     financial: [
         'CASH_DRAWER_OPEN', 'CASH_DRAWER_CLOSE', 'SHIFT_START', 'SHIFT_END',
-        'CASH_RECONCILIATION'
+        'CASH_RECONCILIATION', 'CASH_REGISTER_ENTRY', 'CASH_REGISTER_CANCEL',
+        'CASH_REGISTER_CLOSE', 'CASH_DRAWER_REOPEN', 'CASH_REGISTER_REOPEN',
+        'CASH_DRAWER_ENTRY', 'REGISTER_ADJUST_FLOAT'
     ],
     system: [
         'DATA_SYNC', 'REPORT_GENERATED', 'SETTINGS_CHANGE', 'BACKUP_CREATED',
@@ -90,6 +93,9 @@ const CATEGORY_MAP: Record<string, string[]> = {
 
 function getActionCategory(action: string): string {
     const act = action.toUpperCase();
+    if (act.includes('CASH') || act.includes('REGISTER') || act.includes('DRAWER') || act.includes('SHIFT')) {
+        return 'financial';
+    }
     for (const [cat, list] of Object.entries(CATEGORY_MAP)) {
         if (list.some(a => act.includes(a) || a.includes(act))) {
             return cat;
@@ -115,7 +121,7 @@ function getActionSeverity(action: string): 'CRITICAL' | 'WARNING' | 'FINANCIAL'
         act.includes('OVERRIDE') || 
         act.includes('ADJUST') || 
         act.includes('ALERT') ||
-        act.includes('DRAWER')
+        act.includes('CANCEL')
     ) {
         return 'WARNING';
     }
@@ -123,7 +129,10 @@ function getActionSeverity(action: string): 'CRITICAL' | 'WARNING' | 'FINANCIAL'
         act.includes('SHIFT') || 
         act.includes('RECONCIL') || 
         act.includes('EXCHANGE') || 
-        act.includes('PAYMENT')
+        act.includes('PAYMENT') ||
+        act.includes('DRAWER') ||
+        act.includes('REGISTER') ||
+        act.includes('CASH')
     ) {
         return 'FINANCIAL';
     }
@@ -139,6 +148,9 @@ function formatActionTitle(action: string): string {
         'SALE_UPDATE': 'Sale Modified',
         'DISCOUNT_APPLIED': 'Discount Applied',
         'PRICE_OVERRIDE': 'Price Override',
+        'CUSTOMER_CREATE': 'Customer Added',
+        'CUSTOMER_UPDATE': 'Customer Profile Modified',
+        'CUSTOMER_DELETE': 'Customer Deleted',
         'EXCHANGE': 'Item Exchange',
         'PAYMENT_UPDATE': 'Payment Updated',
         'INVENTORY_ADJUSTMENT': 'Stock Recount / Adjustment',
@@ -157,6 +169,12 @@ function formatActionTitle(action: string): string {
         'USER_UPDATE': 'User Account Updated',
         'REMOTE_USER_UPDATED': 'User Account Updated',
         'USER_DELETED': 'User Deleted',
+        'CASH_REGISTER_REOPEN': 'Register Reopened',
+        'CASH_DRAWER_REOPEN': 'Drawer Reopened',
+        'CASH_REGISTER_CLOSE': 'Register Closed',
+        'CASH_REGISTER_CANCEL': 'Cash Entry Cancelled',
+        'CASH_REGISTER_ENTRY': 'Cash Drawer Entry',
+        'CASH_DRAWER_ENTRY': 'Cash Drawer Entry',
         'CASH_DRAWER_OPEN': 'Cash Drawer Opened',
         'CASH_DRAWER_CLOSE': 'Cash Drawer Closed',
         'SHIFT_START': 'Shift Started',
@@ -218,6 +236,7 @@ export interface SaleDiffDetails {
             itemCount?: number;
             paymentMethod?: string;
             customerName?: string;
+            customerPhone?: string;
         };
         after: {
             grandTotal?: number;
@@ -228,6 +247,7 @@ export interface SaleDiffDetails {
             itemCount?: number;
             paymentMethod?: string;
             customerName?: string;
+            customerPhone?: string;
         };
     };
     itemChanges?: ItemChangeDetail[];
@@ -265,6 +285,24 @@ export interface SaleDiffDetails {
     remarks?: string;
 }
 
+export interface CashRegisterDiffDetails {
+    actionType: 'REOPEN' | 'CLOSE' | 'CANCEL' | 'ENTRY' | 'OPEN' | 'OTHER';
+    openingFloat?: number;
+    expectedCash?: number;
+    actualCashCounted?: number;
+    difference?: number;
+    notes?: string;
+    cancelReason?: string;
+    originalEntry?: {
+        type?: string;
+        category?: string;
+        amount?: number;
+        note?: string;
+        createdAt?: string;
+    };
+    rawPayload?: any;
+}
+
 interface ParsedLogInfo {
     narrative: string;
     invoiceNo?: string;
@@ -273,6 +311,8 @@ interface ParsedLogInfo {
     reason?: string;
     targetUser?: string;
     diff?: SaleDiffDetails;
+    cashDetails?: CashRegisterDiffDetails;
+    rawJson?: any;
 }
 
 function parseLogExplanation(log: AuditLog): ParsedLogInfo {
@@ -281,17 +321,22 @@ function parseLogExplanation(log: AuditLog): ParsedLogInfo {
     const operator = log.user?.name || 'Staff Member';
 
     let diff: SaleDiffDetails | undefined = undefined;
+    let cashDetails: CashRegisterDiffDetails | undefined = undefined;
     let invoiceNo: string | undefined = undefined;
     let amount: string | undefined = undefined;
     let percentage: string | undefined = undefined;
     let reason: string | undefined = undefined;
     let targetUser: string | undefined = undefined;
     let narrative = det;
+    let rawJson: any = undefined;
 
     // Check if details is JSON payload (v2 format)
     if (det.trim().startsWith('{') && det.trim().endsWith('}')) {
         try {
             const parsedJson = JSON.parse(det);
+            rawJson = parsedJson;
+
+            // 1. Sale Modifications
             if (parsedJson.type === 'SALE_UPDATE' || parsedJson.totals) {
                 diff = parsedJson;
                 invoiceNo = parsedJson.invoiceNo;
@@ -311,7 +356,17 @@ function parseLogExplanation(log: AuditLog): ParsedLogInfo {
                     }).join(', ')}`
                     : '';
 
-                narrative = `Bill #${invoiceNo || ''} was modified by ${operator}: Total ₹${beforeTotal?.toFixed(2) || '?'} → ₹${afterTotal?.toFixed(2) || '?'}${deltaStr}${itemsDeltaStr}`;
+                const beforeCustName = parsedJson.totals?.before?.customerName;
+                const afterCustName = parsedJson.totals?.after?.customerName;
+                const beforeCustPhone = parsedJson.totals?.before?.customerPhone;
+                const afterCustPhone = parsedJson.totals?.after?.customerPhone;
+
+                const beforeCust = [beforeCustName, beforeCustPhone].filter(Boolean).join(' • ') || 'Walk-in Customer';
+                const afterCust = [afterCustName, afterCustPhone].filter(Boolean).join(' • ') || 'Walk-in Customer';
+                const custChanged = (beforeCustName || '') !== (afterCustName || '') || (beforeCustPhone || '') !== (afterCustPhone || '');
+                const custDeltaStr = custChanged ? ` • Customer: "${beforeCust}" → "${afterCust}"` : '';
+
+                narrative = `Bill #${invoiceNo || ''} was modified by ${operator}: Total ₹${beforeTotal?.toFixed(2) || '?'} → ₹${afterTotal?.toFixed(2) || '?'}${deltaStr}${custDeltaStr}${itemsDeltaStr}`;
             } else if (parsedJson.type === 'PAYMENT_UPDATE' || parsedJson.payment) {
                 diff = parsedJson;
                 invoiceNo = parsedJson.invoiceNo;
@@ -337,6 +392,170 @@ function parseLogExplanation(log: AuditLog): ParsedLogInfo {
                 reason = parsedJson.reason;
                 const refundedSummary = (parsedJson.refundedItems || []).map((i: any) => `${i.name} x${i.qty}`).join(', ');
                 narrative = `Refund of ₹${parsedJson.refundAmount?.toFixed(2) || '0.00'} processed by ${operator} for Bill #${invoiceNo || ''}${refundedSummary ? `: ${refundedSummary}` : ''}${reason ? ` · Reason: ${reason}` : ''}.`;
+            }
+            // 2. Cash Register & Cash Drawer Operations
+            else if (
+                act.includes('REGISTER') || 
+                act.includes('DRAWER') || 
+                parsedJson.action === 'reopen' || 
+                parsedJson.action === 'close' || 
+                parsedJson.action === 'cancel' || 
+                parsedJson.action === 'entry' ||
+                parsedJson.reopenedFromId !== undefined ||
+                parsedJson.openingFloat !== undefined
+            ) {
+                // Parse potential nested input payload if it was encoded as a JSON string
+                let inputData = parsedJson.input;
+                if (typeof inputData === 'string') {
+                    try { inputData = JSON.parse(inputData); } catch {}
+                }
+
+                // A. Reopen Register / Drawer
+                if (act.includes('REOPEN') || parsedJson.action === 'reopen' || parsedJson.reopenedFromId !== undefined) {
+                    const floatVal = parsedJson.result?.register?.openingFloat ?? parsedJson.openingFloat ?? inputData?.openingFloat;
+                    const floatNum = floatVal !== undefined ? Number(floatVal) : undefined;
+                    amount = floatNum !== undefined ? floatNum.toFixed(2) : undefined;
+                    cashDetails = {
+                        actionType: 'REOPEN',
+                        openingFloat: floatNum,
+                        rawPayload: parsedJson
+                    };
+                    narrative = `Cash register reopened by ${operator}${floatNum !== undefined ? ` with opening float ₹${floatNum.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : ''}.`;
+                }
+                // B. Close Register / Drawer
+                else if (act.includes('CLOSE') || parsedJson.action === 'close') {
+                    const actual = parsedJson.result?.actualCashCounted ?? inputData?.actualCashCounted ?? parsedJson.closingActual;
+                    const expected = parsedJson.result?.expected ?? inputData?.expectedCash ?? parsedJson.closingExpected;
+                    const diffVal = parsedJson.result?.difference ?? (actual !== undefined && expected !== undefined ? Number(actual) - Number(expected) : undefined);
+                    const closeNotes = inputData?.notes || parsedJson.notes || '';
+                    
+                    const actualNum = actual !== undefined ? Number(actual) : undefined;
+                    const expectedNum = expected !== undefined ? Number(expected) : undefined;
+                    const diffNum = diffVal !== undefined ? Number(diffVal) : undefined;
+
+                    amount = actualNum !== undefined ? actualNum.toFixed(2) : undefined;
+                    reason = closeNotes || undefined;
+
+                    let diffStr = '';
+                    if (diffNum !== undefined) {
+                        if (diffNum === 0) diffStr = ' (Exact match: ₹0.00 difference)';
+                        else if (diffNum > 0) diffStr = ` (+₹${diffNum.toFixed(2)} surplus)`;
+                        else diffStr = ` (-₹${Math.abs(diffNum).toFixed(2)} shortage)`;
+                    }
+
+                    cashDetails = {
+                        actionType: 'CLOSE',
+                        actualCashCounted: actualNum,
+                        expectedCash: expectedNum,
+                        difference: diffNum,
+                        notes: closeNotes,
+                        rawPayload: parsedJson
+                    };
+
+                    narrative = `Cash register closed by ${operator}: Counted cash ₹${(actualNum ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}${expectedNum !== undefined ? ` vs. Expected ₹${expectedNum.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : ''}${diffStr}${closeNotes ? ` · Note: "${closeNotes}"` : ''}.`;
+                }
+                // C. Cancel Cash Transaction
+                else if (act.includes('CANCEL') || parsedJson.action === 'cancel') {
+                    const orig = parsedJson.result?.originalEntry || inputData?.originalEntry || {};
+                    const cancelReason = parsedJson.result?.reason ?? inputData?.reason ?? orig.cancelReason ?? '';
+                    const txAmt = orig.amount ?? inputData?.amount;
+                    const txAmtNum = txAmt !== undefined ? Number(txAmt) : undefined;
+                    const txType = orig.type ?? inputData?.type ?? 'CASH_TRANSACTION';
+                    const txCat = orig.category ?? inputData?.category ?? '';
+                    const txNote = orig.note ?? inputData?.note ?? '';
+
+                    amount = txAmtNum !== undefined ? txAmtNum.toFixed(2) : undefined;
+                    reason = cancelReason || undefined;
+
+                    const typeLabel = txType === 'CASH_IN' ? 'Cash In (Deposit)' : txType === 'CASH_OUT' ? 'Cash Out (Expense)' : 'Cash Transaction';
+                    const catLabel = txCat ? txCat.replace(/_/g, ' ').toLowerCase() : '';
+
+                    cashDetails = {
+                        actionType: 'CANCEL',
+                        cancelReason,
+                        originalEntry: {
+                            type: txType,
+                            category: txCat,
+                            amount: txAmtNum,
+                            note: txNote,
+                            createdAt: orig.createdAt
+                        },
+                        rawPayload: parsedJson
+                    };
+
+                    narrative = `Cancelled ${typeLabel}${catLabel ? ` [${catLabel}]` : ''} of ₹${(txAmtNum ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })} by ${operator}${cancelReason ? ` · Reason: "${cancelReason}"` : ''}${txNote ? ` · Note: "${txNote}"` : ''}.`;
+                }
+                // D. Entry (Cash In / Out)
+                else if (act.includes('ENTRY') || parsedJson.action === 'entry') {
+                    const entryType = parsedJson.type ?? inputData?.type ?? 'CASH_IN';
+                    const entryCat = parsedJson.category ?? inputData?.category ?? '';
+                    const entryAmt = parsedJson.amount ?? inputData?.amount ?? 0;
+                    const entryAmtNum = Number(entryAmt);
+                    const entryNote = parsedJson.notes ?? parsedJson.note ?? inputData?.note ?? inputData?.notes ?? '';
+
+                    amount = entryAmtNum.toFixed(2);
+                    reason = entryNote || undefined;
+
+                    const typeLabel = entryType === 'CASH_IN' ? 'Cash In' : 'Cash Out';
+                    const catLabel = entryCat ? entryCat.replace(/_/g, ' ').toLowerCase() : '';
+
+                    cashDetails = {
+                        actionType: 'ENTRY',
+                        originalEntry: {
+                            type: entryType,
+                            category: entryCat,
+                            amount: entryAmtNum,
+                            note: entryNote
+                        },
+                        rawPayload: parsedJson
+                    };
+
+                    narrative = `Recorded ${typeLabel}${catLabel ? ` [${catLabel}]` : ''} of ₹${entryAmtNum.toLocaleString('en-IN', { minimumFractionDigits: 2 })} by ${operator}${entryNote ? ` · Note: "${entryNote}"` : ''}.`;
+                }
+                // E. Open Drawer
+                else if (act.includes('OPEN') || parsedJson.sessionId !== undefined) {
+                    const floatNum = Number(parsedJson.openingFloat || 0);
+                    amount = floatNum.toFixed(2);
+                    reason = parsedJson.notes || undefined;
+                    cashDetails = {
+                        actionType: 'OPEN',
+                        openingFloat: floatNum,
+                        notes: parsedJson.notes,
+                        rawPayload: parsedJson
+                    };
+                    narrative = `Cash drawer opened by ${operator} with float ₹${floatNum.toLocaleString('en-IN', { minimumFractionDigits: 2 })}${parsedJson.notes ? ` · Note: "${parsedJson.notes}"` : ''}.`;
+                }
+            }
+            // 3. Customer Directory / CRM Activities
+            else if (act.includes('CUSTOMER')) {
+                if (parsedJson.summary) {
+                    narrative = `${parsedJson.summary} (by ${operator})`;
+                } else if (act.includes('UPDATE')) {
+                    narrative = `Customer "${parsedJson.previousName || parsedJson.customerName}" profile was updated by ${operator}`;
+                } else if (act.includes('CREATE')) {
+                    narrative = `New customer "${parsedJson.customerName}" was registered by ${operator}`;
+                } else if (act.includes('DELETE')) {
+                    narrative = `Customer "${parsedJson.customerName}" was removed by ${operator}`;
+                }
+                targetUser = parsedJson.customerName;
+            }
+            // 3. Fail-safe Sanitizer for ANY other unhandled JSON payload
+            else {
+                if (parsedJson.message || parsedJson.description || parsedJson.summary) {
+                    narrative = String(parsedJson.message || parsedJson.description || parsedJson.summary);
+                } else {
+                    const cleanEntries = Object.entries(parsedJson)
+                        .filter(([k]) => !['id', 'requestId', 'userId', 'sessionId', 'isSynced', 'lastSyncedAt'].includes(k))
+                        .map(([k, v]) => {
+                            const cleanKey = k.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim().toLowerCase();
+                            let valStr = typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v);
+                            if (valStr.length > 50) valStr = valStr.slice(0, 47) + '...';
+                            return `${cleanKey}: ${valStr}`;
+                        });
+                    narrative = cleanEntries.length > 0
+                        ? `${formatActionTitle(log.action)}: ${cleanEntries.join(' · ')}`
+                        : `${formatActionTitle(log.action)} recorded by ${operator}.`;
+                }
             }
         } catch {
             // Not valid JSON, proceed to standard parsing
@@ -1303,6 +1522,18 @@ export const ActivityPage: React.FC = () => {
                                                             </td>
                                                         </tr>
                                                     )}
+                                                    {((parsed.diff.totals.before.customerName || '') !== (parsed.diff.totals.after.customerName || '') ||
+                                                      (parsed.diff.totals.before.customerPhone || '') !== (parsed.diff.totals.after.customerPhone || '')) && (
+                                                        <tr>
+                                                            <td className="py-2 text-gray-600 dark:text-gray-400">Customer</td>
+                                                            <td className="py-2 text-gray-500">
+                                                                {[parsed.diff.totals.before.customerName, parsed.diff.totals.before.customerPhone].filter(Boolean).join(' • ') || 'Walk-in Customer'}
+                                                            </td>
+                                                            <td className="py-2 font-semibold text-indigo-600 dark:text-indigo-400" colSpan={2}>
+                                                                → {[parsed.diff.totals.after.customerName, parsed.diff.totals.after.customerPhone].filter(Boolean).join(' • ') || 'Walk-in Customer'}
+                                                            </td>
+                                                        </tr>
+                                                    )}
                                                 </tbody>
                                             </table>
                                         </div>
@@ -1505,6 +1736,104 @@ export const ActivityPage: React.FC = () => {
                                 </div>
                             )}
 
+                            {/* Cash Register / Drawer Event Summary */}
+                            {parsed.cashDetails && (
+                                <div className="p-4 rounded-xl bg-gray-50 dark:bg-dark-card border border-gray-200 dark:border-dark-border space-y-3">
+                                    <div className="flex items-center justify-between border-b border-gray-200 dark:border-dark-border pb-2.5">
+                                        <span className="font-bold text-gray-800 dark:text-gray-200 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                                            <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                                            Cash Register / Drawer Event Breakdown
+                                        </span>
+                                        <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 dark:bg-emerald-950 px-2 py-0.5 rounded uppercase">
+                                            {parsed.cashDetails.actionType}
+                                        </span>
+                                    </div>
+
+                                    {/* Close Register Details */}
+                                    {parsed.cashDetails.actionType === 'CLOSE' && (
+                                        <div className="space-y-2">
+                                            <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                                                <div className="p-2.5 rounded-lg bg-white dark:bg-dark-card border border-gray-200 dark:border-dark-border">
+                                                    <span className="text-[10px] text-gray-400 block font-medium">Expected Cash</span>
+                                                    <span className="font-mono font-bold text-gray-700 dark:text-gray-300">
+                                                        ₹{(parsed.cashDetails.expectedCash ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                                    </span>
+                                                </div>
+                                                <div className="p-2.5 rounded-lg bg-white dark:bg-dark-card border border-gray-200 dark:border-dark-border">
+                                                    <span className="text-[10px] text-gray-400 block font-medium">Actual Counted</span>
+                                                    <span className="font-mono font-bold text-gray-900 dark:text-white">
+                                                        ₹{(parsed.cashDetails.actualCashCounted ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                                    </span>
+                                                </div>
+                                                <div className="p-2.5 rounded-lg bg-white dark:bg-dark-card border border-gray-200 dark:border-dark-border">
+                                                    <span className="text-[10px] text-gray-400 block font-medium">Difference</span>
+                                                    <span className={`font-mono font-bold ${(parsed.cashDetails.difference ?? 0) === 0 ? 'text-emerald-600' : (parsed.cashDetails.difference ?? 0) > 0 ? 'text-blue-600' : 'text-rose-600'}`}>
+                                                        {(parsed.cashDetails.difference ?? 0) === 0 ? '₹0.00 (Match)' : (parsed.cashDetails.difference ?? 0) > 0 ? `+₹${(parsed.cashDetails.difference ?? 0).toFixed(2)}` : `-₹${Math.abs(parsed.cashDetails.difference ?? 0).toFixed(2)}`}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            {parsed.cashDetails.notes && (
+                                                <p className="text-xs text-gray-600 dark:text-gray-400 italic bg-white dark:bg-dark-card p-2 rounded border border-gray-200 dark:border-dark-border">
+                                                    Notes: {parsed.cashDetails.notes}
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* Reopen / Open Register Details */}
+                                    {(parsed.cashDetails.actionType === 'REOPEN' || parsed.cashDetails.actionType === 'OPEN') && parsed.cashDetails.openingFloat !== undefined && (
+                                        <div className="flex items-center justify-between p-3 rounded-lg bg-white dark:bg-dark-card border border-gray-200 dark:border-dark-border">
+                                            <span className="text-xs text-gray-600 dark:text-gray-400 font-medium">Opening Cash Float</span>
+                                            <span className="font-mono font-bold text-emerald-600 text-sm">
+                                                ₹{parsed.cashDetails.openingFloat.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                            </span>
+                                        </div>
+                                    )}
+
+                                    {/* Cancel Cash Transaction Details */}
+                                    {parsed.cashDetails.actionType === 'CANCEL' && parsed.cashDetails.originalEntry && (
+                                        <div className="p-3 rounded-lg bg-white dark:bg-dark-card border border-gray-200 dark:border-dark-border space-y-1.5 text-xs">
+                                            <div className="flex justify-between font-medium">
+                                                <span className="text-gray-500">Cancelled Transaction:</span>
+                                                <span className="font-bold text-rose-600">
+                                                    {parsed.cashDetails.originalEntry.type} (₹{(parsed.cashDetails.originalEntry.amount ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })})
+                                                </span>
+                                            </div>
+                                            {parsed.cashDetails.originalEntry.category && (
+                                                <div className="flex justify-between">
+                                                    <span className="text-gray-500">Category:</span>
+                                                    <span className="text-gray-700 dark:text-gray-300 font-medium">{parsed.cashDetails.originalEntry.category}</span>
+                                                </div>
+                                            )}
+                                            {parsed.cashDetails.cancelReason && (
+                                                <div className="flex justify-between">
+                                                    <span className="text-gray-500">Cancellation Reason:</span>
+                                                    <span className="text-rose-700 dark:text-rose-400 font-semibold">{parsed.cashDetails.cancelReason}</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* Cash Entry Details */}
+                                    {parsed.cashDetails.actionType === 'ENTRY' && parsed.cashDetails.originalEntry && (
+                                        <div className="p-3 rounded-lg bg-white dark:bg-dark-card border border-gray-200 dark:border-dark-border space-y-1.5 text-xs">
+                                            <div className="flex justify-between font-medium">
+                                                <span className="text-gray-500">Recorded Entry:</span>
+                                                <span className="font-bold text-emerald-600">
+                                                    {parsed.cashDetails.originalEntry.type} (₹{(parsed.cashDetails.originalEntry.amount ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })})
+                                                </span>
+                                            </div>
+                                            {parsed.cashDetails.originalEntry.category && (
+                                                <div className="flex justify-between">
+                                                    <span className="text-gray-500">Category:</span>
+                                                    <span className="text-gray-700 dark:text-gray-300 font-medium">{parsed.cashDetails.originalEntry.category}</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
                             {/* When & Who Grid */}
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <div className="p-3.5 rounded-xl bg-gray-50 border border-gray-200 space-y-1">
@@ -1578,6 +1907,19 @@ export const ActivityPage: React.FC = () => {
                                         </div>
                                     )}
                                 </div>
+                            )}
+
+                            {/* Optional Raw JSON Inspector */}
+                            {parsed.rawJson && (
+                                <details className="group border border-gray-200 dark:border-dark-border rounded-xl p-3 bg-gray-50/50 dark:bg-dark-card/50">
+                                    <summary className="cursor-pointer text-xs font-semibold text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 select-none flex items-center justify-between">
+                                        <span>Raw Event Payload (JSON)</span>
+                                        <span className="text-[10px] text-gray-400 group-open:hidden">Click to expand</span>
+                                    </summary>
+                                    <pre className="mt-2.5 p-3 bg-gray-900 text-emerald-400 rounded-lg font-mono text-[11px] overflow-x-auto whitespace-pre-wrap max-h-52 leading-relaxed">
+                                        {JSON.stringify(parsed.rawJson, null, 2)}
+                                    </pre>
+                                </details>
                             )}
 
                             <div className="p-2.5 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-between text-[11px] text-gray-400 font-mono">

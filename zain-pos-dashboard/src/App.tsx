@@ -175,6 +175,7 @@ function AppRoutes() {
           </PrivateRoute>
         }
       />
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

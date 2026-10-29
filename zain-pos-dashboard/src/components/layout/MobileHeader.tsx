@@ -1,15 +1,13 @@
-import { Sun, Moon, LogOut } from 'lucide-react';
+import { LogOut } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { DateRangePicker } from '@/components/shared/DateRangePicker';
 import { NotificationBell } from '@/components/notifications/NotificationBell';
 
 interface MobileHeaderProps {
-    darkMode: boolean;
-    setDarkMode: (dark: boolean) => void;
 }
 
-export function MobileHeader({ darkMode, setDarkMode }: MobileHeaderProps) {
+export function MobileHeader({}: MobileHeaderProps = {}) {
     const { logout, user } = useAuth();
 
     return (
@@ -21,14 +19,6 @@ export function MobileHeader({ darkMode, setDarkMode }: MobileHeaderProps) {
                 </div>
                 <div className="flex items-center gap-2">
                     <NotificationBell />
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                        onClick={() => setDarkMode(!darkMode)}
-                    >
-                        {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-                    </Button>
                     <Button
                         variant="ghost"
                         size="icon"

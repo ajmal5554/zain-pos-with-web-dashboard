@@ -1,12 +1,16 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { CreditCard, Trash2, X, Plus, Minus, Scan, Save, Banknote, Smartphone, Printer, ArrowRight, CheckCircle, AlertTriangle, AlertCircle } from 'lucide-react';
+import { CreditCard, Trash2, X, Plus, Minus, Scan, Save, Banknote, Smartphone, Printer, ArrowRight, CheckCircle, AlertTriangle, AlertCircle, User, UserPlus, Phone, Search, ChevronDown, Check } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
+import { Modal } from '../components/ui/Modal';
+import { showToast } from '../components/ui/Toast';
 import { useAuthStore } from '../store/authStore';
 import { useCartStore } from '../store/cartStore';
 import { db } from '../lib/db';
 import { printService } from '../services/print.service';
 import { auditService } from '../services/audit.service';
+import { getSaleEditLockReason } from '../lib/saleEdit';
+import { formatVariantDescription } from '../lib/catalogueDescription';
 
 import { useLocation } from 'react-router-dom';
 
@@ -26,8 +30,10 @@ interface ActiveSaleSession {
     paymentMethod: 'CASH' | 'CARD' | 'UPI' | 'SPLIT';
     splitAmounts: { CASH: number; CARD: number; UPI: number };
     customerName: string;
+    customerPhone?: string;
     isEditMode: boolean;
     showPayment?: boolean;
+    cartItems?: ReturnType<typeof useCartStore.getState>['items'];
 }
 
 const persistActiveSaleSession = (session: ActiveSaleSession) => {
@@ -56,6 +62,7 @@ export const POS: React.FC = () => {
     const [searchQuery, setSearchQuery] = useState('');
     const [debouncedSearch, setDebouncedSearch] = useState('');
     const [products, setProducts] = useState<any[]>([]);
+    const [soldCounts, setSoldCounts] = useState<Map<string, number>>(new Map());
     const [billNo, setBillNo] = useState<string>('...');
     const [paidAmount, setPaidAmount] = useState('');
     const [discountAmount, setDiscountAmount] = useState('');
@@ -63,9 +70,13 @@ export const POS: React.FC = () => {
     const [processing, setProcessing] = useState(false);
     const [saleSuccess, setSaleSuccess] = useState(false);
     const [printError, setPrintError] = useState(false);
+    const [loadingSession, setLoadingSession] = useState(true);
+    const [sessionError, setSessionError] = useState('');
+    const sessionLoadId = useRef(0);
 
     // Discount sanity check confirmation modal
     const [showDiscountConfirm, setShowDiscountConfirm] = useState(false);
+    const [showNoDiscountConfirm, setShowNoDiscountConfirm] = useState(false);
     const [pendingSalePrint, setPendingSalePrint] = useState(true);
 
     // Non-blocking notification toast (prevents window.alert app freezing in Electron)
@@ -97,9 +108,20 @@ export const POS: React.FC = () => {
         CASH: true, UPI: true, CARD: true, SPLIT: true
     });
 
-    // New State for Header
+    // Customer Selection State (Walk-in Customer by default, searchable by Name or Phone)
     const [customerName, setCustomerName] = useState('Walk-in Customer');
+    const [customerPhone, setCustomerPhone] = useState('');
+    const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+    const [customerSearchInput, setCustomerSearchInput] = useState('Walk-in Customer');
+    const [customersList, setCustomersList] = useState<any[]>([]);
+    const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+    const [customerHighlightIndex, setCustomerHighlightIndex] = useState(-1);
+    const [showQuickAddModal, setShowQuickAddModal] = useState(false);
+    const [quickAddForm, setQuickAddForm] = useState({ name: '', phone: '', gstin: '' });
+    const [isSavingCustomer, setIsSavingCustomer] = useState(false);
 
+    const customerInputRef = useRef<HTMLInputElement>(null);
+    const customerDropdownRef = useRef<HTMLDivElement>(null);
     const barcodeInputRef = useRef<HTMLInputElement>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
     const discountInputRef = useRef<HTMLInputElement>(null);
@@ -120,7 +142,8 @@ export const POS: React.FC = () => {
     } = useCartStore();
 
     useEffect(() => {
-        loadData();
+        void loadData();
+        return () => { sessionLoadId.current++; };
     }, []);
 
     useEffect(() => {
@@ -210,6 +233,7 @@ export const POS: React.FC = () => {
 
         const currentState = {
             customerName: customerName || 'Walk-in Customer',
+            customerPhone: customerPhone || '',
             discount: Number(parseFloat(discountAmount) || 0),
             paymentMethod,
             paidAmount: paymentMethod === 'SPLIT'
@@ -227,6 +251,7 @@ export const POS: React.FC = () => {
 
         const originalState = !originalSaleData ? null : {
             customerName: originalSaleData.customerName || 'Walk-in Customer',
+            customerPhone: originalSaleData.customerPhone || '',
             discount: Number(originalSaleData.discount || 0),
             paymentMethod: originalSaleData.paymentMethod || 'CASH',
             paidAmount: Number(originalSaleData.paidAmount || 0),
@@ -243,6 +268,7 @@ export const POS: React.FC = () => {
         originalSaleData,
         items,
         customerName,
+        customerPhone,
         discountAmount,
         paidAmount,
         paymentMethod,
@@ -270,6 +296,11 @@ export const POS: React.FC = () => {
         setCurrentSaleId(null);
         setOriginalPaidAmount(0);
         setCustomerName('Walk-in Customer');
+        setCustomerPhone('');
+        setSelectedCustomerId(null);
+        setCustomerSearchInput('Walk-in Customer');
+        setShowCustomerDropdown(false);
+        setCustomerHighlightIndex(-1);
         setSaleSuccess(false);
         setPrintError(false);
         setIsEditMode(false);
@@ -279,8 +310,22 @@ export const POS: React.FC = () => {
         setShowDiscountConfirm(false);
     }, [clearCart]);
 
+    // Close customer suggestions when clicking outside
     useEffect(() => {
-        if (isEditMode && currentSaleId && originalSaleData) {
+        const handleClickOutside = (e: MouseEvent) => {
+            if (
+                customerDropdownRef.current &&
+                !customerDropdownRef.current.contains(e.target as Node)
+            ) {
+                setShowCustomerDropdown(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    useEffect(() => {
+        if (!loadingSession && !sessionError && isEditMode && currentSaleId && originalSaleData) {
             persistActiveSaleSession({
                 saleId: currentSaleId,
                 billNo,
@@ -291,8 +336,10 @@ export const POS: React.FC = () => {
                 paymentMethod,
                 splitAmounts,
                 customerName,
+                customerPhone,
                 isEditMode: true,
                 showPayment,
+                cartItems: items,
             });
         }
     }, [
@@ -306,7 +353,11 @@ export const POS: React.FC = () => {
         paymentMethod,
         splitAmounts,
         customerName,
+        customerPhone,
         showPayment,
+        items,
+        loadingSession,
+        sessionError,
     ]);
 
     useEffect(() => {
@@ -341,132 +392,98 @@ export const POS: React.FC = () => {
     }, [hasDetectedChanges]);
 
     const loadData = async () => {
-        // 1. Check for sale in location state (Edit/Exchange mode from Sales History)
-        const saleToEdit = location.state?.sale;
-        if (saleToEdit) {
-            clearCart();
-            setBillNo(saleToEdit.billNo);
-            setCurrentSaleId(saleToEdit.id);
-            setCustomerName(saleToEdit.customerName || 'Walk-in Customer');
-            setPaymentMethod(saleToEdit.paymentMethod || 'CASH');
-            setPaidAmount(saleToEdit.paidAmount?.toString() || '');
-            setDiscountAmount(saleToEdit.discount?.toString() || '');
-            setOriginalPaidAmount(saleToEdit.paidAmount || 0);
-            
-            // Store original sale data for change detection
-            setOriginalSaleData(saleToEdit);
-            
-            // Set edit mode BEFORE loading items so markAsChanged doesn't fire
-            setIsEditMode(true);
-            setHasChanges(false);
-
-            // Load original invoice items into cart for true edit mode
-            (saleToEdit.items || []).forEach((item: any) => {
-                addItem({
-                    variantId: item.variantId,
-                    productName: item.productName,
-                    variantInfo: item.variantInfo || '',
-                    barcode: item.barcode || '',
-                    quantity: item.quantity,
-                    mrp: item.mrp || item.sellingPrice,
-                    sellingPrice: item.sellingPrice,
-                    discount: item.discount || 0,
-                    taxRate: item.taxRate || 0,
-                });
-            });
-            
-            // Ensure hasChanges stays false after loading items
-            setHasChanges(false);
-
-            // Pre-fill split amounts if invoice is split-paid
-            const initialSplitAmounts = { CASH: 0, CARD: 0, UPI: 0 };
-            if (saleToEdit.paymentMethod === 'SPLIT' && saleToEdit.payments?.length) {
-                saleToEdit.payments.forEach((p: any) => {
-                    if (p.paymentMode && p.paymentMode in initialSplitAmounts) {
-                        initialSplitAmounts[p.paymentMode as keyof typeof initialSplitAmounts] = p.amount || 0;
-                    }
-                });
+        const loadId = ++sessionLoadId.current;
+        setLoadingSession(true);
+        setSessionError('');
+        try {
+            const requestedSale = location.state?.sale;
+            let session: ActiveSaleSession | null = null;
+            const stored = localStorage.getItem(ACTIVE_SALE_SESSION_KEY);
+            if (!requestedSale && stored) {
+                try { session = JSON.parse(stored); }
+                catch { clearActiveSaleSession(); }
             }
-            setSplitAmounts(initialSplitAmounts);
-
-            persistActiveSaleSession({
-                saleId: saleToEdit.id,
-                billNo: saleToEdit.billNo,
-                originalSaleData: saleToEdit,
-                originalPaidAmount: saleToEdit.paidAmount || 0,
-                paidAmount: saleToEdit.paidAmount?.toString() || '',
-                discountAmount: saleToEdit.discount?.toString() || '',
-                paymentMethod: saleToEdit.paymentMethod || 'CASH',
-                splitAmounts: initialSplitAmounts,
-                customerName: saleToEdit.customerName || 'Walk-in Customer',
-                isEditMode: true
-            });
-        } else {
-            // 2. Check if there is an active post-save / edit sale session to restore across navigation
-            const savedSessionStr = localStorage.getItem(ACTIVE_SALE_SESSION_KEY);
-            if (savedSessionStr) {
-                try {
-                    const session: ActiveSaleSession = JSON.parse(savedSessionStr);
-                    if (session && session.saleId && session.billNo) {
-                        setBillNo(session.billNo);
-                        setCurrentSaleId(session.saleId);
-                        setOriginalSaleData(session.originalSaleData);
-                        setOriginalPaidAmount(session.originalPaidAmount || 0);
-                        setPaidAmount(session.paidAmount || '');
-                        setDiscountAmount(session.discountAmount || '');
-                        setPaymentMethod(session.paymentMethod || 'CASH');
-                        setSplitAmounts(session.splitAmounts || { CASH: 0, CARD: 0, UPI: 0 });
-                        setCustomerName(session.customerName || 'Walk-in Customer');
-                        setShowPayment(session.showPayment ?? true);
-                        setIsEditMode(true);
-                        setHasChanges(false);
-
-                        // Ensure items are in cart; if cart was cleared, restore from original items
-                        if (useCartStore.getState().items.length === 0 && session.originalSaleData?.items?.length) {
-                            (session.originalSaleData.items || []).forEach((item: any) => {
-                                addItem({
-                                    variantId: item.variantId,
-                                    productName: item.productName,
-                                    variantInfo: item.variantInfo || '',
-                                    barcode: item.barcode || '',
-                                    quantity: item.quantity,
-                                    mrp: item.mrp || item.sellingPrice,
-                                    sellingPrice: item.sellingPrice,
-                                    discount: item.discount || 0,
-                                    taxRate: item.taxRate || 0,
-                                });
-                            });
-                        }
-
-                        await loadProducts();
-                        await loadShopSettings();
-                        return;
+            const saleId = requestedSale?.id || session?.saleId;
+            if (saleId) {
+                // The database decides whether this saved cart may still be edited.
+                // Local storage can predate a refund, exchange, void or payment correction.
+                const result = await window.electronAPI.sales.getSaleById(saleId);
+                if (loadId !== sessionLoadId.current) return;
+                if (!result.success || !result.data) throw new Error(result.error || 'Could not check the saved bill.');
+                const sale = result.data;
+                const lockReason = getSaleEditLockReason(sale);
+                if (lockReason) {
+                    releasePostSaveUpdateWindow();
+                    showNotification(lockReason + ' A new sale is ready.', 'warning');
+                    await loadNextBillNo();
+                } else {
+                    const keepDraft = !!session && !!sale.updatedAt &&
+                        new Date(sale.updatedAt).getTime() === new Date(session.originalSaleData?.updatedAt).getTime();
+                    const split = { CASH: 0, CARD: 0, UPI: 0 };
+                    for (const payment of sale.payments || []) {
+                        if (payment.paymentMode in split) split[payment.paymentMode as keyof typeof split] += payment.amount;
                     }
-                } catch (e) {
-                    console.error('Failed to restore active sale session', e);
-                    clearActiveSaleSession();
+                    // Persisted draft items may intentionally be empty. Never resurrect
+                    // cleared items from the invoice merely because the cart is empty.
+                    const draftItems = keepDraft ? (session!.cartItems ?? useCartStore.getState().items) : sale.items;
+                    clearCart();
+                    for (const item of draftItems || []) {
+                        addItem({
+                            variantId: item.variantId, productName: item.productName,
+                            categoryName: item.categoryName,
+                            variantInfo: item.variantInfo || '', barcode: item.barcode || '',
+                            quantity: item.quantity, mrp: item.mrp ?? item.sellingPrice,
+                            sellingPrice: item.sellingPrice, discount: item.discount || 0, taxRate: item.taxRate || 0
+                        });
+                    }
+                    setBillNo(sale.billNo);
+                    setCurrentSaleId(sale.id);
+                    setOriginalSaleData(sale);
+                    setOriginalPaidAmount(sale.paidAmount || 0);
+                    setPaidAmount(keepDraft ? session!.paidAmount : String(sale.paidAmount ?? ''));
+                    setDiscountAmount(keepDraft ? session!.discountAmount : String(sale.discount ?? ''));
+                    setPaymentMethod(keepDraft ? session!.paymentMethod : sale.paymentMethod || 'CASH');
+                    setSplitAmounts(keepDraft ? session!.splitAmounts : split);
+                    const loadedCustName = keepDraft ? session!.customerName : sale.customerName || 'Walk-in Customer';
+                    const loadedCustPhone = keepDraft ? (session!.customerPhone || '') : sale.customerPhone || '';
+                    setCustomerName(loadedCustName);
+                    setCustomerPhone(loadedCustPhone);
+                    setCustomerSearchInput(loadedCustName);
+                    setShowPayment(keepDraft ? session!.showPayment ?? true : true);
+                    setIsEditMode(true);
+                    setHasChanges(false);
                 }
+            } else {
+                if (useCartStore.getState().items.length === 0) {
+                    releasePostSaveUpdateWindow();
+                }
+                setIsEditMode(false);
+                setHasChanges(false);
+                const pendingCustomer = useCartStore.getState().customerName;
+                const pendingPhone = useCartStore.getState().customerPhone;
+                const pendingId = useCartStore.getState().customerId;
+                if (pendingCustomer) {
+                    setCustomerName(pendingCustomer);
+                    setCustomerSearchInput(pendingCustomer);
+                }
+                if (pendingPhone) {
+                    setCustomerPhone(pendingPhone);
+                }
+                if (pendingId) {
+                    setSelectedCustomerId(pendingId);
+                }
+                await loadNextBillNo();
             }
-
-            // 3. Normal fresh session without an active edit session
-            if (items.length === 0) {
-                setCurrentSaleId(null);
-                setOriginalPaidAmount(0);
-                setOriginalSaleData(null);
-                setPaidAmount('');
-                setDiscountAmount('');
-                setShowPayment(false);
-                setSplitAmounts({ CASH: 0, CARD: 0, UPI: 0 });
-                setCustomerName('Walk-in Customer');
-            }
-            setIsEditMode(false);
-            setHasChanges(false);
-            // Always load the next bill number
-            await loadNextBillNo();
+            await loadProducts();
+            await loadCustomers();
+            await loadShopSettings();
+        } catch (error) {
+            // Keep the draft, but do not allow edits if its live status is unknown.
+            console.error('Failed to restore active sale session', error);
+            if (loadId === sessionLoadId.current) setSessionError('Could not verify the current bill. ' + (error as Error).message);
+        } finally {
+            if (loadId === sessionLoadId.current) setLoadingSession(false);
         }
-
-        await loadProducts();
-        await loadShopSettings();
     };
 
     const loadShopSettings = async () => {
@@ -547,19 +564,285 @@ export const POS: React.FC = () => {
         }
     };
 
+    const loadSalesPopularity = useCallback(async () => {
+        try {
+            if (typeof db !== 'undefined' && db?.saleItems?.findMany) {
+                const saleItems = await db.saleItems.findMany({
+                    where: { sale: { status: 'COMPLETED' } },
+                    select: { variantId: true, quantity: true }
+                });
+                if (Array.isArray(saleItems)) {
+                    const counts = new Map<string, number>();
+                    for (const item of saleItems) {
+                        if (item.variantId) {
+                            counts.set(item.variantId, (counts.get(item.variantId) || 0) + (item.quantity || 1));
+                        }
+                    }
+                    setSoldCounts(counts);
+                }
+            }
+        } catch (e) {
+            console.warn('Could not load sale popularity stats:', e);
+        }
+    }, []);
+
     const loadProducts = async () => {
         try {
-            const variants = await db.productVariants.findMany({
+            if (!window.electronAPI?.catalogue?.listVariants) throw new Error('Catalogue service is unavailable. Restart the app.');
+            const result = await window.electronAPI.catalogue.listVariants({
                 where: { isActive: true },
+                userId: user?.id,
                 include: {
                     product: {
                         include: { category: true }
                     }
                 },
             });
-            setProducts(variants);
+            if (!result?.success || !Array.isArray(result.data)) throw new Error(result?.error || 'Could not load the catalogue.');
+            setProducts(result.data);
+            if (typeof loadSalesPopularity === 'function') {
+                void loadSalesPopularity();
+            }
         } catch (error) {
             console.error('Failed to load products:', error);
+            setProducts([]);
+            showNotification((error as Error).message || 'Could not load the catalogue.', 'error');
+        }
+    };
+
+    const loadCustomers = async () => {
+        try {
+            const result = await db.customers.findMany({
+                orderBy: { createdAt: 'desc' }
+            });
+            if (Array.isArray(result)) {
+                setCustomersList(result);
+            }
+        } catch (error) {
+            console.error('Failed to load customers:', error);
+        }
+    };
+
+    // Filtered customers matching search by name or phone
+    const filteredCustomers = useMemo(() => {
+        const query = customerSearchInput.trim().toLowerCase();
+        if (!query || query === 'walk-in customer') {
+            return customersList.slice(0, 15);
+        }
+
+        const cleanDigits = query.replace(/\D/g, '');
+
+        return customersList.filter(c => {
+            const nameMatch = (c.name || '').toLowerCase().includes(query);
+            const phoneStr = (c.phone || '').replace(/\D/g, '');
+            const phoneMatch = cleanDigits ? phoneStr.includes(cleanDigits) : false;
+            const gstinMatch = (c.gstin || '').toLowerCase().includes(query);
+            return nameMatch || phoneMatch || gstinMatch;
+        }).slice(0, 20);
+    }, [customersList, customerSearchInput]);
+
+    const handleSelectCustomer = (customer: any) => {
+        if (!customer) {
+            handleResetToWalkIn();
+            return;
+        }
+
+        const name = customer.name || 'Walk-in Customer';
+        const phone = customer.phone || '';
+        const id = customer.id || null;
+
+        setCustomerName(name);
+        setCustomerPhone(phone);
+        setSelectedCustomerId(id);
+        setCustomerSearchInput(name);
+        setShowCustomerDropdown(false);
+        setCustomerHighlightIndex(-1);
+
+        useCartStore.getState().setCustomer(id, name, phone);
+        markAsChanged();
+        setTimeout(() => barcodeInputRef.current?.focus(), 50);
+    };
+
+    const handleResetToWalkIn = () => {
+        setCustomerName('Walk-in Customer');
+        setCustomerPhone('');
+        setSelectedCustomerId(null);
+        setCustomerSearchInput('Walk-in Customer');
+        setShowCustomerDropdown(false);
+        setCustomerHighlightIndex(-1);
+
+        useCartStore.getState().setCustomer(null, 'Walk-in Customer', null);
+        markAsChanged();
+        setTimeout(() => barcodeInputRef.current?.focus(), 50);
+    };
+
+    const handleOpenQuickAdd = (prefill?: string) => {
+        const text = (prefill ?? customerSearchInput).trim();
+        const isNumeric = /^\+?[\d\s-]+$/.test(text);
+        const cleanDigits = text.replace(/\D/g, '');
+        const maxDigits = text.startsWith('+') ? 13 : 10;
+        const sanitizedPhone = isNumeric ? (text.startsWith('+') ? `+${cleanDigits.slice(0, 13)}` : cleanDigits.slice(0, 10)) : '';
+
+        setQuickAddForm({
+            name: isNumeric ? '' : (text.toLowerCase() === 'walk-in customer' ? '' : text.slice(0, 50)),
+            phone: sanitizedPhone,
+            gstin: ''
+        });
+        setShowCustomerDropdown(false);
+        setShowQuickAddModal(true);
+    };
+
+    const handleSaveQuickCustomer = async (e: React.FormEvent) => {
+        e.preventDefault();
+        const trimmedPhone = quickAddForm.phone.trim();
+        let trimmedName = quickAddForm.name.trim();
+
+        if (!trimmedName && !trimmedPhone) {
+            showNotification('Please enter at least a name or phone number', 'warning');
+            return;
+        }
+
+        if (!trimmedName) {
+            trimmedName = trimmedPhone ? `Customer ${trimmedPhone}` : 'Walk-in Customer';
+        }
+
+        setIsSavingCustomer(true);
+        try {
+            const created = await db.customers.create({
+                data: {
+                    name: trimmedName,
+                    phone: trimmedPhone || null,
+                    gstin: quickAddForm.gstin.trim() || null,
+                }
+            });
+
+            if (created) {
+                setCustomersList(prev => [created, ...prev]);
+                handleSelectCustomer(created);
+                setShowQuickAddModal(false);
+                showNotification(`Customer "${created.name}" registered and selected!`, 'success');
+            }
+        } catch (error: any) {
+            console.error('Failed to create customer:', error);
+            showNotification(error.message || 'Failed to create customer', 'error');
+        } finally {
+            setIsSavingCustomer(false);
+        }
+    };
+
+    const handleCustomerKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        // Instant clear: If Backspace or Delete is pressed while holding "Walk-in Customer", clear it completely to empty
+        if (
+            (e.key === 'Backspace' || e.key === 'Delete') &&
+            customerSearchInput.trim().toLowerCase() === 'walk-in customer'
+        ) {
+            e.preventDefault();
+            setCustomerSearchInput('');
+            setCustomerName('Walk-in Customer');
+            setCustomerPhone('');
+            setSelectedCustomerId(null);
+            useCartStore.getState().setCustomer(null, 'Walk-in Customer', null);
+            setShowCustomerDropdown(true);
+            setCustomerHighlightIndex(-1);
+            return;
+        }
+
+        if (!showCustomerDropdown) {
+            if (e.key === 'ArrowDown' || e.key === 'Enter') {
+                setShowCustomerDropdown(true);
+            }
+            return;
+        }
+
+        const query = customerSearchInput.trim().toLowerCase();
+        const hasAddOption = query && query !== 'walk-in customer';
+        const totalItems = 1 + filteredCustomers.length + (hasAddOption ? 1 : 0);
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            setCustomerHighlightIndex(prev => (prev + 1) % totalItems);
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setCustomerHighlightIndex(prev => (prev <= 0 ? totalItems - 1 : prev - 1));
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            const trimmed = customerSearchInput.trim();
+
+            if (customerHighlightIndex === 0) {
+                handleResetToWalkIn();
+            } else if (customerHighlightIndex > 0 && customerHighlightIndex <= filteredCustomers.length) {
+                handleSelectCustomer(filteredCustomers[customerHighlightIndex - 1]);
+            } else if (hasAddOption && customerHighlightIndex === filteredCustomers.length + 1) {
+                handleOpenQuickAdd(customerSearchInput);
+            } else {
+                // If user didn't arrow down, but filtered suggestions exist, select top match
+                if (filteredCustomers.length >= 1) {
+                    handleSelectCustomer(filteredCustomers[0]);
+                } else if (!trimmed || trimmed.toLowerCase() === 'walk-in customer') {
+                    handleResetToWalkIn();
+                } else {
+                    // Check if input has phone number alone, name alone, or both name and phone
+                    const phoneMatch = trimmed.match(/(?:\+?\d[\d\s-]{6,14}\d|\d{7,15})/);
+                    const extractedDigits = phoneMatch ? phoneMatch[0].replace(/\D/g, '') : '';
+                    const hasValidPhone = extractedDigits.length >= 7 && extractedDigits.length <= 15;
+                    const extractedName = hasValidPhone
+                        ? trimmed.replace(phoneMatch![0], '').replace(/^[-–—,:|/]+|[-–—,:|/]+$/g, '').trim()
+                        : trimmed;
+
+                    const finalPhone = hasValidPhone ? extractedDigits : '';
+                    const finalName = extractedName || (hasValidPhone ? `Customer ${extractedDigits}` : 'Walk-in Customer');
+
+                    setCustomerName(finalName);
+                    setCustomerPhone(finalPhone);
+                    setCustomerSearchInput(finalName);
+                    markAsChanged();
+                    setShowCustomerDropdown(false);
+
+                    // Auto-register immediately into db.customers so it is saved in the Customer directory page
+                    (async () => {
+                        try {
+                            if (finalPhone) {
+                                const existing = await db.customers.findUnique({ where: { phone: finalPhone } });
+                                if (!existing) {
+                                    const created = await db.customers.create({
+                                        data: { name: finalName, phone: finalPhone }
+                                    });
+                                    if (created) {
+                                        setCustomersList(prev => [created, ...prev]);
+                                        setSelectedCustomerId(created.id);
+                                        useCartStore.getState().setCustomer(created.id, finalName, finalPhone);
+                                    }
+                                } else {
+                                    setSelectedCustomerId(existing.id);
+                                    useCartStore.getState().setCustomer(existing.id, existing.name, finalPhone);
+                                }
+                            } else if (finalName && finalName.toLowerCase() !== 'walk-in customer') {
+                                const existing = (await db.customers.findMany({ where: { name: finalName }, take: 1 }))[0];
+                                if (!existing) {
+                                    const created = await db.customers.create({
+                                        data: { name: finalName, phone: null }
+                                    });
+                                    if (created) {
+                                        setCustomersList(prev => [created, ...prev]);
+                                        setSelectedCustomerId(created.id);
+                                        useCartStore.getState().setCustomer(created.id, finalName, null);
+                                    }
+                                } else {
+                                    setSelectedCustomerId(existing.id);
+                                    useCartStore.getState().setCustomer(existing.id, existing.name, existing.phone);
+                                }
+                            }
+                        } catch (err) {
+                            console.warn('Auto-save customer to directory failed:', err);
+                            useCartStore.getState().setCustomer(null, finalName, finalPhone || null);
+                        }
+                    })();
+
+                    setTimeout(() => barcodeInputRef.current?.focus(), 50);
+                }
+            }
+        } else if (e.key === 'Escape') {
+            setShowCustomerDropdown(false);
         }
     };
 
@@ -589,14 +872,21 @@ export const POS: React.FC = () => {
             const variant = barcodeMap.get(trimmedBarcode);
 
             if (variant) {
+                if (variant.isPrepared) {
+                    showNotification('Stock conversion pending for this item. Cannot be sold until converted.', 'warning');
+                    setBarcode('');
+                    setTimeout(() => barcodeInputRef.current?.focus(), 20);
+                    return;
+                }
                 if (user?.role !== 'ADMIN' && !user?.permAddItem) {
                     showNotification('Permission Denied: You are not allowed to add items to sales.', 'warning');
                     return;
                 }
                 addItem({
                     variantId: variant.id,
-                    productName: variant.product?.name || 'Unknown Item',
-                    variantInfo: `${variant.size || ''} ${variant.color || ''}`.trim(),
+                    productName: formatVariantDescription(variant.product?.name || 'Unknown Item', variant),
+                    categoryName: variant.product?.category?.name || '',
+                    variantInfo: '',
                     barcode: variant.barcode,
                     quantity: 1,
                     mrp: variant.mrp,
@@ -620,14 +910,19 @@ export const POS: React.FC = () => {
     };
 
     const handleProductClick = (variant: any) => {
+        if (variant.isPrepared) {
+            showNotification('Stock conversion pending for this item. Cannot be sold until converted.', 'warning');
+            return;
+        }
         if (user?.role !== 'ADMIN' && !user?.permAddItem) {
             showNotification('Permission Denied: You are not allowed to add items to sales.', 'warning');
             return;
         }
         addItem({
             variantId: variant.id,
-            productName: variant.product.name,
-            variantInfo: `${variant.size || ''} ${variant.color || ''}`.trim(),
+            productName: formatVariantDescription(variant.product.name, variant),
+            categoryName: variant.product?.category?.name || '',
+            variantInfo: '',
             barcode: variant.barcode,
             quantity: 1,
             mrp: variant.mrp,
@@ -734,6 +1029,11 @@ export const POS: React.FC = () => {
         setCurrentSaleId(null);
         setOriginalPaidAmount(0);
         setCustomerName('Walk-in Customer');
+        setCustomerPhone('');
+        setSelectedCustomerId(null);
+        setCustomerSearchInput('Walk-in Customer');
+        setShowCustomerDropdown(false);
+        setCustomerHighlightIndex(-1);
         setSaleSuccess(false);
         setPrintError(false);
         setIsEditMode(false);
@@ -770,12 +1070,19 @@ export const POS: React.FC = () => {
         const discountPercent = subtotalForCheck > 0 ? roundCurrency((discount / subtotalForCheck) * 100) : 0;
         const maxDiscountPercent = user?.maxDiscount || 0; // now stored as percentage
 
-        if (user?.role !== 'ADMIN' && maxDiscountPercent > 0 && discountPercent > maxDiscountPercent) {
+        if (user?.role !== 'ADMIN' && discountPercent > maxDiscountPercent) {
             const maxAllowedAmount = roundCurrency((subtotalForCheck * maxDiscountPercent) / 100);
-            showNotification(
-                `Permission Denied: Your max discount is ${maxDiscountPercent}% (₹${maxAllowedAmount.toFixed(0)} on this bill). You tried ${discountPercent.toFixed(1)}% (₹${discount.toFixed(0)}).`,
-                'warning'
-            );
+            if (maxDiscountPercent === 0) {
+                showNotification(
+                    'Permission Denied: You do not have permission to apply discounts to bills.',
+                    'warning'
+                );
+            } else {
+                showNotification(
+                    `Permission Denied: Your max discount is ${maxDiscountPercent}% (₹${maxAllowedAmount.toFixed(0)} on this bill). You tried ${discountPercent.toFixed(1)}% (₹${discount.toFixed(0)}).`,
+                    'warning'
+                );
+            }
             return;
         }
 
@@ -788,6 +1095,14 @@ export const POS: React.FC = () => {
         }
         // If we get here from the confirmation modal, close it
         setShowDiscountConfirm(false);
+
+        // Warn if discount is zero — requires explicit confirmation
+        if (discount <= 0 && !showNoDiscountConfirm) {
+            setPendingSalePrint(shouldPrint);
+            setShowNoDiscountConfirm(true);
+            return;
+        }
+        setShowNoDiscountConfirm(false);
 
         if (paid < finalTotal) {
             showNotification('Paid amount is less than total!', 'warning');
@@ -813,6 +1128,7 @@ export const POS: React.FC = () => {
                 // Step 2: Prepare full sale update data (items + totals + payments)
                 const saleUpdateData = {
                     customerName: customerName || 'Walk-in Customer',
+                    customerPhone: customerPhone || null,
                     subtotal,
                     discount,
                     taxAmount: tax,
@@ -827,6 +1143,7 @@ export const POS: React.FC = () => {
                     items: items.map((item: any) => ({
                         variantId: item.variantId,
                         productName: item.productName,
+                        categoryName: item.categoryName,
                         variantInfo: item.variantInfo,
                         quantity: item.quantity,
                         mrp: item.mrp,
@@ -872,6 +1189,7 @@ export const POS: React.FC = () => {
                         paymentMethod: sale.paymentMethod || 'CASH',
                         splitAmounts: paymentMethod === 'SPLIT' ? splitAmounts : { CASH: 0, CARD: 0, UPI: 0 },
                         customerName: sale.customerName || 'Walk-in Customer',
+                        customerPhone: sale.customerPhone || customerPhone || '',
                         isEditMode: true,
                         showPayment: true,
                     });
@@ -892,6 +1210,7 @@ export const POS: React.FC = () => {
                 billNo,
                 userId: user!.id,
                 customerName: customerName || 'Walk-in Customer',
+                customerPhone: customerPhone || null,
                 subtotal,
                 discount,
                 taxAmount: tax,
@@ -945,6 +1264,7 @@ export const POS: React.FC = () => {
                     paymentMethod: sale.paymentMethod || 'CASH',
                     splitAmounts: paymentMethod === 'SPLIT' ? splitAmounts : { CASH: 0, CARD: 0, UPI: 0 },
                     customerName: sale.customerName || 'Walk-in Customer',
+                    customerPhone: sale.customerPhone || customerPhone || '',
                     isEditMode: true,
                     showPayment: true,
                 });
@@ -955,6 +1275,9 @@ export const POS: React.FC = () => {
 
                 setSaleSuccess(true);
                 setTimeout(() => setSaleSuccess(false), 2500);
+                if (typeof loadSalesPopularity === 'function') {
+                    void loadSalesPopularity();
+                }
             } else {
                 throw new Error(result.error);
             }
@@ -983,8 +1306,10 @@ export const POS: React.FC = () => {
                 shopPhone: shopSettings?.phone || '9037106449, 7907026827',
                 gstin: shopSettings?.gstin || '32PVGPS0686J1ZV',
                 logo: shopSettings?.logo,
-                customerName: sale.customerName,
+                customerName: sale.customerName || customerName,
+                customerPhone: sale.customerPhone || customerPhone || undefined,
                 items: sale.items.map((item: any) => ({
+                    variantId: item.variantId,
                     name: item.productName,
                     variantInfo: item.variantInfo,
                     quantity: item.quantity,
@@ -1016,49 +1341,90 @@ export const POS: React.FC = () => {
             await printService.printReceipt(receiptData);
         } catch (error) {
             console.error('Failed to print receipt:', error);
+            showToast(error instanceof Error ? error.message : 'Receipt printing failed. Your sale remains saved.', 'error');
             setPrintError(true);
             setTimeout(() => setPrintError(false), 5000);
         }
     };
 
-    // Memoized filtered products for optimal performance (supports order-independent multi-word search, price, barcode, sku, category)
-    const filteredProducts = useMemo(() => {
-        if (!debouncedSearch) return products;
-
-        const rawTrimmed = debouncedSearch.trim().toLowerCase();
-        if (!rawTrimmed) return products;
-
-        const tokens = rawTrimmed.split(/\s+/).filter(Boolean);
-        const compactQuery = rawTrimmed.replace(/[\s\-_]+/g, '');
-
-        return products.filter((p) => {
-            const name = p.product?.name || '';
-            const barcode = p.barcode || '';
-            const sku = p.sku || '';
-            const category = p.product?.category?.name || '';
-            const size = p.size || '';
-            const color = p.color || '';
-            const price = p.sellingPrice != null ? String(p.sellingPrice) : '';
-            const mrp = p.mrp != null ? String(p.mrp) : '';
-
-            const searchTarget = `${name} ${barcode} ${sku} ${category} ${size} ${color} ${price} ${mrp}`.toLowerCase();
-
-            // 1. Order-independent matching: every word entered must match somewhere in the product attributes
-            if (tokens.every((token) => searchTarget.includes(token))) {
-                return true;
+    // Fast category lookup map by variant ID
+    const categoryMap = useMemo(() => {
+        const map = new Map<string, string>();
+        for (const p of products) {
+            if (p.id && p.product?.category?.name) {
+                map.set(p.id, p.product.category.name);
             }
+        }
+        return map;
+    }, [products]);
 
-            // 2. Compact matching fallback: allows typing without spaces or hyphens (e.g. "shirt700" or "ts01")
-            if (compactQuery) {
-                const compactTarget = searchTarget.replace(/[\s\-_]+/g, '');
-                if (compactTarget.includes(compactQuery)) {
+    // Memoized filtered products ranked by sales popularity (most sold items first)
+    const filteredProducts = useMemo(() => {
+        let list = products;
+
+        if (debouncedSearch) {
+            const rawTrimmed = debouncedSearch.trim().toLowerCase();
+            const tokens = rawTrimmed.split(/\s+/).filter(Boolean);
+            const compactQuery = rawTrimmed.replace(/[\s\-_]+/g, '');
+
+            list = products.filter((p) => {
+                const name = p.product?.name || '';
+                const barcode = p.barcode || '';
+                const sku = p.sku || '';
+                const category = p.product?.category?.name || '';
+                const size = p.size || '';
+                const color = p.color || '';
+                const price = p.sellingPrice != null ? String(p.sellingPrice) : '';
+                const mrp = p.mrp != null ? String(p.mrp) : '';
+
+                const description = formatVariantDescription(name, p);
+                const searchTarget = `${description} ${barcode} ${sku} ${category} ${size} ${color} ${price} ${mrp}`.toLowerCase();
+
+                // 1. Order-independent matching: every word entered must match somewhere in the product attributes
+                if (tokens.every((token) => searchTarget.includes(token))) {
                     return true;
                 }
+
+                // 2. Compact matching fallback: allows typing without spaces or hyphens (e.g. "shirt700" or "ts01")
+                if (compactQuery) {
+                    const compactTarget = searchTarget.replace(/[\s\-_]+/g, '');
+                    if (compactTarget.includes(compactQuery)) {
+                        return true;
+                    }
+                }
+
+                return false;
+            });
+        }
+
+        // Sort by sales popularity (most sold items first)
+        return [...list].sort((a, b) => {
+            // Conversion pending items always go to the bottom
+            if (Boolean(a.isPrepared) !== Boolean(b.isPrepared)) {
+                return a.isPrepared ? 1 : -1;
             }
 
-            return false;
+            // 1. Sort by sales velocity (sold count desc) — top sold items ALWAYS come first!
+            const aSold = soldCounts.get(a.id) || 0;
+            const bSold = soldCounts.get(b.id) || 0;
+            if (aSold !== bSold) {
+                return bSold - aSold;
+            }
+
+            // 2. For items with equal sales (e.g. 0 sales), prioritize in-stock over out-of-stock
+            const aInStock = (a.stock || 0) > 0;
+            const bInStock = (b.stock || 0) > 0;
+            if (aInStock !== bInStock) {
+                return aInStock ? -1 : 1;
+            }
+
+            // 3. Tie breaker: higher stock first, then name
+            if ((b.stock || 0) !== (a.stock || 0)) {
+                return (b.stock || 0) - (a.stock || 0);
+            }
+            return (a.product?.name || '').localeCompare(b.product?.name || '');
         });
-    }, [products, debouncedSearch]);
+    }, [products, debouncedSearch, soldCounts]);
 
     const visibleProducts = useMemo(() => filteredProducts.slice(0, 200), [filteredProducts]);
 
@@ -1066,11 +1432,18 @@ export const POS: React.FC = () => {
     // Display helpers for Footer
     const { subtotal, tax, finalTotal, change } = calculateTotals();
 
+    if (loadingSession || sessionError) {
+        return <div className="h-full flex flex-col items-center justify-center gap-4 p-6">
+            <p role="status">{loadingSession ? 'Checking the current bill…' : sessionError}</p>
+            {!loadingSession && <Button onClick={() => void loadData()}>Retry loading bill</Button>}
+        </div>;
+    }
+
     return (
         <div className="h-full flex flex-col bg-gray-50 dark:bg-gray-900 relative" >
             {/* Non-blocking notification toast (prevents window.alert app freezing in Electron) */}
             {notification && (
-                <div className="fixed top-3 left-1/2 -translate-x-1/2 z-50 pointer-events-auto transition-all animate-in fade-in slide-in-from-top-3 duration-200">
+                <div className="fixed top-12 left-1/2 -translate-x-1/2 z-[70] pointer-events-auto transition-all animate-in fade-in slide-in-from-top-3 duration-200">
                     <div className={`flex items-center gap-3 px-4 py-2.5 rounded-xl shadow-2xl border text-xs sm:text-sm font-semibold max-w-lg ${
                         notification.type === 'error'
                             ? 'bg-red-600 text-white border-red-700 shadow-red-500/30 ring-2 ring-red-400/30'
@@ -1162,6 +1535,41 @@ export const POS: React.FC = () => {
                     </div>
                 );
             })()}
+            {showNoDiscountConfirm && (() => {
+                const billTotal = getSubtotal();
+                return (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-150">
+                        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-sm mx-4 overflow-hidden animate-in zoom-in-95 duration-200">
+                            <div className="bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800 px-5 py-4 flex items-center gap-3">
+                                <div className="p-2 bg-amber-100 dark:bg-amber-900/40 rounded-full">
+                                    <AlertTriangle className="w-6 h-6 text-amber-600 dark:text-amber-400" />
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-gray-900 dark:text-white text-base">No Discount Applied</h3>
+                                    <p className="text-xs text-amber-700 dark:text-amber-400">Bill total: ₹{billTotal.toFixed(0)}</p>
+                                </div>
+                            </div>
+                            <div className="px-5 py-4">
+                                <p className="text-sm text-gray-600 dark:text-gray-400">You're about to finalize this sale <strong>without any discount</strong>. Are you sure?</p>
+                            </div>
+                            <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 flex gap-3">
+                                <button
+                                    onClick={() => setShowNoDiscountConfirm(false)}
+                                    className="flex-1 px-4 py-2.5 rounded-lg border-2 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-bold text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-all"
+                                >
+                                    Go Back
+                                </button>
+                                <button
+                                    onClick={() => handleCompleteSale(pendingSalePrint)}
+                                    className="flex-1 px-4 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-bold text-sm shadow-md transition-all active:scale-[0.98]"
+                                >
+                                    Yes, No Discount
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
             {/* 1. TOP HEADER: Invoice Details */}
             <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center text-sm shadow-sm">
                 {/* Left: invoice fields — fills remaining space */}
@@ -1178,14 +1586,234 @@ export const POS: React.FC = () => {
                             {new Date().toLocaleDateString('en-GB')}
                         </div>
                     </div>
-                    <div className="flex flex-col flex-1 min-w-0">
-                        <label className="text-gray-500 font-bold text-xs uppercase">Customer Name</label>
-                        <Input
-                            value={customerName}
-                            onChange={(e) => { setCustomerName(e.target.value); markAsChanged(); }}
-                            placeholder="Walk-in Customer"
-                            className="h-9"
-                        />
+                    <div className="flex flex-col flex-1 min-w-0 relative" ref={customerDropdownRef}>
+                        <div className="flex items-center justify-between">
+                            <label className="text-gray-500 font-bold text-xs uppercase flex items-center gap-1.5 truncate">
+                                <span>Customer</span>
+                                {customerPhone && (
+                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono font-medium bg-primary-50 dark:bg-primary-950/40 text-primary-700 dark:text-primary-300 border border-primary-200 dark:border-primary-800">
+                                        <Phone className="w-2.5 h-2.5" />
+                                        {customerPhone}
+                                    </span>
+                                )}
+                            </label>
+                            <button
+                                type="button"
+                                onClick={() => handleOpenQuickAdd()}
+                                className="text-[11px] font-bold text-primary-600 hover:text-primary-700 dark:text-primary-400 flex items-center gap-0.5 hover:underline flex-shrink-0"
+                                title="Register new customer"
+                            >
+                                <UserPlus className="w-3 h-3" />
+                                <span>+ New</span>
+                            </button>
+                        </div>
+
+                        <div className="relative mt-0.5">
+                            <div className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-gray-400">
+                                <User className="w-4 h-4" />
+                            </div>
+                            <input
+                                ref={customerInputRef}
+                                type="text"
+                                value={customerSearchInput}
+                                onClick={(e) => {
+                                    if (customerSearchInput.trim().toLowerCase() === 'walk-in customer') {
+                                        e.currentTarget.select();
+                                    }
+                                    setShowCustomerDropdown(true);
+                                }}
+                                onChange={(e) => {
+                                    let val = e.target.value;
+
+                                    // Smart length guard:
+                                    // If input is purely numeric or phone characters (+, space, hyphen)
+                                    const isNumericInput = /^[\d\s+-]+$/.test(val);
+                                    if (isNumericInput) {
+                                        const cleanDigits = val.replace(/\D/g, '');
+                                        const maxDigits = val.startsWith('+') ? 13 : 10;
+                                        if (cleanDigits.length > maxDigits) {
+                                            // Enforce hard cap of 10 digits (or 13 if starting with +)
+                                            val = val.startsWith('+') ? `+${cleanDigits.slice(0, 13)}` : cleanDigits.slice(0, 10);
+                                        }
+                                    } else {
+                                        // Customer name: cap at 50 characters
+                                        if (val.length > 50) {
+                                            val = val.slice(0, 50);
+                                        }
+                                    }
+
+                                    setCustomerSearchInput(val);
+                                    if (!val) {
+                                        setCustomerName('Walk-in Customer');
+                                        setCustomerPhone('');
+                                        setSelectedCustomerId(null);
+                                        useCartStore.getState().setCustomer(null, 'Walk-in Customer', null);
+                                    }
+                                    setShowCustomerDropdown(true);
+                                    setCustomerHighlightIndex(-1);
+                                    markAsChanged();
+                                }}
+                                onFocus={(e) => {
+                                    e.target.select();
+                                    setShowCustomerDropdown(true);
+                                }}
+                                onKeyDown={handleCustomerKeyDown}
+                                placeholder="Type Name or Phone number..."
+                                maxLength={50}
+                                className="w-full h-9 pl-8 pr-16 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md text-sm font-medium text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all shadow-sm"
+                            />
+
+                            {/* Right side actions inside input */}
+                            <div className="absolute inset-y-0 right-0 pr-1.5 flex items-center gap-1">
+                                {(customerName !== 'Walk-in Customer' || customerPhone || selectedCustomerId) && (
+                                    <button
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleResetToWalkIn();
+                                        }}
+                                        className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-red-500 rounded transition-colors"
+                                        title="Reset to Walk-in Customer"
+                                    >
+                                        <X className="w-3.5 h-3.5" />
+                                    </button>
+                                )}
+                                <button
+                                    type="button"
+                                    onClick={() => setShowCustomerDropdown(prev => !prev)}
+                                    className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 rounded transition-colors"
+                                    title="Toggle suggestions"
+                                >
+                                    <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${showCustomerDropdown ? 'rotate-180' : ''}`} />
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Autocomplete Dropdown */}
+                        {showCustomerDropdown && (
+                            <div
+                                className="absolute left-0 right-0 top-full mt-1.5 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 z-50 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-150 max-h-80 flex flex-col"
+                                style={{ minWidth: '320px' }}
+                            >
+                                <div className="px-3 py-1.5 bg-gray-50 dark:bg-gray-900/60 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between text-[11px] text-gray-500">
+                                    <span className="font-semibold uppercase tracking-wider text-[10px]">Select Customer</span>
+                                    <span className="text-[10px] text-gray-400">↑↓ to navigate · ↵ to select</span>
+                                </div>
+
+                                <div className="overflow-y-auto flex-1 divide-y divide-gray-100 dark:divide-gray-800">
+                                    {/* Walk-in Customer Option */}
+                                    <button
+                                        type="button"
+                                        onClick={() => handleResetToWalkIn()}
+                                        onMouseEnter={() => setCustomerHighlightIndex(0)}
+                                        className={`w-full text-left px-3 py-2 flex items-center justify-between transition-colors ${
+                                            customerHighlightIndex === 0
+                                                ? 'bg-primary-50 dark:bg-primary-950/40 text-primary-700 dark:text-primary-300'
+                                                : 'hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-200'
+                                        }`}
+                                    >
+                                        <div className="flex items-center gap-2.5 min-w-0">
+                                            <div className="w-7 h-7 rounded-full bg-gray-100 dark:bg-gray-700 flex items-center justify-center text-sm flex-shrink-0">
+                                                🚶
+                                            </div>
+                                            <div className="flex flex-col min-w-0">
+                                                <span className="font-semibold text-sm leading-tight flex items-center gap-1.5">
+                                                    Walk-in Customer
+                                                    <span className="text-[10px] font-normal px-1.5 py-0.2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded">Default</span>
+                                                </span>
+                                                <span className="text-xs text-gray-400">Regular walk-in retail sales</span>
+                                            </div>
+                                        </div>
+                                        {customerName === 'Walk-in Customer' && !customerPhone && (
+                                            <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
+                                        )}
+                                    </button>
+
+                                    {/* Registered Customers */}
+                                    {filteredCustomers.length > 0 ? (
+                                        filteredCustomers.map((customer, index) => {
+                                            const isHighlighted = customerHighlightIndex === index + 1;
+                                            const isSelected = selectedCustomerId === customer.id || (customerName.toLowerCase() === customer.name.toLowerCase() && customerPhone === (customer.phone || ''));
+
+                                            return (
+                                                <button
+                                                    key={customer.id}
+                                                    type="button"
+                                                    onClick={() => handleSelectCustomer(customer)}
+                                                    onMouseEnter={() => setCustomerHighlightIndex(index + 1)}
+                                                    className={`w-full text-left px-3 py-2 flex items-center justify-between transition-colors ${
+                                                        isHighlighted
+                                                            ? 'bg-primary-50 dark:bg-primary-950/40 text-primary-700 dark:text-primary-300'
+                                                            : 'hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-200'
+                                                    }`}
+                                                >
+                                                    <div className="flex items-center gap-2.5 min-w-0">
+                                                        <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-primary-600 to-indigo-500 text-white font-bold text-xs flex items-center justify-center flex-shrink-0 shadow-sm">
+                                                            {(customer.name || 'C').charAt(0).toUpperCase()}
+                                                        </div>
+                                                        <div className="flex flex-col min-w-0">
+                                                            <div className="font-semibold text-sm leading-tight truncate flex items-center gap-1.5">
+                                                                <span>{customer.name}</span>
+                                                                {customer.gstin && (
+                                                                    <span className="text-[9px] font-mono px-1 py-0.2 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 rounded border border-blue-200 dark:border-blue-800">
+                                                                        GST
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                            <div className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1 font-mono">
+                                                                {customer.phone ? (
+                                                                    <>
+                                                                        <Phone className="w-3 h-3 text-gray-400" />
+                                                                        <span>{customer.phone}</span>
+                                                                    </>
+                                                                ) : (
+                                                                    <span className="text-gray-400 italic">No phone registered</span>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    {isSelected && (
+                                                        <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
+                                                    )}
+                                                </button>
+                                            );
+                                        })
+                                    ) : (
+                                        customerSearchInput.trim() && customerSearchInput.trim().toLowerCase() !== 'walk-in customer' && (
+                                            <div className="px-4 py-3 text-center text-xs text-gray-500">
+                                                No existing customers matching "<span className="font-semibold text-gray-700 dark:text-gray-300">{customerSearchInput}</span>"
+                                            </div>
+                                        )
+                                    )}
+
+                                    {/* Register as New Customer Option */}
+                                    {customerSearchInput.trim() && customerSearchInput.trim().toLowerCase() !== 'walk-in customer' && (
+                                        <button
+                                            type="button"
+                                            onClick={() => handleOpenQuickAdd(customerSearchInput)}
+                                            onMouseEnter={() => setCustomerHighlightIndex(filteredCustomers.length + 1)}
+                                            className={`w-full text-left px-3 py-2.5 flex items-center gap-2.5 transition-colors bg-gray-50/50 dark:bg-gray-800/80 ${
+                                                customerHighlightIndex === filteredCustomers.length + 1
+                                                    ? 'bg-primary-100/70 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300'
+                                                    : 'hover:bg-primary-50 dark:hover:bg-primary-950/30 text-primary-600 dark:text-primary-400'
+                                            }`}
+                                        >
+                                            <div className="w-7 h-7 rounded-full bg-primary-100 dark:bg-primary-900/50 text-primary-600 dark:text-primary-400 flex items-center justify-center flex-shrink-0">
+                                                <UserPlus className="w-4 h-4" />
+                                            </div>
+                                            <div className="flex flex-col min-w-0">
+                                                <span className="font-bold text-xs">
+                                                    + Register "{customerSearchInput}"
+                                                </span>
+                                                <span className="text-[10px] text-gray-500">
+                                                    Quick save new customer and link to this bill
+                                                </span>
+                                            </div>
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
                 {/* Right: Scan Barcode — exactly w-64 to align above product sidebar */}
@@ -1218,7 +1846,7 @@ export const POS: React.FC = () => {
                                     e.preventDefault();
                                 }
                             }}
-                            placeholder="Scan (numbers only)..."
+                            placeholder="Scan..."
                             className="input h-9 text-lg font-mono border-primary-500 ring-1 ring-primary-200"
                             autoFocus
                         />
@@ -1256,15 +1884,28 @@ export const POS: React.FC = () => {
                                     <p className="text-sm">Scan barcode or search products</p>
                                 </div>
                             ) : (
-                                items.map((item: any, index: number) => (
-                                    <div key={item.variantId} className="grid grid-cols-[32px_120px_1fr_70px_90px_50px_90px_36px] gap-2 border-b border-gray-100 dark:border-gray-700 text-sm py-1 px-2 hover:bg-blue-50 dark:hover:bg-gray-700 items-center group">
-                                        <div className="text-center text-gray-500">{index + 1}</div>
-                                        <div className="font-mono text-xs text-gray-500 truncate" title={item.barcode}>{item.barcode}</div>
-                                        <div className="font-medium truncate" title={`${item.productName} ${item.variantInfo}`}>
-                                            {item.productName}
-                                            <span className="text-xs text-gray-400 ml-1">{item.variantInfo}</span>
-                                        </div>
-                                        <div className="text-right">₹{item.sellingPrice}</div>
+                                items.map((item: any, index: number) => {
+                                    const cleanName = item.productName?.includes(' | ')
+                                        ? item.productName.split(' | ')[0]
+                                        : (item.productName || 'Item');
+                                    const category = item.categoryName || categoryMap.get(item.variantId);
+
+                                    return (
+                                        <div key={item.variantId} className="grid grid-cols-[32px_120px_1fr_70px_90px_50px_90px_36px] gap-2 border-b border-gray-100 dark:border-gray-700 text-sm py-1.5 px-2 hover:bg-blue-50 dark:hover:bg-gray-700 items-center group">
+                                            <div className="text-center text-gray-500">{index + 1}</div>
+                                            <div className="font-mono text-xs text-gray-500 truncate" title={item.barcode}>{item.barcode}</div>
+                                            <div className="font-medium truncate flex items-center gap-2" title={`${item.productName} ${item.variantInfo || ''}`}>
+                                                <span className="truncate">{cleanName}</span>
+                                                {category && (
+                                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-semibold bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-200 flex-shrink-0">
+                                                        {category}
+                                                    </span>
+                                                )}
+                                                {item.variantInfo && (
+                                                    <span className="text-xs text-gray-400 ml-1">{item.variantInfo}</span>
+                                                )}
+                                            </div>
+                                            <div className="text-right">₹{item.sellingPrice}</div>
 
                                         {/* Qty Controls */}
                                         <div className="flex items-center justify-center gap-1">
@@ -1299,7 +1940,8 @@ export const POS: React.FC = () => {
                                             </button>
                                         </div>
                                     </div>
-                                ))
+                                );
+                            })
                             )
                         }
                     </div>
@@ -1325,7 +1967,8 @@ export const POS: React.FC = () => {
                                     </div>
 
                                     <div className="flex gap-2 h-14">
-                                        <Button variant="danger" className="h-full px-6 flex items-center justify-center font-bold" onClick={clearCart} disabled={items.length === 0}>
+                                        <Button variant="danger" className="h-full px-6 flex items-center justify-center font-bold" onClick={clearCart} disabled={items.length === 0 || !!currentSaleId}
+                                            title={currentSaleId ? 'Use New to start another bill. Edit individual items to correct this saved bill.' : 'Clear unsaved cart'}>
                                             Clear (F4)
                                         </Button>
                                         <Button
@@ -1357,6 +2000,15 @@ export const POS: React.FC = () => {
                                             <span className="text-[10px] uppercase font-bold text-gray-400">Discount Applied</span>
                                             <span className="font-bold text-orange-600">₹{parseFloat(discountAmount || '0').toFixed(2)}</span>
                                         </div>
+                                        <div className="flex flex-col">
+                                            <span className="text-[10px] uppercase font-bold text-gray-400">Total Qty</span>
+                                            <span className="font-bold text-gray-700 dark:text-gray-200">
+                                                {items.reduce((s: number, i: any) => s + i.quantity, 0)}{' '}
+                                                <span className="text-[11px] font-normal text-gray-400 dark:text-gray-500">
+                                                    ({items.length} {items.length === 1 ? 'item' : 'items'})
+                                                </span>
+                                            </span>
+                                        </div>
                                     </div>
 
                                     <div className="flex items-center gap-4">
@@ -1374,7 +2026,8 @@ export const POS: React.FC = () => {
                                             onClick={() => setShowPayment(false)}
                                             className="ml-2 p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg transition-all border border-gray-200 dark:border-gray-700"
                                             disabled={processing}
-                                            title="Cancel Payment"
+                                            title={currentSaleId ? 'Back to items — this bill is already saved' : 'Back to items'}
+                                            aria-label="Back to items"
                                         >
                                             <X className="w-5 h-5" />
                                         </button>
@@ -1558,25 +2211,57 @@ export const POS: React.FC = () => {
                             />
                         </div>
 
+                        <div className="px-3 py-1 bg-gray-100 dark:bg-gray-800/80 border-b border-gray-200 dark:border-gray-700 text-[10px] font-bold uppercase tracking-wider text-gray-500 flex justify-between items-center">
+                            <span>Top Selling & Suggestions</span>
+                            <span>{filteredProducts.length} items</span>
+                        </div>
+
                         <div className="flex-1 overflow-y-auto p-2 space-y-2">
-                            {visibleProducts.map((variant) => (
-                                <button
-                                    key={variant.id}
-                                    onClick={() => handleProductClick(variant)}
-                                    className="w-full text-left p-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-sm hover:border-primary-500 flex justify-between items-center group"
-                                >
-                                    <div className="min-w-0">
-                                        <div className="font-medium text-sm truncate">{variant.product.name}</div>
-                                        <div className="text-xs text-gray-500">{variant.sku || variant.barcode}</div>
-                                    </div>
-                                    <div className="text-right">
-                                        <div className="font-bold text-primary-600">₹{variant.sellingPrice}</div>
-                                        <div className={`text-[10px] ${variant.stock > 0 ? 'text-green-600' : 'text-red-500'}`}>
-                                            Stock: {variant.stock}
+                            {visibleProducts.map((variant) => {
+                                const sold = soldCounts.get(variant.id) || 0;
+                                const category = variant.product?.category?.name;
+                                const cleanName = variant.product?.name || variant.barcode;
+                                const fullDesc = formatVariantDescription(cleanName, variant);
+
+                                return (
+                                    <button
+                                        key={variant.id}
+                                        onClick={() => handleProductClick(variant)}
+                                        className="w-full text-left p-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm hover:border-primary-500 hover:shadow transition-all flex justify-between items-center group"
+                                        title={fullDesc}
+                                    >
+                                        <div className="min-w-0 flex-1 pr-2">
+                                            <div className="font-semibold text-xs sm:text-sm text-gray-900 dark:text-gray-100 truncate flex items-center gap-1.5">
+                                                <span className="truncate">{cleanName}</span>
+                                                {variant.isPrepared && (
+                                                    <span className="px-1.5 py-0.5 text-[9px] bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 rounded font-normal flex-shrink-0">
+                                                        Pending
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                                                {category && (
+                                                    <span className="text-[10px] font-medium px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded">
+                                                        {category}
+                                                    </span>
+                                                )}
+                                                {sold > 0 && (
+                                                    <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-1.5 py-0.5 rounded border border-emerald-200 dark:border-emerald-800/40">
+                                                        ★ {sold} sold
+                                                    </span>
+                                                )}
+                                                <span className="text-[10px] text-gray-400 font-mono truncate">{variant.sku || variant.barcode}</span>
+                                            </div>
                                         </div>
-                                    </div>
-                                </button>
-                            ))}
+                                        <div className="text-right flex-shrink-0">
+                                            <div className="font-bold text-primary-600 dark:text-primary-400">₹{variant.sellingPrice}</div>
+                                            <div className={`text-[10px] font-medium ${variant.isPrepared ? 'text-amber-600 dark:text-amber-400' : variant.stock > 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
+                                                {variant.isPrepared ? 'Unconverted (0)' : `Stock: ${variant.stock}`}
+                                            </div>
+                                        </div>
+                                    </button>
+                                );
+                            })}
                             {filteredProducts.length === 0 && (
                                 <div className="text-center text-gray-400 text-sm mt-10">No items found</div>
                             )}
@@ -1589,6 +2274,90 @@ export const POS: React.FC = () => {
                     </div>
                 )}
             </div >
+
+            {/* Quick Add Customer Modal */}
+            <Modal
+                isOpen={showQuickAddModal}
+                onClose={() => setShowQuickAddModal(false)}
+                title="Register New Customer"
+                size="sm"
+            >
+                <form onSubmit={handleSaveQuickCustomer} className="p-5 space-y-4">
+                    <div>
+                        <label className="block text-xs font-bold uppercase text-gray-500 dark:text-gray-400 mb-1">
+                            Customer Name <span className="text-gray-400 font-normal text-[11px]">(Optional, max 50 chars)</span>
+                        </label>
+                        <Input
+                            type="text"
+                            maxLength={50}
+                            value={quickAddForm.name}
+                            onChange={(e) => setQuickAddForm(prev => ({ ...prev, name: e.target.value.slice(0, 50) }))}
+                            placeholder="e.g. Rahul Sharma (optional)"
+                            autoFocus
+                            className="h-10 text-sm"
+                        />
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold uppercase text-gray-500 dark:text-gray-400 mb-1">
+                            Phone Number <span className="text-gray-400 font-normal text-[11px]">(10 digits)</span>
+                        </label>
+                        <div className="relative">
+                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                                <Phone className="w-4 h-4" />
+                            </div>
+                            <Input
+                                type="tel"
+                                maxLength={14}
+                                value={quickAddForm.phone}
+                                onChange={(e) => {
+                                    const raw = e.target.value;
+                                    const digits = raw.replace(/\D/g, '');
+                                    const maxDigits = raw.startsWith('+') ? 13 : 10;
+                                    const capped = raw.startsWith('+') ? `+${digits.slice(0, 13)}` : digits.slice(0, 10);
+                                    setQuickAddForm(prev => ({ ...prev, phone: capped }));
+                                }}
+                                placeholder="e.g. 9847123456"
+                                className="h-10 pl-9 text-sm"
+                            />
+                        </div>
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold uppercase text-gray-500 dark:text-gray-400 mb-1">
+                            GSTIN / Tax ID <span className="text-gray-400 font-normal">(15 characters)</span>
+                        </label>
+                        <Input
+                            type="text"
+                            maxLength={15}
+                            value={quickAddForm.gstin}
+                            onChange={(e) => setQuickAddForm(prev => ({ ...prev, gstin: e.target.value.toUpperCase().slice(0, 15) }))}
+                            placeholder="e.g. 32AAAAA0000A1Z5"
+                            className="h-10 text-sm font-mono uppercase"
+                        />
+                    </div>
+
+                    <div className="pt-2 flex gap-3 border-t border-gray-100 dark:border-gray-700">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            className="flex-1"
+                            onClick={() => setShowQuickAddModal(false)}
+                            disabled={isSavingCustomer}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            type="submit"
+                            variant="success"
+                            className="flex-1 font-bold"
+                            disabled={isSavingCustomer || (!quickAddForm.name.trim() && !quickAddForm.phone.trim())}
+                        >
+                            {isSavingCustomer ? 'Saving...' : 'Save & Select'}
+                        </Button>
+                    </div>
+                </form>
+            </Modal>
         </div >
     );
 };

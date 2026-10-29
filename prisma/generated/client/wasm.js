@@ -144,6 +144,7 @@ exports.Prisma.UserScalarFieldEnum = {
   permBulkUpdate: 'permBulkUpdate',
   permBackDateSale: 'permBackDateSale',
   permViewInsights: 'permViewInsights',
+  permManageCashDrawer: 'permManageCashDrawer',
   maxDiscount: 'maxDiscount',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
@@ -360,6 +361,49 @@ exports.Prisma.SyncQueueScalarFieldEnum = {
   updatedAt: 'updatedAt'
 };
 
+exports.Prisma.CashTransactionScalarFieldEnum = {
+  id: 'id',
+  type: 'type',
+  category: 'category',
+  amount: 'amount',
+  recipient: 'recipient',
+  notes: 'notes',
+  voucherNo: 'voucherNo',
+  paymentMethod: 'paymentMethod',
+  userId: 'userId',
+  registerSessionId: 'registerSessionId',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt',
+  isSynced: 'isSynced',
+  lastSyncedAt: 'lastSyncedAt'
+};
+
+exports.Prisma.CashRegisterSessionScalarFieldEnum = {
+  id: 'id',
+  sessionDate: 'sessionDate',
+  openedAt: 'openedAt',
+  closedAt: 'closedAt',
+  status: 'status',
+  openingFloat: 'openingFloat',
+  cashSales: 'cashSales',
+  cashIn: 'cashIn',
+  expenses: 'expenses',
+  ownerWithdrawals: 'ownerWithdrawals',
+  cashRefunds: 'cashRefunds',
+  expectedCash: 'expectedCash',
+  actualCash: 'actualCash',
+  difference: 'difference',
+  closingNotes: 'closingNotes',
+  carriedForwardCash: 'carriedForwardCash',
+  finalTakenHomeCash: 'finalTakenHomeCash',
+  openedBy: 'openedBy',
+  closedBy: 'closedBy',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt',
+  isSynced: 'isSynced',
+  lastSyncedAt: 'lastSyncedAt'
+};
+
 exports.Prisma.SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -390,7 +434,9 @@ exports.Prisma.ModelName = {
   InventoryMovement: 'InventoryMovement',
   Setting: 'Setting',
   PrinterConfig: 'PrinterConfig',
-  SyncQueue: 'SyncQueue'
+  SyncQueue: 'SyncQueue',
+  CashTransaction: 'CashTransaction',
+  CashRegisterSession: 'CashRegisterSession'
 };
 
 /**

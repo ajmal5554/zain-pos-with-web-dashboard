@@ -1,6 +1,8 @@
 import { Server } from 'socket.io';
 import { Server as HttpServer } from 'http';
 import { getShopId } from './lib/runtime';
+import { PrismaClient } from '@prisma/client';
+const prisma = new PrismaClient();
 
 let io: Server;
 
@@ -18,7 +20,7 @@ export const initSocket = (httpServer: HttpServer) => {
     });
 
     // Middleware for Auth
-    io.use((socket, next) => {
+    io.use(async (socket, next) => {
         const token = socket.handshake.auth.token || socket.handshake.headers.token;
         if (!token) {
             return next(new Error("Authentication error: No token"));
@@ -27,6 +29,9 @@ export const initSocket = (httpServer: HttpServer) => {
         try {
             const jwt = require('jsonwebtoken'); // Lazy load
             const decoded = jwt.verify(token, process.env.JWT_SECRET!);
+            if (typeof decoded.userId !== 'string') return next(new Error('Authentication error: Invalid token'));
+            const user = await prisma.user.findUnique({ where: { id: decoded.userId }, select: { isActive: true } });
+            if (!user?.isActive) return next(new Error('Authentication error: Account unavailable'));
             (socket as any).userId = decoded.userId;
             next();
         } catch (err) {

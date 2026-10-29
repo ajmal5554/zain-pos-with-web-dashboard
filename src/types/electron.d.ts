@@ -1,4 +1,4 @@
-import { ElectronAPI } from '../electron/preload';
+import type { ElectronAPI } from '../../electron/preload';
 
 type PosLeaveGuard = {
     isActive: () => boolean;

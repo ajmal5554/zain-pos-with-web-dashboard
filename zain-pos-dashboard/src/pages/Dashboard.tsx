@@ -38,7 +38,7 @@ const METHOD_META: Record<string, { label: string; icon: React.ElementType; colo
 };
 
 export default function DashboardPage() {
-    const { stats, loading } = useDashboardStats();
+    const { stats, loading, error, refetch } = useDashboardStats();
     const { dateRange } = useDateFilter();
 
     const effectiveGstRate = React.useMemo(() => {
@@ -71,6 +71,8 @@ export default function DashboardPage() {
             { label: 'Sat', sales: 0, orders: 0 },
             { label: 'Sun', sales: 0, orders: 0 },
         ];
+
+    if (error) return <div role="alert" className="rounded-md border border-destructive p-5 text-destructive"><p>{error}</p><button className="mt-3 underline font-semibold" onClick={() => void refetch()}>Retry dashboard</button></div>;
 
     return (
         <div className="flex-1 space-y-4 pb-6 min-w-0">

@@ -40,6 +40,7 @@ model User {
   permBulkUpdate     Boolean @default(false) // Can perform bulk updates
   permBackDateSale   Boolean @default(false) // Can record sales for previous dates
   permViewInsights   Boolean @default(false) // Can view AI Forecasting and Insights
+  permManageCashDrawer Boolean @default(true) // Can view and manage cash counter, expenses, and closing
 
   maxDiscount      Float   @default(0.0) // Max ₹ discount allowed per item/bill
 
@@ -348,4 +349,35 @@ model SyncQueue {
   error      String?  // Last error message
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+}
+
+// Cash Drawer / Daily Register Reconciliation
+model CashRegister {
+  id               String         @id @default(uuid())
+  date             String         // Local YYYY-MM-DD (IST)
+  openedAt         DateTime       @default(now())
+  closedAt         DateTime?
+  openingFloat     Float          @default(0.0)
+  closingExpected  Float?
+  closingActual    Float?
+  difference       Float?         // closingActual - closingExpected
+  status           String         @default("OPEN") // "OPEN" | "CLOSED"
+  notes            String?
+  transactions     CashDrawerTx[]
+
+  @@index([date])
+  @@index([status])
+}
+
+model CashDrawerTx {
+  id         String       @id @default(uuid())
+  registerId String
+  register   CashRegister @relation(fields: [registerId], references: [id])
+  type       String       // "CASH_OUT" | "CASH_IN"
+  category   String       // "OWNER_WITHDRAWAL" | "FREIGHT" | "MUNICIPALITY" | "EXPENSE" | "CHANGE_FLOAT" | "TOP_UP"
+  amount     Float
+  note       String
+  createdAt  DateTime     @default(now())
+
+  @@index([registerId])
 }

@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { useEffect, useState, useMemo, useCallback } from 'react';
-import { io } from 'socket.io-client';
-import { FileSpreadsheet, FileText, Calendar, Layers, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
+import { useEffect, useState, useRef } from 'react';
+import { useDateFilter } from '@/contexts/DateFilterContext';
+import { FileSpreadsheet, ReceiptText, Activity, TrendingUp, Calendar, Layers } from 'lucide-react';
+import { StatCard } from '@/components/shared/StatCard';
 import { formatCurrency } from '@/lib/format';
 import { 
   Table, 
@@ -20,15 +21,8 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import api from '@/lib/api';
-import { isDemoModeEnabled } from '@/lib/demo';
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
-import { format, subMonths, addMonths, startOfMonth, endOfMonth } from 'date-fns';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
-import * as XLSX from 'xlsx';
-import { useAuth } from '@/contexts/AuthContext';
-import { API_URL } from '@/lib/config';
+import { isDemoModeEnabled } from '@/lib/demo';
 
 interface GstSummary {
     count: number;
@@ -48,7 +42,6 @@ interface GstInvoiceRow {
     paymentMethod: string;
     status?: string;
     grossAmount?: number;
-    subtotal?: number;
     discount?: number;
     amount?: number;
     grandTotal?: number;
@@ -59,18 +52,9 @@ interface GstResponse {
     daily: Array<{
         date: string;
         bills: number;
-        billFrom?: string;
-        billTo?: string;
-        subtotal?: number;
-        discount?: number;
         taxableValue: number;
-        cgst: number;
-        sgst: number;
         totalTax: number;
         grandTotal: number;
-        cash?: number;
-        upi?: number;
-        card?: number;
     }>;
     slabs: Array<{
         rate: number;
@@ -82,8 +66,6 @@ interface GstResponse {
     sales: Array<
         GstInvoiceRow & {
             customerName?: string;
-            subtotal: number;
-            discount: number;
             taxableValue: number;
             cgst: number;
             sgst: number;
@@ -93,37 +75,41 @@ interface GstResponse {
     cancelledInvoices?: GstInvoiceRow[];
 }
 
-const shopSettings = {
-    shopName: 'ZAIN GENTS PALACE',
-    address: 'CHIRAMMAL TOWER, BEHIND CANARA BANK\nRAJA ROAD, NILESHWAR',
-    phone: '9037106449, 7907026827',
-    gstin: '32PVGPS0686J1ZV',
-    email: '',
-};
-
 const demoReport: GstResponse = {
     summary: {
-        count: 7,
-        subtotal: 5306,
-        discount: 0,
-        taxableValue: 5306,
-        cgst: 131.58,
-        sgst: 131.58,
-        totalTax: 263.15,
-        grandTotal: 5306
+        count: 3,
+        subtotal: 130000,
+        discount: 1550,
+        taxableValue: 128450,
+        cgst: 3211.25,
+        sgst: 3211.25,
+        totalTax: 6422.5,
+        grandTotal: 134872.5
     },
     daily: [
-        { date: '2026-07-01', bills: 1, billFrom: '1835', billTo: '1835', taxableValue: 478, cgst: 11.38, sgst: 11.38, totalTax: 22.76, grandTotal: 478, cash: 0, upi: 478, card: 0 },
-        { date: '2026-07-02', bills: 2, billFrom: '1836', billTo: '1837', taxableValue: 1200, cgst: 30, sgst: 30, totalTax: 60, grandTotal: 1200, cash: 400, upi: 800, card: 0 },
-        { date: '2026-07-03', bills: 4, billFrom: '1838', billTo: '1841', taxableValue: 3628, cgst: 90.2, sgst: 90.2, totalTax: 180.39, grandTotal: 3628, cash: 1200, upi: 1428, card: 1000 }
+        { date: '2026-03-20', bills: 1, taxableValue: 32000, totalTax: 1600, grandTotal: 33600 },
+        { date: '2026-03-21', bills: 1, taxableValue: 41800, totalTax: 2090, grandTotal: 43890 },
+        { date: '2026-03-22', bills: 1, taxableValue: 54650, totalTax: 2732.5, grandTotal: 57382.5 }
     ],
     slabs: [
-        { rate: 5, taxableValue: 5306, cgst: 131.58, sgst: 131.58, totalTax: 263.15 }
+        { rate: 5, taxableValue: 86450, cgst: 2161.25, sgst: 2161.25, totalTax: 4322.5 },
+        { rate: 12, taxableValue: 42000, cgst: 1050, sgst: 1050, totalTax: 2100 }
     ],
     sales: [
-        { id: '1', billNo: '1835', createdAt: '2026-07-01T10:00:00.000Z', customerName: 'Walk-in', subtotal: 478, discount: 0, taxableValue: 478, cgst: 11.38, sgst: 11.38, totalTax: 22.76, grandTotal: 478, paymentMethod: 'UPI' }
+        { id: '1', billNo: 'A-1020', createdAt: new Date().toISOString(), customerName: 'Walk-in', taxableValue: 32000, cgst: 800, sgst: 800, totalTax: 1600, grandTotal: 33600, paymentMethod: 'CASH' }
     ],
-    cancelledInvoices: []
+    cancelledInvoices: [
+        {
+            id: 'void-1',
+            billNo: 'A-1018',
+            createdAt: new Date(Date.now() - 86400_000).toISOString(),
+            grossAmount: 9500,
+            discount: 500,
+            amount: 9000,
+            status: 'VOIDED',
+            paymentMethod: 'UPI'
+        }
+    ]
 };
 
 function isCancelledStatus(status?: string) {
@@ -134,404 +120,53 @@ function formatDate(value: string) {
     return new Date(value).toLocaleDateString('en-IN', {
         day: '2-digit',
         month: 'short',
-        year: '2-digit'
+        year: 'numeric'
     });
 }
 
 export default function Reports() {
-    const { token } = useAuth();
-    const [selectedMonth, setSelectedMonth] = useState<Date>(() => startOfMonth(new Date()));
-    const dateRange = useMemo(() => {
-        return {
-            startDate: startOfMonth(selectedMonth),
-            endDate: endOfMonth(selectedMonth),
-            label: format(selectedMonth, 'MMMM yyyy')
-        };
-    }, [selectedMonth]);
-
-    const handlePrevMonth = () => setSelectedMonth(prev => subMonths(prev, 1));
-    const handleNextMonth = () => setSelectedMonth(prev => addMonths(prev, 1));
-
     const [report, setReport] = useState<GstResponse | null>(null);
     const [loading, setLoading] = useState(true);
-    const [reportType, setReportType] = useState<'detailed' | 'summary'>('summary');
-    const [sortBy, setSortBy] = useState<'date' | 'billNo'>('date');
+    const [error, setError] = useState<string | null>(null);
+    const { dateRange } = useDateFilter();
+    const requestRef = useRef(0);
 
-    const loadReport = useCallback(async () => {
+    useEffect(() => {
+        void loadReport();
+        return () => { requestRef.current++; };
+    }, [dateRange]);
+
+    async function loadReport() {
+        const request = ++requestRef.current;
         try {
             setLoading(true);
+            setError(null);
             if (isDemoModeEnabled()) {
                 setReport(demoReport);
                 return;
             }
-            
-            const params = new URLSearchParams();
-            if (dateRange.startDate) params.append('startDate', dateRange.startDate.toISOString());
-            if (dateRange.endDate) params.append('endDate', dateRange.endDate.toISOString());
-
-            const response = await api.get<GstResponse>(`/reports/gst?${params.toString()}`);
+            const response = await api.get<GstResponse>('/reports/gst', { params: {
+                startDate: dateRange.startDate?.toISOString(),
+                endDate: dateRange.endDate?.toISOString(),
+                allTime: dateRange.label === 'All Time' ? 'true' : undefined
+            } });
+            if (request !== requestRef.current) return;
             setReport(response.data);
-        } catch (error) {
-            console.error('Failed to load GST report:', error);
+        } catch {
+            if (request !== requestRef.current) return;
+            setReport(null);
+            setError('Reports could not be loaded. Check your connection and retry.');
         } finally {
-            setLoading(false);
+            if (request === requestRef.current) setLoading(false);
         }
-    }, [dateRange.startDate, dateRange.endDate]);
+    }
 
-    useEffect(() => {
-        void loadReport();
-    }, [loadReport]);
-
-    // Auto-refresh when POS syncs new sales or voids an invoice
-    useEffect(() => {
-        if (!token) return;
-        const socket = io(API_URL, {
-            auth: { token },
-            transports: ['websocket', 'polling'],
-            reconnection: true,
-            reconnectionAttempts: Infinity,
-        });
-        const refresh = () => { void loadReport(); };
-        socket.on('sale:batch', refresh);
-        socket.on('sale:voided', refresh);
-        socket.on('sale:updated', refresh);
-        socket.on('notification', (n: any) => {
-            if (n.type === 'invoice_deleted' || n.type === 'invoice_updated') refresh();
-        });
-        return () => { socket.disconnect(); };
-    }, [token, loadReport]);
-
-    const totals = React.useMemo(() => {
-        if (!report) return null;
-        const cash = report.daily.reduce((sum, d) => sum + (d.cash ?? 0), 0);
-        const upi = report.daily.reduce((sum, d) => sum + (d.upi ?? 0), 0);
-        const card = report.daily.reduce((sum, d) => sum + (d.card ?? 0), 0);
-        return {
-            ...report.summary,
-            payment: { cash, upi, card }
-        };
-    }, [report]);
-
-    const exportToPDF = () => {
-        if (!report || !totals) return alert('No report data to export');
-
-        const doc = new jsPDF('landscape');
-        const pageWidth = doc.internal.pageSize.getWidth();
-        const dateRangeText = `From ${dateRange.startDate ? format(dateRange.startDate, 'dd/MM/yyyy') : 'All Time'} To ${dateRange.endDate ? format(dateRange.endDate, 'dd/MM/yyyy') : 'All Time'}`;
-
-        // Professional header with shop details
-        doc.setFontSize(16);
-        doc.setFont('helvetica', 'bold');
-        const shopNameWidth = doc.getTextWidth(shopSettings.shopName);
-        doc.text(shopSettings.shopName, (pageWidth - shopNameWidth) / 2, 15);
-        
-        doc.setFontSize(10);
-        doc.setFont('helvetica', 'normal');
-        const addressLines = shopSettings.address.split('\n');
-        let currentY = 22;
-        addressLines.forEach(line => {
-            const lineWidth = doc.getTextWidth(line);
-            doc.text(line, (pageWidth - lineWidth) / 2, currentY);
-            currentY += 4;
-        });
-        
-        const contactInfo = `Ph: ${shopSettings.phone}  |  GSTIN: ${shopSettings.gstin}`;
-        const contactWidth = doc.getTextWidth(contactInfo);
-        doc.text(contactInfo, (pageWidth - contactWidth) / 2, currentY);
-        currentY += 2;
-        
-        doc.setLineWidth(0.5);
-        doc.line(14, currentY, pageWidth - 14, currentY);
-        currentY += 5;
-        
-        doc.setFontSize(11);
-        doc.setFont('helvetica', 'bold');
-        const dateWidth = doc.getTextWidth(dateRangeText);
-        doc.text(dateRangeText, (pageWidth - dateWidth) / 2, currentY);
-        currentY += 5;
-
-        if (reportType === 'summary') {
-            doc.setFontSize(11);
-            doc.setFont('helvetica', 'bold');
-            doc.text('DAILY SALES SUMMARY', 14, currentY);
-            currentY += 5;
-
-            const summaryColumns = ['DATE', 'BILL FROM', 'BILL TO', 'BILLS', 'GROSS AMOUNT\n(incl. GST)', 'DISCOUNT', 'NET AMOUNT\n(incl. GST)', 'TAXABLE AMOUNT\n(excl. GST)', 'CGST', 'SGST', 'TOTAL GST', 'AMOUNT PAID', 'CASH', 'UPI', 'CARD'];
-
-            const sortedSummaries = [...report.daily].sort((a, b) => {
-                if (sortBy === 'billNo') {
-                    return (a.billFrom || '').localeCompare(b.billFrom || '');
-                }
-                return a.date.localeCompare(b.date);
-            });
-
-            const a = totals;
-            const grandTotalRow = [
-                'GRAND TOTAL',                           
-                '',                                      
-                '',                                      
-                a.count.toString(),                      
-                a.subtotal.toFixed(2),                   
-                a.discount.toFixed(2),                   
-                a.taxableValue.toFixed(2),              
-                (a.taxableValue - a.totalTax).toFixed(2),
-                a.cgst.toFixed(2),                      
-                a.sgst.toFixed(2),                      
-                a.totalTax.toFixed(2),                  
-                a.grandTotal.toFixed(2),                
-                a.payment.cash.toFixed(2),              
-                a.payment.upi.toFixed(2),               
-                a.payment.card.toFixed(2),              
-            ];
-
-            autoTable(doc, {
-                startY: currentY,
-                head: [summaryColumns],
-                body: [...sortedSummaries.map((d) => [
-                    formatDate(d.date),
-                    (d.billFrom || '').toString(),
-                    (d.billTo || '').toString(),
-                    d.bills.toString(),
-                    (d.subtotal ?? 0).toFixed(2),
-                    (d.discount ?? 0).toFixed(2),
-                    (d.taxableValue ?? 0).toFixed(2),
-                    ((d.taxableValue ?? 0) - (d.totalTax ?? 0)).toFixed(2),
-                    d.cgst.toFixed(2),
-                    d.sgst.toFixed(2),
-                    d.totalTax.toFixed(2),
-                    d.grandTotal.toFixed(2),
-                    (d.cash ?? 0).toFixed(2),
-                    (d.upi ?? 0).toFixed(2),
-                    (d.card ?? 0).toFixed(2),
-                ]), grandTotalRow],
-                theme: 'grid',
-                styles: { fontSize: 7, cellPadding: 1 },
-                headStyles: { fillColor: [240, 240, 240], textColor: [0, 0, 0], fontStyle: 'bold' },
-                bodyStyles: { fillColor: [255, 255, 255] },
-                didParseCell: function (data: any) {
-                    if (data.row.index === sortedSummaries.length) {
-                        data.cell.styles.fontStyle = 'bold';
-                        data.cell.styles.fillColor = [200, 255, 200];
-                    }
-                }
-            });
-        } else {
-            const saleColumns = ['DATE', 'BILL NO', 'GROSS AMOUNT\n(incl. GST)', 'DISCOUNT', 'NET AMOUNT\n(incl. GST)', 'TAXABLE AMOUNT\n(excl. GST)', 'CGST', 'SGST', 'TOTAL GST', 'AMOUNT PAID', 'PAYMENT'];
-
-            const sortedSales = [...report.sales].sort((a, b) => {
-                if (sortBy === 'billNo') {
-                    return a.billNo.localeCompare(b.billNo);
-                }
-                return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-            });
-
-            const a = totals;
-            const grandTotalRow = [
-                'GRAND TOTAL',                          
-                `${a.count} bills`,                     
-                a.subtotal.toFixed(2),                  
-                a.discount.toFixed(2),                   
-                a.taxableValue.toFixed(2),              
-                (a.taxableValue - a.totalTax).toFixed(2),
-                a.cgst.toFixed(2),                      
-                a.sgst.toFixed(2),                      
-                a.totalTax.toFixed(2),                  
-                a.grandTotal.toFixed(2),                
-                'All modes',                                     
-            ];
-
-            autoTable(doc, {
-                startY: currentY,
-                head: [saleColumns],
-                body: [...sortedSales.map((sale) => {
-                    const netAmount = sale.subtotal - sale.discount;
-                    const taxableAmount = parseFloat((netAmount / 1.05).toFixed(2));
-                    const totalGst = parseFloat((netAmount - taxableAmount).toFixed(2));
-                    const cgst = parseFloat((totalGst / 2).toFixed(2));
-                    const sgst = parseFloat((totalGst / 2).toFixed(2));
-
-                    return [
-                        formatDate(sale.createdAt),
-                        sale.billNo,
-                        sale.subtotal.toFixed(2),
-                        sale.discount.toFixed(2),
-                        netAmount.toFixed(2),
-                        taxableAmount.toFixed(2),
-                        cgst.toFixed(2),
-                        sgst.toFixed(2),
-                        totalGst.toFixed(2),
-                        (sale.grandTotal ?? 0).toFixed(2),
-                        sale.paymentMethod === 'SPLIT' && (sale as any).payments?.length
-                            ? (sale as any).payments.map((p: any) => `${p.paymentMode} ₹${p.amount.toFixed(2)}`).join(' + ')
-                            : sale.paymentMethod,
-                    ];
-                }), grandTotalRow],
-                theme: 'grid',
-                styles: { fontSize: 8, cellPadding: 1 },
-                headStyles: { fillColor: [255, 255, 255], textColor: [0, 0, 0], fontStyle: 'bold' },
-                bodyStyles: { fillColor: [255, 255, 255] },
-                didParseCell: function (data: any) {
-                    if (data.row.index === sortedSales.length) {
-                        data.cell.styles.fontStyle = 'bold';
-                        data.cell.styles.fillColor = [220, 220, 220];
-                    }
-                }
-            });
-        }
-
-        doc.save(`GST-${reportType === 'summary' ? 'Summary' : 'Detailed'}-${dateRange.startDate ? format(dateRange.startDate, 'dd-MM-yyyy') : 'AllTime'}-to-${dateRange.endDate ? format(dateRange.endDate, 'dd-MM-yyyy') : 'AllTime'}.pdf`);
-    };
-
-    const exportToExcel = () => {
-        if (!report || !totals) return alert('No report data to export');
-
-        const wb = XLSX.utils.book_new();
-        const dateRangeText = `From ${dateRange.startDate ? format(dateRange.startDate, 'dd/MM/yyyy') : 'All Time'} To ${dateRange.endDate ? format(dateRange.endDate, 'dd/MM/yyyy') : 'All Time'}`;
-        const a = totals;
-
-        const sortedSales = [...report.sales].sort((x, y) => {
-            if (sortBy === 'billNo') {
-                return x.billNo.localeCompare(y.billNo);
-            }
-            return new Date(x.createdAt).getTime() - new Date(y.createdAt).getTime();
-        });
-
-        if (reportType === 'summary') {
-            const summaryHeader = ['DATE', 'BILL FROM', 'BILL TO', 'BILLS', 'GROSS AMOUNT (incl. GST)', 'DISCOUNT', 'NET AMOUNT (incl. GST)', 'TAXABLE AMOUNT (excl. GST)', 'CGST', 'SGST', 'TOTAL GST', 'AMOUNT PAID', 'CASH', 'UPI', 'CARD'];
-
-            const sortedSummaries = [...report.daily].sort((x, y) => {
-                if (sortBy === 'billNo') {
-                    return (x.billFrom || '').localeCompare(y.billFrom || '');
-                }
-                return x.date.localeCompare(y.date);
-            });
-
-            const data = [
-                [shopSettings.shopName],
-                [shopSettings.address.replace('\n', ', ')],
-                [`Ph: ${shopSettings.phone}  |  GSTIN: ${shopSettings.gstin}`],
-                [],
-                [dateRangeText],
-                [],
-                ['DAILY SALES SUMMARY'],
-                summaryHeader,
-                ...sortedSummaries.map((d) => [
-                    formatDate(d.date),
-                    d.billFrom || '', d.billTo || '', d.bills,
-                    d.subtotal, d.discount, d.taxableValue,
-                    (d.taxableValue - d.totalTax),
-                    d.cgst, d.sgst, d.totalTax, d.grandTotal,
-                    d.cash ?? 0, d.upi ?? 0, d.card ?? 0,
-                ]),
-                ['GRAND TOTAL', '', '', a.count, a.subtotal, a.discount, a.taxableValue, (a.taxableValue - a.totalTax), a.cgst, a.sgst, a.totalTax, a.grandTotal, a.payment.cash, a.payment.upi, a.payment.card],
-            ];
-
-            const ws = XLSX.utils.aoa_to_sheet(data);
-            XLSX.utils.book_append_sheet(wb, ws, 'Daily Summary');
-        } else {
-            const header = ['DATE & TIME', 'BILL NO', 'CUSTOMER', 'GROSS AMOUNT (incl. GST)', 'DISCOUNT', 'NET AMOUNT (incl. GST)', 'TAXABLE AMOUNT (excl. GST)', 'CGST', 'SGST', 'TOTAL GST', 'AMOUNT PAID', 'PAYMENT'];
-
-            const data = [
-                [shopSettings.shopName],
-                [shopSettings.address.replace('\n', ', ')],
-                [`Ph: ${shopSettings.phone}  |  GSTIN: ${shopSettings.gstin}`],
-                [],
-                [dateRangeText],
-                [],
-                ['DETAILED INVOICE REPORT'],
-                header,
-                ...sortedSales.map((sale) => {
-                    const netAmount = sale.subtotal - sale.discount;
-                    const taxableAmount = parseFloat((netAmount / 1.05).toFixed(2));
-                    const totalGst = parseFloat((netAmount - taxableAmount).toFixed(2));
-                    const cgst = parseFloat((totalGst / 2).toFixed(2));
-                    const sgst = parseFloat((totalGst / 2).toFixed(2));
-
-                    return [
-                        formatDate(sale.createdAt),
-                        sale.billNo,
-                        sale.customerName || 'Walk-in Customer',
-                        sale.subtotal,
-                        sale.discount,
-                        netAmount,
-                        taxableAmount,
-                        cgst,
-                        sgst,
-                        totalGst,
-                        sale.grandTotal,
-                        sale.paymentMethod === 'SPLIT' && (sale as any).payments?.length
-                            ? (sale as any).payments.map((p: any) => `${p.paymentMode} ₹${p.amount.toFixed(2)}`).join(' + ')
-                            : sale.paymentMethod,
-                    ];
-                }),
-                ['GRAND TOTAL', '', '', a.subtotal, a.discount, a.taxableValue, (a.taxableValue - a.totalTax), a.cgst, a.sgst, a.totalTax, a.grandTotal, ''],
-                [],
-                ['PAYMENT BREAKDOWN'],
-                ['Cash', a.payment.cash],
-                ['UPI', a.payment.upi],
-                ['Card', a.payment.card],
-            ];
-
-            const ws = XLSX.utils.aoa_to_sheet(data);
-            XLSX.utils.book_append_sheet(wb, ws, 'Detailed Report');
-        }
-
-        XLSX.writeFile(wb, `GST-${reportType === 'summary' ? 'Summary' : 'Detailed'}-${dateRange.startDate ? format(dateRange.startDate, 'dd-MM-yyyy') : 'AllTime'}-to-${dateRange.endDate ? format(dateRange.endDate, 'dd-MM-yyyy') : 'AllTime'}.xlsx`);
-    };
+    if (error) return <div role="alert" className="border border-destructive rounded-md p-5 text-destructive">{error} <button className="underline font-semibold" onClick={() => void loadReport()}>Retry</button></div>;
 
     if (loading || !report) {
         return (
-            <div className="flex-1 space-y-4 pt-4 w-full max-w-full min-w-0">
-                <div className="flex items-center justify-between gap-4 w-full">
-                    <div>
-                        <h2 className="text-xl sm:text-2xl font-bold tracking-tight">GST Reports</h2>
-                        <p className="text-muted-foreground text-xs hidden sm:block">
-                            Generate GST-compliant sales reports.
-                        </p>
-                    </div>
-                    {/* Custom Month Picker */}
-                    <div className="flex items-center gap-1 shrink-0 relative z-20">
-                        <button
-                            onClick={handlePrevMonth}
-                            title="Previous Month"
-                            className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 shrink-0"
-                        >
-                            <ChevronLeft className="w-4 h-4" />
-                        </button>
-                        <div className="relative">
-                            <button
-                                className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 select-none"
-                            >
-                                <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                                <span className="truncate max-w-[100px] sm:max-w-none">
-                                    {format(selectedMonth, 'MMMM yyyy')}
-                                </span>
-                                <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                            </button>
-                            <input
-                                type="month"
-                                value={format(selectedMonth, 'yyyy-MM')}
-                                onChange={(e) => {
-                                    if (e.target.value) {
-                                        const [yr, mo] = e.target.value.split('-').map(Number);
-                                        setSelectedMonth(new Date(yr, mo - 1, 1));
-                                    }
-                                }}
-                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                            />
-                        </div>
-                        <button
-                            onClick={handleNextMonth}
-                            title="Next Month"
-                            className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 shrink-0"
-                        >
-                            <ChevronRight className="w-4 h-4" />
-                        </button>
-                    </div>
-                </div>
-                <div className="flex items-center justify-center p-24 text-muted-foreground animate-pulse text-sm">
-                    Loading GST report details...
-                </div>
+            <div className="flex items-center justify-center p-24 text-muted-foreground">
+                Loading reports...
             </div>
         );
     }
@@ -548,215 +183,39 @@ export default function Reports() {
     }));
 
     return (
-        <div className="flex-1 space-y-4 w-full max-w-full pb-6 min-w-0">
-            {/* Header & Controls */}
-            <div className="flex flex-col gap-4 w-full">
-                <div className="flex items-center justify-between gap-4 w-full">
-                    <div>
-                        <h2 className="text-xl sm:text-2xl font-bold tracking-tight">GST Reports</h2>
-                        <p className="text-muted-foreground text-xs hidden sm:block">
-                            Generate GST-compliant sales reports.
-                        </p>
-                    </div>
-                    {/* Custom Month Picker */}
-                    <div className="flex items-center gap-1 shrink-0 relative z-20">
-                        <button
-                            onClick={handlePrevMonth}
-                            title="Previous Month"
-                            className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 shrink-0"
-                        >
-                            <ChevronLeft className="w-4 h-4" />
-                        </button>
-                        <div className="relative">
-                            <button
-                                className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 select-none"
-                            >
-                                <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                                <span className="truncate max-w-[100px] sm:max-w-none">
-                                    {format(selectedMonth, 'MMMM yyyy')}
-                                </span>
-                                <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                            </button>
-                            <input
-                                type="month"
-                                value={format(selectedMonth, 'yyyy-MM')}
-                                onChange={(e) => {
-                                    if (e.target.value) {
-                                        const [yr, mo] = e.target.value.split('-').map(Number);
-                                        setSelectedMonth(new Date(yr, mo - 1, 1));
-                                    }
-                                }}
-                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                            />
-                        </div>
-                        <button
-                            onClick={handleNextMonth}
-                            title="Next Month"
-                            className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 shrink-0"
-                        >
-                            <ChevronRight className="w-4 h-4" />
-                        </button>
-                    </div>
-                </div>
-
-                {/* Controls Container */}
-                <div className="flex flex-col gap-3 w-full sm:flex-row sm:items-center sm:justify-between sm:flex-wrap">
-                    {/* Toggles */}
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center w-full sm:w-auto">
-                        <div className="grid grid-cols-2 gap-2 sm:flex sm:rounded-lg border border-slate-200 p-0.5 bg-slate-100 dark:border-slate-800 dark:bg-slate-950/40 w-full sm:w-auto">
-                            <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                className={cn("h-9 sm:h-7 text-xs rounded-md", reportType === 'summary' ? "bg-white dark:bg-slate-900 shadow-sm font-semibold" : "text-muted-foreground")}
-                                onClick={() => setReportType('summary')}
-                            >
-                                Summary
-                            </Button>
-                            <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                className={cn("h-9 sm:h-7 text-xs rounded-md", reportType === 'detailed' ? "bg-white dark:bg-slate-900 shadow-sm font-semibold" : "text-muted-foreground")}
-                                onClick={() => setReportType('detailed')}
-                            >
-                                Detailed
-                            </Button>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-2 sm:flex sm:rounded-lg border border-slate-200 p-0.5 bg-slate-100 dark:border-slate-800 dark:bg-slate-950/40 w-full sm:w-auto">
-                            <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                className={cn("h-9 sm:h-7 text-xs rounded-md", sortBy === 'date' ? "bg-white dark:bg-slate-900 shadow-sm font-semibold" : "text-muted-foreground")}
-                                onClick={() => setSortBy('date')}
-                            >
-                                By Date
-                            </Button>
-                            <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                className={cn("h-9 sm:h-7 text-xs rounded-md", sortBy === 'billNo' ? "bg-white dark:bg-slate-900 shadow-sm font-semibold" : "text-muted-foreground")}
-                                onClick={() => setSortBy('billNo')}
-                            >
-                                By Bill No
-                            </Button>
-                        </div>
-                    </div>
-
-                    {/* Export Buttons */}
-                    <div className="grid grid-cols-2 gap-2 w-full sm:flex sm:w-auto">
-                        <Button 
-                            onClick={exportToPDF}
-                            className="h-9 px-3 bg-red-600 hover:bg-red-700 text-white font-semibold text-xs rounded-xl shadow-sm w-full sm:w-auto"
-                        >
-                            <FileText className="mr-1.5 h-3.5 w-3.5" />
-                            PDF
-                        </Button>
-                        <Button 
-                            onClick={exportToExcel}
-                            className="h-9 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-sm w-full sm:w-auto"
-                        >
-                            <FileSpreadsheet className="mr-1.5 h-3.5 w-3.5" />
-                            Excel
-                        </Button>
-                    </div>
+        <div className="flex-1 space-y-4 pt-4">
+            <div className="flex items-center justify-between">
+                <div>
+                    <h2 className="text-2xl font-bold tracking-tight">Reports & Taxes</h2>
+                    <p className="text-muted-foreground text-sm">
+                        View your sales and tax reports.
+                    </p>
                 </div>
             </div>
 
-            {/* Stat Cards */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 w-full max-w-full">
-                {/* Total Bills */}
-                <Card className="shadow-sm overflow-hidden w-full max-w-full">
-                    <CardHeader className="pb-2">
-                        <CardDescription className="text-xs font-medium text-muted-foreground">Total Bills</CardDescription>
-                        <CardTitle className="text-2xl font-bold">{report.summary.count}</CardTitle>
-                    </CardHeader>
-                </Card>
-
-                {/* Taxable Value */}
-                <Card className="shadow-sm overflow-hidden w-full max-w-full">
-                    <CardHeader className="pb-2">
-                        <CardDescription className="text-xs font-medium text-muted-foreground">Taxable Value</CardDescription>
-                        <CardTitle className="text-2xl font-bold">{formatCurrency(report.summary.taxableValue)}</CardTitle>
-                    </CardHeader>
-                </Card>
-
-                {/* Total GST */}
-                <Card className="shadow-sm overflow-hidden w-full max-w-full">
-                    <CardHeader className="pb-2">
-                        <CardDescription className="text-xs font-medium text-muted-foreground">Total GST</CardDescription>
-                        <CardTitle className="text-2xl font-bold">{formatCurrency(report.summary.totalTax)}</CardTitle>
-                    </CardHeader>
-                </Card>
-
-                {/* Grand Total */}
-                <Card className="shadow-sm overflow-hidden w-full max-w-full">
-                    <CardHeader className="pb-2">
-                        <CardDescription className="text-xs font-medium text-muted-foreground">Grand Total</CardDescription>
-                        <CardTitle className="text-2xl font-bold">{formatCurrency(report.summary.grandTotal)}</CardTitle>
-                    </CardHeader>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <StatCard title="Taxable Value" value={formatCurrency(report.summary.taxableValue)} icon={<FileSpreadsheet className="h-4 w-4" />}  />
+                <StatCard title="Central GST" value={formatCurrency(report.summary.cgst)} icon={<ReceiptText className="h-4 w-4" />} />
+                <StatCard title="State GST" value={formatCurrency(report.summary.sgst)} icon={<ReceiptText className="h-4 w-4" />} />
+                <Card className="bg-primary text-primary-foreground shadow">
+                     <CardContent className="p-6">
+                         <div className="flex justify-between items-start">
+                             <div className="space-y-2">
+                                 <p className="text-sm font-medium opacity-80">Total Sales</p>
+                                 <h4 className="text-2xl font-bold">{formatCurrency(report.summary.grandTotal)}</h4>
+                             </div>
+                             <TrendingUp className="h-5 w-5 opacity-80" />
+                         </div>
+                         <div className="mt-4 flex items-center gap-2 text-xs opacity-80">
+                             <span>Including tax</span>
+                         </div>
+                     </CardContent>
                 </Card>
             </div>
 
-            {/* Daily Sales Summary */}
-            <Card className="overflow-hidden w-full max-w-full">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                    <div className="space-y-1">
-                        <CardTitle className="text-base font-semibold">Daily Sales Summary</CardTitle>
-                        <CardDescription className="text-xs">Sales and payment breakdown by day.</CardDescription>
-                    </div>
-                    <Calendar className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent className="pt-4 p-0 w-full max-w-full">
-                    <div className="overflow-x-auto w-full max-w-full">
-                        <Table className="min-w-[900px] w-full">
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead className="pl-6">Date</TableHead>
-                                    <TableHead className="text-center">Bill From</TableHead>
-                                    <TableHead className="text-center">Bill To</TableHead>
-                                    <TableHead className="text-center">Bills</TableHead>
-                                    <TableHead className="text-right">Taxable</TableHead>
-                                    <TableHead className="text-right">CGST</TableHead>
-                                    <TableHead className="text-right">SGST</TableHead>
-                                    <TableHead className="text-right font-semibold">Grand Total</TableHead>
-                                    <TableHead className="text-right text-emerald-600 dark:text-emerald-400">Cash</TableHead>
-                                    <TableHead className="text-right text-violet-600 dark:text-violet-400">UPI</TableHead>
-                                    <TableHead className="pr-6 text-right text-blue-600 dark:text-blue-400">Card</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {report.daily.length === 0 ? (
-                                    <TableRow>
-                                        <TableCell className="pl-6 py-8 text-center text-muted-foreground" colSpan={11}>
-                                            No sales found for this period.
-                                        </TableCell>
-                                    </TableRow>
-                                ) : (
-                                    report.daily.map((day) => (
-                                        <TableRow key={day.date}>
-                                            <TableCell className="pl-6 font-medium text-sm">{formatDate(day.date)}</TableCell>
-                                            <TableCell className="text-center text-xs text-muted-foreground">#{day.billFrom || '—'}</TableCell>
-                                            <TableCell className="text-center text-xs text-muted-foreground">#{day.billTo || '—'}</TableCell>
-                                            <TableCell className="text-center font-semibold text-sm">{day.bills}</TableCell>
-                                            <TableCell className="text-right text-sm">{formatCurrency(day.taxableValue)}</TableCell>
-                                            <TableCell className="text-right text-xs text-muted-foreground">{formatCurrency(day.cgst)}</TableCell>
-                                            <TableCell className="text-right text-xs text-muted-foreground">{formatCurrency(day.sgst)}</TableCell>
-                                            <TableCell className="text-right font-semibold text-sm">{formatCurrency(day.grandTotal)}</TableCell>
-                                            <TableCell className="text-right text-xs text-emerald-600 dark:text-emerald-400">{formatCurrency(day.cash ?? 0)}</TableCell>
-                                            <TableCell className="text-right text-xs text-violet-600 dark:text-violet-400">{formatCurrency(day.upi ?? 0)}</TableCell>
-                                            <TableCell className="pr-6 text-right text-xs text-blue-600 dark:text-blue-400">{formatCurrency(day.card ?? 0)}</TableCell>
-                                        </TableRow>
-                                    ))
-                                )}
-                            </TableBody>
-                        </Table>
-                    </div>
-                </CardContent>
-            </Card>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-full">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Slab Partitioning */}
-                <Card className="overflow-hidden w-full max-w-full">
+                <Card>
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                         <div className="space-y-1">
                             <CardTitle className="text-base font-semibold">Tax by Slabs</CardTitle>
@@ -764,142 +223,173 @@ export default function Reports() {
                         </div>
                         <Layers className="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
-                    <CardContent className="pt-4 p-0 w-full">
-                        <div className="overflow-x-auto w-full">
-                            <Table className="w-full">
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead className="pl-6">Tax Rate</TableHead>
-                                        <TableHead className="text-right">Taxable Amount</TableHead>
-                                        <TableHead className="pr-6 text-right">CGST / SGST</TableHead>
+                    <CardContent className="pt-4">
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>Tax Rate</TableHead>
+                                    <TableHead className="text-right">Taxable Amount</TableHead>
+                                    <TableHead className="text-right">CGST / SGST</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {report.slabs.map((slab) => (
+                                    <TableRow key={slab.rate}>
+                                        <TableCell>
+                                            <Badge variant="secondary" className="font-normal text-xs">
+                                                {slab.rate}%
+                                            </Badge>
+                                        </TableCell>
+                                        <TableCell className="text-right">{formatCurrency(slab.taxableValue)}</TableCell>
+                                        <TableCell className="text-right text-muted-foreground text-xs">
+                                            {formatCurrency(slab.cgst)} / {formatCurrency(slab.sgst)}
+                                        </TableCell>
                                     </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {report.slabs.length === 0 ? (
-                                        <TableRow>
-                                            <TableCell className="pl-6 py-8 text-center text-muted-foreground" colSpan={3}>
-                                                No tax slab data.
-                                            </TableCell>
-                                        </TableRow>
-                                    ) : (
-                                        report.slabs.map((slab) => (
-                                            <TableRow key={slab.rate}>
-                                                <TableCell className="pl-6">
-                                                    <Badge variant="secondary" className="font-normal text-xs">
-                                                        {slab.rate}%
-                                                    </Badge>
-                                                </TableCell>
-                                                <TableCell className="text-right text-sm">{formatCurrency(slab.taxableValue)}</TableCell>
-                                                <TableCell className="pr-6 text-right text-muted-foreground text-xs">
-                                                    {formatCurrency(slab.cgst)} / {formatCurrency(slab.sgst)}
-                                                </TableCell>
-                                            </TableRow>
-                                        ))
-                                    )}
-                                </TableBody>
-                            </Table>
-                        </div>
+                                ))}
+                            </TableBody>
+                        </Table>
                     </CardContent>
                 </Card>
 
-                {/* Cancelled Invoices */}
-                <Card className="overflow-hidden w-full max-w-full">
-                    <CardHeader className="flex flex-row items-center justify-between pb-2">
+                {/* Daily Accumulation */}
+                <Card>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                         <div className="space-y-1">
-                            <CardTitle className="text-base font-semibold">Cancelled Invoices</CardTitle>
-                            <CardDescription className="text-xs">Voided bills listed for reference only.</CardDescription>
+                            <CardTitle className="text-base font-semibold">Daily Sales</CardTitle>
+                            <CardDescription className="text-xs">Sales breakdown by day.</CardDescription>
+                        </div>
+                        <Calendar className="h-4 w-4 text-muted-foreground" />
+                    </CardHeader>
+                    <CardContent className="pt-4">
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>Date</TableHead>
+                                    <TableHead className="text-center">Bills</TableHead>
+                                    <TableHead className="text-right">Total Tax</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {report.daily.map((day) => (
+                                    <TableRow key={day.date}>
+                                        <TableCell>
+                                            <span className="text-sm">{day.date}</span>
+                                        </TableCell>
+                                        <TableCell className="text-center">
+                                            <span className="text-xs text-muted-foreground">{day.bills}</span>
+                                        </TableCell>
+                                        <TableCell className="text-right font-medium">
+                                            {formatCurrency(day.totalTax)}
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </CardContent>
+                </Card>
+
+                {/* Transaction Matrix */}
+                <Card className="col-span-1 md:col-span-2">
+                    <CardHeader className="flex flex-row items-center justify-between pb-2 border-b">
+                        <div className="space-y-1">
+                            <CardTitle className="text-base font-semibold">Recent Transactions</CardTitle>
+                            <CardDescription className="text-xs">List of recent sales and their tax details.</CardDescription>
                         </div>
                     </CardHeader>
-                    <CardContent className="pt-4 p-0 w-full">
-                        <div className="overflow-x-auto w-full">
-                            <Table className="w-full">
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead className="pl-6">Bill No</TableHead>
-                                        <TableHead>Date</TableHead>
-                                        <TableHead className="text-right">Amount</TableHead>
-                                        <TableHead className="pr-6">Status</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {cancelledInvoices.length === 0 ? (
-                                        <TableRow>
-                                            <TableCell className="pl-6 py-8 text-center text-muted-foreground" colSpan={4}>
-                                                No cancelled invoices found.
-                                            </TableCell>
-                                        </TableRow>
-                                    ) : (
-                                        cancelledInvoices.slice(0, 5).map((invoice) => (
-                                            <TableRow key={invoice.id}>
-                                                <TableCell className="pl-6 font-medium text-sm">#{invoice.billNo}</TableCell>
-                                                <TableCell className="text-xs text-muted-foreground">{formatDate(invoice.createdAt)}</TableCell>
-                                                <TableCell className="text-right text-sm">{formatCurrency(invoice.amount ?? 0)}</TableCell>
-                                                <TableCell className="pr-6">
-                                                    <Badge variant="destructive" className="font-normal text-[10px] px-1.5 py-0">
-                                                        {invoice.status ?? 'VOIDED'}
-                                                    </Badge>
-                                                </TableCell>
-                                            </TableRow>
-                                        ))
-                                    )}
-                                </TableBody>
-                            </Table>
-                        </div>
-                    </CardContent>
-                </Card>
-            </div>
-
-            {/* Transaction Matrix */}
-            <Card className="overflow-hidden w-full max-w-full">
-                <CardHeader className="flex flex-row items-center justify-between pb-2">
-                    <div className="space-y-1">
-                        <CardTitle className="text-base font-semibold">Transactions</CardTitle>
-                        <CardDescription className="text-xs">Recent sales list with tax details.</CardDescription>
-                    </div>
-                </CardHeader>
-                <CardContent className="p-0 w-full">
-                    <div className="overflow-x-auto w-full">
-                        <Table className="min-w-[700px] w-full">
+                    <CardContent className="p-0">
+                        <Table>
                             <TableHeader>
                                 <TableRow>
                                     <TableHead className="pl-6">Bill No</TableHead>
                                     <TableHead>Customer</TableHead>
                                     <TableHead className="text-right">Taxable</TableHead>
-                                    <TableHead className="text-right">CGST</TableHead>
-                                    <TableHead className="text-right">SGST</TableHead>
-                                    <TableHead className="text-right">Tax</TableHead>
-                                    <TableHead className="pr-6 text-right font-semibold text-sm">Total Amount</TableHead>
+                                    <TableHead className="text-right">CGST / SGST</TableHead>
+                                    <TableHead className="pr-6 text-right">Total Amount</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {report.sales.length === 0 ? (
+                                {report.sales.map((sale) => (
+                                    <TableRow key={sale.id}>
+                                        <TableCell className="pl-6">
+                                             <div className="flex items-center gap-2">
+                                                 <ReceiptText className="h-4 w-4 text-muted-foreground" />
+                                                 <span className="font-medium text-sm">#{sale.billNo}</span>
+                                             </div>
+                                        </TableCell>
+                                        <TableCell>
+                                            <span className="text-sm">{sale.customerName || 'Walk-in'}</span>
+                                        </TableCell>
+                                        <TableCell className="text-right text-sm">{formatCurrency(sale.taxableValue ?? 0)}</TableCell>
+                                        <TableCell className="text-right text-xs text-muted-foreground">
+                                            {formatCurrency(sale.cgst ?? 0)} / {formatCurrency(sale.sgst ?? 0)}
+                                        </TableCell>
+                                        <TableCell className="pr-6 text-right font-medium">
+                                            {formatCurrency(sale.grandTotal ?? 0)}
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </CardContent>
+                </Card>
+
+                <Card className="col-span-1 md:col-span-2">
+                    <CardHeader className="flex flex-row items-center justify-between pb-2 border-b">
+                        <div className="space-y-1">
+                            <CardTitle className="text-base font-semibold">Cancelled Invoices</CardTitle>
+                            <CardDescription className="text-xs">Voided bills listed for reference only.</CardDescription>
+                        </div>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead className="pl-6">Bill No</TableHead>
+                                    <TableHead>Date</TableHead>
+                                    <TableHead className="text-right">Gross Amount</TableHead>
+                                    <TableHead className="text-right">Discount</TableHead>
+                                    <TableHead className="text-right">Amount</TableHead>
+                                    <TableHead>Status</TableHead>
+                                    <TableHead className="pr-6">Payment</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {cancelledInvoices.length === 0 ? (
                                     <TableRow>
                                         <TableCell className="pl-6 py-8 text-center text-muted-foreground" colSpan={7}>
-                                            No transactions found.
+                                            No cancelled invoices found for this period.
                                         </TableCell>
                                     </TableRow>
                                 ) : (
-                                    report.sales.map((sale) => (
-                                        <TableRow key={sale.id}>
-                                            <TableCell className="pl-6 font-medium text-sm">#{sale.billNo}</TableCell>
-                                            <TableCell className="text-sm">{sale.customerName || 'Walk-in'}</TableCell>
-                                            <TableCell className="text-right text-sm">{formatCurrency(sale.taxableValue)}</TableCell>
-                                            <TableCell className="text-right text-xs text-muted-foreground">{formatCurrency(sale.cgst)}</TableCell>
-                                            <TableCell className="text-right text-xs text-muted-foreground">{formatCurrency(sale.sgst)}</TableCell>
-                                            <TableCell className="text-right text-xs text-muted-foreground">{formatCurrency(sale.totalTax)}</TableCell>
-                                            <TableCell className="pr-6 text-right font-semibold text-sm">{formatCurrency(sale.grandTotal ?? 0)}</TableCell>
+                                    cancelledInvoices.map((invoice) => (
+                                        <TableRow key={invoice.id}>
+                                            <TableCell className="pl-6">
+                                                <span className="font-medium text-sm">#{invoice.billNo}</span>
+                                            </TableCell>
+                                            <TableCell>
+                                                <span className="text-sm text-muted-foreground">{formatDate(invoice.createdAt)}</span>
+                                            </TableCell>
+                                            <TableCell className="text-right text-sm">{formatCurrency(invoice.grossAmount ?? 0)}</TableCell>
+                                            <TableCell className="text-right text-sm">{formatCurrency(invoice.discount ?? 0)}</TableCell>
+                                            <TableCell className="text-right font-medium text-sm">{formatCurrency(invoice.amount ?? 0)}</TableCell>
+                                            <TableCell>
+                                                <Badge variant="destructive" className="font-normal text-xs">
+                                                    {invoice.status ?? 'VOIDED'}
+                                                </Badge>
+                                            </TableCell>
+                                            <TableCell className="pr-6 text-sm text-muted-foreground">{invoice.paymentMethod}</TableCell>
                                         </TableRow>
                                     ))
                                 )}
                             </TableBody>
                         </Table>
-                    </div>
-                </CardContent>
-            </Card>
+                    </CardContent>
+                </Card>
 
-            <p className="text-[11px] text-muted-foreground pl-1">
-                Note: Cancelled invoices are excluded from GST calculations.
-            </p>
+                <p className="text-xs text-muted-foreground">
+                    Note: Cancelled invoices are excluded from GST calculations
+                </p>
+            </div>
         </div>
     );
 }

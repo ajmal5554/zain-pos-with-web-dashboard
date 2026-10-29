@@ -1,4 +1,3 @@
-import { Sun, Moon } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { DateRangePicker } from '@/components/shared/DateRangePicker';
@@ -7,11 +6,9 @@ import { cn } from '@/lib/utils';
 
 interface HeaderProps {
     title: string;
-    darkMode: boolean;
-    setDarkMode: (dark: boolean) => void;
 }
 
-export function Header({ title, darkMode, setDarkMode }: HeaderProps) {
+export function Header({ title }: HeaderProps) {
     const { user, isDemoMode, logout } = useAuth();
 
     return (
@@ -35,15 +32,6 @@ export function Header({ title, darkMode, setDarkMode }: HeaderProps) {
 
                 <div className="flex items-center gap-4">
                     <NotificationBell />
-
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setDarkMode(!darkMode)}
-                        className="rounded-full h-8 w-8 text-muted-foreground hover:text-foreground"
-                    >
-                        {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-                    </Button>
 
                     <div className="hidden sm:flex items-center justify-center h-8 w-8 rounded-full border bg-muted text-sm font-medium">
                         {user?.username?.charAt(0).toUpperCase()}

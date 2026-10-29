@@ -6,6 +6,7 @@ const roundCurrency = (value: number) => Math.round((Number(value) + Number.EPSI
 interface CartItem {
     variantId: string;
     productName: string;
+    categoryName?: string;
     variantInfo: string;
     barcode: string;
     quantity: number;
@@ -19,6 +20,7 @@ interface CartState {
     items: CartItem[];
     customerId: string | null;
     customerName: string | null;
+    customerPhone: string | null;
     discount: number;
     discountPercent: number;
     paymentMethod: 'CASH' | 'CARD' | 'UPI' | 'SPLIT';
@@ -27,7 +29,7 @@ interface CartState {
     removeItem: (variantId: string) => void;
     updateQuantity: (variantId: string, quantity: number) => void;
     updateDiscount: (variantId: string, discount: number) => void;
-    setCustomer: (customerId: string | null, customerName: string | null) => void;
+    setCustomer: (customerId: string | null, customerName: string | null, customerPhone?: string | null) => void;
     setGlobalDiscount: (discount: number, isPercent: boolean) => void;
     setPaymentMethod: (method: 'CASH' | 'CARD' | 'UPI' | 'SPLIT') => void;
     clearCart: () => void;
@@ -43,6 +45,7 @@ export const useCartStore = create<CartState>()(
             items: [],
             customerId: null,
             customerName: null,
+            customerPhone: null,
             discount: 0,
             discountPercent: 0,
             paymentMethod: 'CASH',
@@ -78,7 +81,11 @@ export const useCartStore = create<CartState>()(
                 )
             })),
 
-            setCustomer: (customerId, customerName) => set({ customerId, customerName }),
+            setCustomer: (customerId, customerName, customerPhone = null) => set({
+                customerId,
+                customerName,
+                customerPhone: customerPhone ?? null
+            }),
 
             setGlobalDiscount: (discount, isPercent) => set(
                 isPercent
@@ -92,6 +99,7 @@ export const useCartStore = create<CartState>()(
                 items: [],
                 customerId: null,
                 customerName: null,
+                customerPhone: null,
                 discount: 0,
                 discountPercent: 0,
                 paymentMethod: 'CASH',

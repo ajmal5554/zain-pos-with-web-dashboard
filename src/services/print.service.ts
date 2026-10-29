@@ -2,6 +2,7 @@ import { format } from 'date-fns';
 import { barcodeService } from './barcode.service';
 import type { ReceiptBlock } from '../components/settings/ReceiptDesigner';
 import { LabelBlock } from '../components/settings/LabelDesigner';
+import { db } from '../lib/db';
 
 export interface ReceiptData {
   billNo: number | string;
@@ -12,9 +13,12 @@ export interface ReceiptData {
   gstin: string;
   logo?: string; // Add optional logo
   customerName?: string;
+  customerPhone?: string;
   items: Array<{
+    variantId?: string;
     name: string;
     variantInfo?: string;
+    categoryName?: string;
     quantity: number;
     mrp: number;
     rate: number;
@@ -39,6 +43,9 @@ export interface ReceiptData {
   isReplacementBill?: boolean;
   originalBillNo?: string | number;
   exchangeCreditAmount?: number;
+  // Refund fields
+  totalRefundAmount?: number;
+  refundStatus?: 'REFUNDED' | 'PARTIALLY_REFUNDED';
 }
 
 export interface ReceiptPrinterConfig {
@@ -48,6 +55,7 @@ export interface ReceiptPrinterConfig {
   isBold: boolean;
   showMRP: boolean;
   showRate: boolean;
+  showRateSubline?: boolean;
   showItemDiscount: boolean;
   showPaidLine: boolean;
   showChangeLine: boolean;
@@ -60,6 +68,7 @@ export const DEFAULT_RECEIPT_PRINTER_CONFIG: ReceiptPrinterConfig = {
   isBold: false,
   showMRP: false,
   showRate: false,
+  showRateSubline: false,
   showItemDiscount: false,
   showPaidLine: false,
   showChangeLine: false,
@@ -156,11 +165,11 @@ export function generateReceiptHtml(
         htmlContent += `${blockOpen}
           <div style="font-weight: bold; font-size: 11px; margin-bottom: 5px; ${styleStr}">
             <div style="display: flex; justify-content: space-between; align-items: baseline;">
-              <div>Bill No: ${data.billNo}${data.isReplacementBill ? ' (REPLACEMENT)' : ''}</div>
+              <div>Bill No: ${data.billNo}${data.isReplacementBill ? ' (REPLACEMENT)' : ''}${data.refundStatus === 'REFUNDED' ? ' (REFUNDED)' : data.refundStatus === 'PARTIALLY_REFUNDED' ? ' (PARTIAL REFUND)' : ''}</div>
               <div>Date: ${format(new Date(data.date), 'dd/MM/yyyy')}</div>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 2px;">
-              <div>Customer: ${data.customerName || 'Walk-in Customer'}</div>
+              <div>Customer: ${data.customerName || 'Walk-in Customer'}${data.customerPhone ? ` (${data.customerPhone})` : ''}</div>
               ${data.isReplacementBill && data.originalBillNo ? `<div>Ref Orig Bill: #${data.originalBillNo}</div>` : ''}
             </div>
           </div>
@@ -168,32 +177,43 @@ export function generateReceiptHtml(
         break;
       case 'items_table': {
         const showItemDiscount = printerConfig.showItemDiscount === true;
-        const showVariantInfo = block.styles.showVariantInfo === true;
+
         const tableHeaderBold = block.styles.tableHeaderBold !== false;
         const tableRowBold = block.styles.tableRowBold === true;
-        const rows = data.items.map((item: any, index: number) => `
+        const showMRP = block.styles.showMRP !== undefined ? block.styles.showMRP === true : printerConfig.showMRP;
+        const showRate = block.styles.showRate !== undefined ? block.styles.showRate === true : printerConfig.showRate;
+        const showRateSubline = block.styles.showRateSubline !== undefined ? block.styles.showRateSubline === true : (printerConfig.showRateSubline === true);
+
+        const rows = data.items.map((item: any, index: number) => {
+          const qty = Number(item.quantity) || 0;
+          const rateVal = item.rate !== undefined && item.rate !== null && !isNaN(Number(item.rate))
+            ? Number(item.rate)
+            : (qty > 0 ? Number(item.total || 0) / qty : 0);
+
+          return `
           <tr>
-            <td style="text-align: center; padding: 4px 2px; font-weight: ${tableRowBold ? 'bold' : 'normal'};">${index + 1}</td>
-            <td style="text-align: left; padding: 4px 2px; font-weight: ${tableRowBold ? 'bold' : 'normal'};">
-              ${item.name}
-              ${showVariantInfo && item.variantInfo ? `<div style="font-size: 9px; color: #555; font-weight: ${tableRowBold ? 'bold' : 'normal'};">${item.variantInfo}</div>` : ''}
+            <td style="text-align: center; padding: 4px 2px; font-weight: ${tableRowBold ? 'bold' : 'normal'}; vertical-align: top;">${index + 1}</td>
+            <td style="text-align: left; padding: 4px 2px; font-weight: ${tableRowBold ? 'bold' : 'normal'}; vertical-align: top;">
+              <div>${String(item.name || '').split(' | ')[0]}${item.categoryName ? ` (${item.categoryName})` : ''}</div>
+              ${showRateSubline && qty > 1 ? `<div style="font-size: 9px; color: #555; font-weight: normal; margin-top: 1px;">${qty} @ ₹${rateVal.toFixed(2)}</div>` : ''}
             </td>
-            <td style="text-align: center; padding: 4px 2px; font-weight: ${tableRowBold ? 'bold' : 'normal'};">${item.quantity}</td>
-            ${printerConfig.showMRP ? `<td style="text-align: right; padding: 4px 2px; font-weight: ${tableRowBold ? 'bold' : 'normal'};">${item.mrp?.toFixed(2)}</td>` : ''}
-            ${printerConfig.showRate ? `<td style="text-align: right; padding: 4px 2px; font-weight: ${tableRowBold ? 'bold' : 'normal'};">${item.rate?.toFixed(2)}</td>` : ''}
-            ${showItemDiscount ? `<td style="text-align: right; padding: 4px 2px; font-weight: ${tableRowBold ? 'bold' : 'normal'};">${item.discount?.toFixed(2) || '0.00'}</td>` : ''}
-            <td style="text-align: right; padding: 4px 2px; font-weight: ${tableRowBold ? 'bold' : 'normal'};">${item.total.toFixed(2)}</td>
+            ${showMRP ? `<td style="text-align: right; padding: 4px 2px; font-weight: ${tableRowBold ? 'bold' : 'normal'}; vertical-align: top;">${Number(item.mrp || 0).toFixed(2)}</td>` : ''}
+            ${showRate ? `<td style="text-align: right; padding: 4px 2px; font-weight: ${tableRowBold ? 'bold' : 'normal'}; vertical-align: top;">${rateVal.toFixed(2)}</td>` : ''}
+            <td style="text-align: center; padding: 4px 2px; font-weight: ${tableRowBold ? 'bold' : 'normal'}; vertical-align: top;">${qty}</td>
+            ${showItemDiscount ? `<td style="text-align: right; padding: 4px 2px; font-weight: ${tableRowBold ? 'bold' : 'normal'}; vertical-align: top;">${Number(item.discount || 0).toFixed(2)}</td>` : ''}
+            <td style="text-align: right; padding: 4px 2px; font-weight: ${tableRowBold ? 'bold' : 'normal'}; vertical-align: top;">${Number(item.total || 0).toFixed(2)}</td>
           </tr>
-        `).join('');
+        `;
+        }).join('');
         htmlContent += `${blockOpen}
           <table style="width: 100%; border-collapse: collapse; font-family: ${block.styles.fontFamily || 'inherit'}; font-size: 11px;">
             <thead>
               <tr style="border-bottom: 1px dashed #000;">
                 <th align="center" style="width: 5%; padding: 4px 2px; font-weight: ${tableHeaderBold ? 'bold' : 'normal'};">#</th>
                 <th align="left" style="width: auto; padding: 4px 2px; font-weight: ${tableHeaderBold ? 'bold' : 'normal'};">Item</th>
+                ${showMRP ? `<th align="right" style="width: 15%; padding: 4px 2px; font-weight: ${tableHeaderBold ? 'bold' : 'normal'};">MRP</th>` : ''}
+                ${showRate ? `<th align="right" style="width: 15%; padding: 4px 2px; font-weight: ${tableHeaderBold ? 'bold' : 'normal'};">Rate</th>` : ''}
                 <th align="center" style="width: 10%; padding: 4px 2px; font-weight: ${tableHeaderBold ? 'bold' : 'normal'};">Qty</th>
-                ${printerConfig.showMRP ? `<th align="right" style="width: 15%; padding: 4px 2px; font-weight: ${tableHeaderBold ? 'bold' : 'normal'};">MRP</th>` : ''}
-                ${printerConfig.showRate ? `<th align="right" style="width: 15%; padding: 4px 2px; font-weight: ${tableHeaderBold ? 'bold' : 'normal'};">Rate</th>` : ''}
                 ${showItemDiscount ? `<th align="right" style="width: 10%; padding: 4px 2px; font-weight: ${tableHeaderBold ? 'bold' : 'normal'};">Dis</th>` : ''}
                 <th align="right" style="width: 20%; padding: 4px 2px; font-weight: ${tableHeaderBold ? 'bold' : 'normal'};">Amt</th>
               </tr>
@@ -204,14 +224,39 @@ export function generateReceiptHtml(
         break;
       }
       case 'totals': {
-        const totalTax = (data.cgst || 0) + (data.sgst || 0);
-        const afterDiscount = (data.subtotal || 0) - (data.discount || 0);
-        const basicAmt = afterDiscount - totalTax;
         const hasExchangeCredit = data.isReplacementBill && (data.exchangeCreditAmount || 0) > 0;
         const exchangeCredit = data.exchangeCreditAmount || 0;
         const netPaidToday = hasExchangeCredit ? (data.grandTotal - exchangeCredit) : data.grandTotal;
         // Determine non-exchange payments for the footer breakdown
         const freshPayments = (data.payments || []).filter(p => p.paymentMode !== 'EXCHANGE_CREDIT');
+
+        // For exchange/replacement bills, recalculate GST on the NET amount paid
+        // (mirrors processSaleForReport in Reports.tsx so receipt and report always match)
+        let displayCgst: number;
+        let displaySgst: number;
+        let basicAmt: number;
+
+        if (hasExchangeCredit && netPaidToday > 0) {
+          // GST is inclusive at 5% → taxable = netPaid / 1.05, tax = netPaid - taxable
+          const GST_INCLUSIVE_FACTOR = 1.05;
+          const netTaxable = parseFloat((Math.max(0, netPaidToday) / GST_INCLUSIVE_FACTOR).toFixed(2));
+          const netTotalTax = parseFloat((Math.max(0, netPaidToday) - netTaxable).toFixed(2));
+          displayCgst = parseFloat((netTotalTax / 2).toFixed(2));
+          displaySgst = parseFloat((netTotalTax / 2).toFixed(2));
+          basicAmt = netTaxable;
+        } else if (hasExchangeCredit && netPaidToday <= 0) {
+          // Fully covered by exchange credit — zero tax
+          displayCgst = 0;
+          displaySgst = 0;
+          basicAmt = 0;
+        } else {
+          // Normal (non-exchange) bill — use the stored gross values
+          const totalTax = (data.cgst || 0) + (data.sgst || 0);
+          const afterDiscount = (data.subtotal || 0) - (data.discount || 0);
+          displayCgst = data.cgst || 0;
+          displaySgst = data.sgst || 0;
+          basicAmt = afterDiscount - totalTax;
+        }
 
         htmlContent += `${blockOpen}
           <div style="${styleStr}; font-size: 11px;">
@@ -219,22 +264,20 @@ export function generateReceiptHtml(
               <tr><td align="right">Total Items:</td><td align="right" width="80">${data.items.length}</td></tr>
               <tr style="font-weight: bold;"><td align="right">Gross Subtotal (incl. GST):</td><td align="right" width="80">${(data.subtotal || 0).toFixed(2)}</td></tr>
               <tr><td align="right">Discount:</td><td align="right" width="80">${data.discount.toFixed(2)}</td></tr>
-              <tr><td align="right">Taxable Amount (Excl. GST):</td><td align="right" width="80">${basicAmt.toFixed(2)}</td></tr>
-              <tr><td align="right">CGST @2.5%:</td><td align="right" width="80">${(data.cgst || 0).toFixed(2)}</td></tr>
-              <tr><td align="right">SGST @2.5%:</td><td align="right" width="80">${(data.sgst || 0).toFixed(2)}</td></tr>
-              <tr style="font-weight: bold; font-size: 13px; border-top: 1px dashed #000;">
-                <td align="right" style="padding: 5px 0;">TOTAL:</td>
-                <td align="right" style="padding: 5px 0;">₹${data.grandTotal.toFixed(2)}</td>
-              </tr>
               ${hasExchangeCredit ? `
-              <tr>
-                <td align="right" style="padding: 2px 0;">Less Exchange Credit:</td>
-                <td align="right" style="padding: 2px 0;">-₹${exchangeCredit.toFixed(2)}</td>
+              <tr><td align="right" style="padding: 2px 0;">Less Exchange Credit:</td><td align="right" style="padding: 2px 0;">-${exchangeCredit.toFixed(2)}</td></tr>
+              <tr style="font-weight: bold;"><td align="right">Net Amt (incl. GST):</td><td align="right" width="80">${Math.max(0, netPaidToday).toFixed(2)}</td></tr>
+              ` : ''}
+              <tr><td align="right">Taxable Amount (Excl. GST):</td><td align="right" width="80">${basicAmt.toFixed(2)}</td></tr>
+              <tr><td align="right">CGST @2.5%:</td><td align="right" width="80">${displayCgst.toFixed(2)}</td></tr>
+              <tr><td align="right">SGST @2.5%:</td><td align="right" width="80">${displaySgst.toFixed(2)}</td></tr>
+              <tr style="font-weight: bold; font-size: ${hasExchangeCredit ? '14' : '13'}px; border-top: 1px dashed #000;">
+                <td align="right" style="padding: 5px 0;">${hasExchangeCredit ? 'NET AMOUNT PAID:' : 'TOTAL:'}</td>
+                <td align="right" style="padding: 5px 0;">₹${hasExchangeCredit ? Math.max(0, netPaidToday).toFixed(2) : data.grandTotal.toFixed(2)}</td>
               </tr>
-              <tr style="font-weight: bold; font-size: 14px; border-top: 1px dashed #000;">
-                <td align="right" style="padding: 5px 0;">NET AMOUNT PAID:</td>
-                <td align="right" style="padding: 5px 0;">₹${Math.max(0, netPaidToday).toFixed(2)}</td>
-              </tr>
+              ${data.totalRefundAmount && data.totalRefundAmount > 0 ? `
+              <tr><td align="right" style="padding: 2px 0; color: #b91c1c; font-weight: bold;">Less Refunded:</td><td align="right" style="padding: 2px 0; color: #b91c1c; font-weight: bold;">-${data.totalRefundAmount.toFixed(2)}</td></tr>
+              <tr style="font-weight: bold; font-size: 13px; border-top: 1px dashed #b91c1c; color: #b91c1c;"><td align="right" style="padding: 4px 0;">NET RETAINED:</td><td align="right" style="padding: 4px 0;">₹${Math.max(0, data.grandTotal - data.totalRefundAmount).toFixed(2)}</td></tr>
               ` : ''}
               ${!hasExchangeCredit ? `
               ${printerConfig.showPaidLine
@@ -316,11 +359,11 @@ interface LabelData {
 }
 
 export const printService = {
-  async printReceipt(data: ReceiptData) {
+  async printReceipt(data: ReceiptData, testConfig?: Partial<ReceiptPrinterConfig> & { receiptPrinter?: string }) {
     try {
       // 1. Fetch Layout JSON using settings API
       const layoutResult = await window.electronAPI.settings.get({ key: 'RECEIPT_LAYOUT' });
-      const printerConfigResult = await window.electronAPI.settings.get({ key: 'PRINTER_CONFIG' });
+      const printerConfigResult = testConfig ? { success: true, data: JSON.stringify(testConfig) } : await window.electronAPI.settings.get({ key: 'PRINTER_CONFIG' });
 
       if (layoutResult?.success === false) {
         throw new Error(layoutResult.error || 'Failed to load receipt layout');
@@ -337,7 +380,14 @@ export const printService = {
         ? JSON.parse(layoutResult.data as string)
         : DEFAULT_RECEIPT_LAYOUT;
 
-      const finalHtml = generateReceiptHtml(data, blocks, printerConfig);
+      const variantIds = [...new Set(data.items.filter(item => item.variantId && !item.categoryName).map(item => item.variantId!))];
+      const variants = variantIds.length ? await db.productVariants.findMany({
+        where: { id: { in: variantIds } },
+        select: { id: true, product: { select: { category: { select: { name: true } } } } }
+      }) : [];
+      const categories = new Map<string, string>(variants.map((variant: any) => [variant.id, variant.product?.category?.name || '']));
+      const receiptData = { ...data, items: data.items.map(item => ({ ...item, categoryName: item.categoryName || categories.get(item.variantId || '') || undefined })) };
+      const finalHtml = generateReceiptHtml(receiptData, blocks, printerConfig);
 
       const receiptPrinterName = printerConfigResult?.data
         ? (() => {
@@ -354,7 +404,7 @@ export const printService = {
 
       const result = await window.electronAPI.print.receipt({
         html: finalHtml,
-        options: { deviceName: receiptPrinterName }
+        options: { deviceName: receiptPrinterName, pageSize: printerConfig.pageSize }
       });
 
       if (!result?.success) {
@@ -365,6 +415,7 @@ export const printService = {
       console.error('Print service error:', error);
       // Fallback or error reporting
       console.error('Printing failed:', error);
+      throw error;
     }
   },
 
@@ -390,7 +441,7 @@ export const printService = {
           { id: '1', type: 'shop_name', styles: { align: 'left', fontSize: 10, bold: true, marginBottom: 0 }, visible: true },
           { id: '2', type: 'product_name', styles: { align: 'left', fontSize: 8, marginBottom: 2 }, visible: true },
           { id: '3', type: 'barcode', styles: { align: 'left', height: 40, marginBottom: 0 }, visible: true },
-          { id: '4', type: 'text', content: '4649350', styles: { align: 'left', fontSize: 8, marginBottom: 0 }, visible: true },
+          { id: '4', type: 'product_code', styles: { align: 'left', fontSize: 8, marginBottom: 0 }, visible: true },
           { id: '5', type: 'price', styles: { align: 'left', fontSize: 12, bold: true, marginBottom: 0 }, visible: true },
         ];
       }
