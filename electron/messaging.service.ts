@@ -36,9 +36,14 @@ export class NoWhatsAppAccountError extends Error {
 }
 
 /**
- * Send via Meta WhatsApp Cloud API
+ * Send via Meta WhatsApp Cloud API (supports both Templates and free-form Text)
  */
-async function sendViaMetaWhatsApp(phone: string, text: string, config: MessagingConfig): Promise<string> {
+async function sendViaMetaWhatsApp(
+    phone: string,
+    text: string,
+    config: MessagingConfig,
+    templateOptions?: { templateName?: string; parameters?: string[] }
+): Promise<string> {
     if (!config.metaPhoneNumberId || !config.metaAccessToken) {
         throw new Error('Meta WhatsApp Cloud API credentials missing (PhoneNumberId or AccessToken).');
     }
@@ -46,24 +51,54 @@ async function sendViaMetaWhatsApp(phone: string, text: string, config: Messagin
     const { waFormat } = normalizePhoneNumber(phone, config.defaultCountryCode);
     const url = `https://graph.facebook.com/v19.0/${config.metaPhoneNumberId}/messages`;
 
-    try {
-        const res = await axios.post(
-            url,
-            {
-                messaging_product: 'whatsapp',
-                recipient_type: 'individual',
-                to: waFormat,
-                type: 'text',
-                text: { preview_url: false, body: text }
-            },
-            {
-                headers: {
-                    'Authorization': `Bearer ${config.metaAccessToken}`,
-                    'Content-Type': 'application/json',
+    const templateName = templateOptions?.templateName || config.metaTemplateName;
+    const isTemplate = Boolean(templateName && templateName.toLowerCase() !== 'none');
+
+    let bodyPayload: any;
+    if (isTemplate) {
+        let langCode = (config.metaLanguageCode || 'en').trim();
+        if (/^english$/i.test(langCode)) langCode = 'en';
+        else if (/^english\s*\(?us\)?$/i.test(langCode)) langCode = 'en_US';
+        else if (/^english\s*\(?uk\)?$/i.test(langCode) || /^english\s*\(?gb\)?$/i.test(langCode)) langCode = 'en_GB';
+
+        const templateObj: any = {
+            name: templateName,
+            language: { code: langCode },
+        };
+        const params = templateOptions?.parameters;
+        if (params && params.length > 0 && templateName !== 'hello_world') {
+            templateObj.components = [
+                {
+                    type: 'body',
+                    parameters: params.map((p) => ({ type: 'text', text: String(p) })),
                 },
-                timeout: 10000,
-            }
-        );
+            ];
+        }
+        bodyPayload = {
+            messaging_product: 'whatsapp',
+            recipient_type: 'individual',
+            to: waFormat,
+            type: 'template',
+            template: templateObj,
+        };
+    } else {
+        bodyPayload = {
+            messaging_product: 'whatsapp',
+            recipient_type: 'individual',
+            to: waFormat,
+            type: 'text',
+            text: { preview_url: false, body: text },
+        };
+    }
+
+    try {
+        const res = await axios.post(url, bodyPayload, {
+            headers: {
+                'Authorization': `Bearer ${config.metaAccessToken}`,
+                'Content-Type': 'application/json',
+            },
+            timeout: 10000,
+        });
 
         return res.data?.messages?.[0]?.id || 'meta-sent';
     } catch (err: any) {
@@ -75,6 +110,11 @@ async function sendViaMetaWhatsApp(phone: string, text: string, config: Messagin
         // Error code 131026: Undeliverable / Recipient is not a valid WhatsApp user
         if (code === 131026 || msg.includes('not a valid whatsapp user') || msg.includes('not on whatsapp') || msg.includes('undeliverable')) {
             throw new NoWhatsAppAccountError(`Meta API: Phone ${waFormat} is not registered on WhatsApp (code ${code})`);
+        }
+
+        // Error code 131047: Re-engagement window (outside 24 hours)
+        if (code === 131047) {
+            throw new Error(`Meta API: Customer has not messaged business in 24 hours. A registered Meta template (e.g. tax_invoice) must be used.`);
         }
 
         throw new Error(errObj.message || err.message || 'Meta WhatsApp API request failed');
@@ -289,12 +329,17 @@ async function sendSmsViaProvider(phone: string, text: string, config: Messaging
 /**
  * Send a WhatsApp message using the configured WhatsApp provider
  */
-async function sendWhatsAppViaProvider(phone: string, text: string, config: MessagingConfig): Promise<{ provider: string; messageId?: string; directUrl?: string }> {
+async function sendWhatsAppViaProvider(
+    phone: string,
+    text: string,
+    config: MessagingConfig,
+    templateOptions?: { templateName?: string; parameters?: string[] }
+): Promise<{ provider: string; messageId?: string; directUrl?: string }> {
     const norm = normalizePhoneNumber(phone, config.defaultCountryCode);
 
     switch (config.whatsappProvider) {
         case 'META_API': {
-            const messageId = await sendViaMetaWhatsApp(phone, text, config);
+            const messageId = await sendViaMetaWhatsApp(phone, text, config, templateOptions);
             return { provider: 'WhatsApp Cloud API', messageId };
         }
         case 'TWILIO': {
@@ -543,7 +588,25 @@ export async function sendInvoiceMessage(
 
     // Primary Channel is WhatsApp
     try {
-        const waRes = await sendWhatsAppViaProvider(payload.customerPhone, waText, config);
+        const itemsSummary = (payload.items || [])
+            .map((it, idx) => `${idx + 1}. ${it.name}${it.variantInfo ? ` (${it.variantInfo})` : ''} x ${it.quantity} = ₹${it.total.toFixed(2)}`)
+            .join(' | ') || '1 item';
+
+        const templateParams: string[] = [
+            String(payload.billNo),
+            formatReadableDate(payload.date || new Date()),
+            payload.customerName || 'Walk-in Customer',
+            itemsSummary,
+            payload.subtotal.toFixed(2),
+            (payload.discount || 0).toFixed(2),
+            payload.grandTotal.toFixed(2),
+            (payload.paymentMethod || 'CASH').toUpperCase(),
+        ];
+
+        const waRes = await sendWhatsAppViaProvider(payload.customerPhone, waText, config, {
+            templateName: config.metaTemplateName || 'tax_invoice',
+            parameters: templateParams,
+        });
 
         await logMessage(db, {
             saleId: payload.saleId,

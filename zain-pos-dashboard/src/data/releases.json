@@ -1,0 +1,322 @@
+[
+  {
+    "version": "3.1.0",
+    "title": "Store Credit, WhatsApp/SMS Invoice Messaging & Customer 360",
+    "date": "04 November 2026",
+    "isCurrent": true,
+    "changes": [
+      {
+        "type": "feature",
+        "title": "Automated WhatsApp & SMS Invoice Messaging with Smart Fallback",
+        "description": "When completing a sale with a customer's phone number, the complete digital invoice is messaged to them via WhatsApp. If the customer does not have a registered WhatsApp account, the system automatically detects this and delivers the invoice via SMS fallback."
+      },
+      {
+        "type": "feature",
+        "title": "Store Credit Balance & Voucher Inclusions in Digital Invoices",
+        "description": "Invoice messages automatically declare redeemed credit vouchers and report the customer's remaining active store credit balance with redeemable codes, keeping customers informed and driving repeat store visits."
+      },
+      {
+        "type": "feature",
+        "title": "Instant Voucher & Store Credit Statement Messaging",
+        "description": "Cashiers can message newly issued credit vouchers and active store credit statements directly to customer phones via WhatsApp or SMS from the Credit Notes dialog and Customers directory."
+      },
+      {
+        "type": "feature",
+        "title": "Dedicated Messaging & SMS Gateway Management",
+        "description": "Configurable in Settings under 'Messaging & SMS', supporting Direct (WhatsApp Web / device SMS), Meta Cloud API, Twilio, and Fast2SMS gateways with live test dispatch and delivery audit logging."
+      },
+      {
+        "type": "fix",
+        "title": "Post-Checkout Credit Note State Refresh & Edit Mode Balance Sync",
+        "description": "Fixed an issue where the 'Apply Customer Credit' button and customer credit badge persisted after sale completion. Now immediately queries backend credit note status upon invoice checkout, accurately reflecting exhausted vouchers, calculating net historical payments without change-due distortion, and locking credit application on finalized bills."
+      },
+      {
+        "type": "improvement",
+        "title": "Store Credit Thermal Receipt Printing & Payment Breakdown",
+        "description": "Physical thermal receipts now explicitly reflect redeemed Store Credits and Credit Notes. Prominently prints 'Less Store Credit (CN-XXXX)' under the invoice total, calculates the net fresh payment collected, and outputs an unconditional Payment Breakdown table declaring voucher codes and split payment tender."
+      },
+      {
+        "type": "improvement",
+        "title": "Settings Responsive Full-Width Layout & Payment Method Control",
+        "description": "Eliminated empty white space across all Settings tabs by removing max-w-7xl constraints on large 1080p, 1440p, and ultrawide displays. Shop Info features a balanced two-column layout with business identity and contact details on the left, and accepted payment methods management on the right."
+      },
+      {
+        "type": "fix",
+        "title": "Payment Method Visibility Sync & Dashboard Stability",
+        "description": "Synchronized payment methods across Settings, POS, Dashboard, and Sales History with instant persistence. Fixed React hook ordering in window controls and ensured disabled payment methods (like Card) are cleanly omitted from checkout, modals, and zero-transaction audit tables."
+      },
+      {
+        "type": "feature",
+        "title": "Store Credit on Item Returns",
+        "description": "When returning an item in Sales History, cashiers can issue Store Credit (Credit Note) instead of cash. Restocks the garment to inventory while keeping the cash drawer untouched."
+      },
+      {
+        "type": "feature",
+        "title": "Customer Profile Linking & Transferable Vouchers",
+        "description": "Store credits are linked directly to customer profiles by 10-digit mobile number, with automatic transferable voucher codes (e.g. CN-1001) that can be shared or redeemed at checkout."
+      },
+      {
+        "type": "feature",
+        "title": "POS Checkout Credit Redemption",
+        "description": "Customers can redeem active store credits at checkout by mobile number lookup or by entering/scanning their voucher code, supporting partial redemption and split payments with cash, card, or UPI."
+      },
+      {
+        "type": "feature",
+        "title": "Printable Thermal Credit Note Slips",
+        "description": "Instantly prints a thermal voucher slip with the credit amount, customer details, and voucher code to hand to the customer for their next visit."
+      },
+      {
+        "type": "feature",
+        "title": "Customer Directory Store Credit Tracking",
+        "description": "The Customer Directory displays active store credit balances directly in the customer table, adds an 'Active Store Credit' liability metric card, and provides a 'With Credit' quick filter."
+      },
+      {
+        "type": "improvement",
+        "title": "Unified Customer Search & Auto-Collapsing Profile Cards",
+        "description": "Streamlined refund customer selection into a single fast search bar with outside-touch dismissal that collapses into an uncluttered profile card showing real-time credit balance changes."
+      },
+      {
+        "type": "improvement",
+        "title": "Centralized Store Credit Management",
+        "description": "Added dedicated Store Credit management overviews in Sales History and Customer 360 view to track redemption history, view remaining balances, or void unused notes."
+      },
+      {
+        "type": "improvement",
+        "title": "Comprehensive Skeleton Loading & Sidebar Alignment",
+        "description": "Replaced spinning circles and plain text placeholders with content-aware skeletal loaders across Dashboard, POS, Sales Forecasting, Profit & Analysis, Cash Register, Permissions, Purchases, Expenses, GST Reports, Stock, and User Management. Aligned collapsed sidebar navigation and scrollbar behaviors."
+      },
+      {
+        "type": "improvement",
+        "title": "Visual Stock Health Badges & Quick Inventory Filters",
+        "description": "Products list features color-coded stock health badges (In Stock, Low Stock, Out of Stock) and one-click filter pills to immediately identify garments that need replenishment."
+      },
+      {
+        "type": "feature",
+        "title": "Staff Dashboard Access with Payment Mode Audit & Privacy Controls",
+        "description": "Opened Dashboard to cashiers and store staff so they can track shift progress and audit daily payments by Cash, UPI, Card, and Store Credit. Protected all-time cumulative store revenue and all-time sales trends exclusively for Admin."
+      },
+      {
+        "type": "improvement",
+        "title": "Dynamic Store Pulse Banner & Date Display",
+        "description": "Replaced the redundant cloud sync button on the dashboard with an elegant calendar date badge, and replaced static placeholder text with a dynamic store pulse banner that reflects real-time sales progress, top-selling items, and shift momentum."
+      },
+      {
+        "type": "improvement",
+        "title": "Unified Action Bar Layout & Fixed Navigation Anchor",
+        "description": "Unified header button sizing across Stock, Purchases, and Expenses. Anchored the Refresh button to the leading position so switching between inventory sub-views does not cause button jumping or navigation clutter."
+      },
+      {
+        "type": "fix",
+        "title": "Elimination of Hardcoded Zeros & Instant Focus Selection",
+        "description": "Resolved sticky zero digits across Purchases, Stock Audits, Product Variants, and User Permissions. Numeric input fields now show clean placeholders, clear cleanly on backspace, and automatically highlight existing numbers on click or tab for immediate replacement."
+      },
+      {
+        "type": "feature",
+        "title": "Direct Stock Movement Ledger in Products",
+        "description": "Clicking any product's stock badge or history button opens the complete movement ledger (purchases, POS sales, refunds, adjustments) without leaving the catalogue."
+      },
+      {
+        "type": "improvement",
+        "title": "Categorized Staff Permissions & Role Templates",
+        "description": "Redesigned User Permissions into clean operational cards, added missing toggles for Stock Audits, Wholesale Cost Visibility, Cash Drawer, and Backdating, and added one-click role templates (Cashier, Senior, Supervisor, Manager)."
+      },
+      {
+        "type": "improvement",
+        "title": "Isolated Demo Data for Safe Testing",
+        "description": "Added a separate sample database with purchase costs, sales history and expenses for testing forecasts and profit reports. Cloud sync is disabled in demo mode so sample activity remains local."
+      },
+      {
+        "type": "feature",
+        "title": "Activity Log Access Control for Cashiers",
+        "description": "Restricted the system activity log from cashiers by default. Store owners can now explicitly toggle activity log access on or off per staff member under User Permissions."
+      },
+      {
+        "type": "improvement",
+        "title": "Per-User Sidebar Collapse Memory",
+        "description": "The app now remembers whether each staff member prefers the navigation sidebar collapsed (icon-only mode) or expanded, persisting seamlessly across app restarts."
+      },
+      {
+        "type": "improvement",
+        "title": "Integrated Modern Header & 32px Vertical Screen Expansion",
+        "description": "Consolidated the separate top titlebar into the main application header, placing minimize, maximize, and close controls directly alongside the Online status pill and reclaiming 32px of vertical billing space."
+      },
+      {
+        "type": "improvement",
+        "title": "Dashboard Low Stock Alerts & Inventory Alignment",
+        "description": "Redesigned the Dashboard Low Stock Alerts card with aligned card layout matching Top Selling Products, urgency-based sorting (oversold and out-of-stock items prioritized first), refined stock badges, and direct navigation to Stock inventory."
+      },
+      {
+        "type": "fix",
+        "title": "System-wide Payment Method Settings Synchronization",
+        "description": "Toggling accepted payment methods (such as Card or UPI) in Settings now immediately persists and synchronizes across all active screens—hiding disabled methods from Dashboard payment audits, POS quick tender and split payments, and Sales History change/replacement/refund dialogs."
+      },
+      {
+        "type": "improvement",
+        "title": "Native Desktop Non-Selectable UI Chrome",
+        "description": "Disabled accidental text highlighting and image dragging across buttons, navigation links, cards, and table headers to provide a solid, tactile native desktop POS feel, while preserving natural text selection for input fields and textareas."
+      },
+      {
+        "type": "fix",
+        "title": "Clear Purchase History Loading State",
+        "description": "The Purchases page now identifies its initial loading and request error states, avoiding a misleading empty invoice list while data is still being fetched."
+      }
+    ]
+  },
+  {
+    "version": "3.0.60",
+    "title": "Single-Item Product Management, MRP Column & Performance",
+    "date": "29 October 2026",
+    "changes": [
+      {
+        "type": "feature",
+        "title": "Dedicated MRP / Selling Price Column",
+        "description": "Added a dedicated MRP / Price column in the products table showing the selling price in bold and MRP with strikethrough when discounted, replacing redundant status tags."
+      },
+      {
+        "type": "improvement",
+        "title": "Streamlined Single-Item Retail Architecture",
+        "description": "Removed complex multi-variant cards from the product page and modal, unifying product creation and editing into a clean single-item workflow matching retail garment operations."
+      },
+      {
+        "type": "improvement",
+        "title": "Lightweight Product Catalogue Loading",
+        "description": "The Products list now loads initial garment details with database-aggregated stock summaries instead of transferring every nested variant; catalogue search uses debounced typing."
+      },
+      {
+        "type": "feature",
+        "title": "Isolated Demo Data Environment",
+        "description": "Added a safe demo workspace with sample products, purchase batches, and cost-captured sales for exploring forecasts and profit reports without touching shop records."
+      },
+      {
+        "type": "fix",
+        "title": "Universal Remote LAN & HTTP UUID Polyfill",
+        "description": "Added an RFC4122 v4 UUID polyfill ensuring smooth operation when accessing the POS from secondary counter computers across the local area network."
+      }
+    ]
+  },
+  {
+    "version": "3.0.40",
+    "title": "Purchases, Sales Forecasting & Thermal Receipt Engine",
+    "date": "28 October 2026",
+    "changes": [
+      {
+        "type": "feature",
+        "title": "Purchases Modern Edge-to-Edge Redesign",
+        "description": "Revamped purchase batch management with instant supplier tracking, cost breakdowns, and live purchase invoice reconciliation."
+      },
+      {
+        "type": "feature",
+        "title": "Six-Month Sales Forecasting & Restocking Engine",
+        "description": "Preserved 1–6 month garment demand forecasts, restocking guidance, seasonal planning alerts, and period-over-period comparisons."
+      },
+      {
+        "type": "improvement",
+        "title": "ESC/POS Thermal Receipt Engine & Diagnostics",
+        "description": "High-speed thermal receipt formatting with item category sublines, dual price rates, and direct hardware print diagnostics."
+      },
+      {
+        "type": "feature",
+        "title": "Business Expenses & Cash Drawer Review",
+        "description": "Track miscellaneous shop operational expenses and maintain daily cash drawer reconciliations directly within the POS."
+      }
+    ]
+  },
+  {
+    "version": "3.0.30",
+    "title": "Profit & Loss Analysis and Purchase GST Reconciliation",
+    "date": "26 October 2026",
+    "changes": [
+      {
+        "type": "feature",
+        "title": "Real-Time Profit & Margin Analytics",
+        "description": "Comprehensive profit and business performance analysis calculating gross and net margins based on actual purchase costs."
+      },
+      {
+        "type": "feature",
+        "title": "Purchase GST and Invoice Round-Off",
+        "description": "Accurate supplier invoice reconciliation handling input tax credits (CGST, SGST, IGST) and commercial round-off adjustments."
+      },
+      {
+        "type": "improvement",
+        "title": "Historical Cost Capture at Billed Moment",
+        "description": "Every sale captures the exact weighted-average cost at the moment of purchase, ensuring historical profit reports stay mathematically accurate."
+      },
+      {
+        "type": "fix",
+        "title": "Exchange Profit & Return Reconciliation",
+        "description": "Ensured that garment exchanges and refunds calculate exact profit adjustments without distorting daily sales figures."
+      }
+    ]
+  },
+  {
+    "version": "3.0.0",
+    "title": "Offline-First SQLite Architecture & POS v3 Modern Redesign",
+    "date": "15 October 2026",
+    "changes": [
+      {
+        "type": "feature",
+        "title": "Offline-First SQLite Desktop Engine",
+        "description": "Migrated core POS database to an embedded local SQLite engine for zero network latency, instant barcode lookups, and 100% offline billing."
+      },
+      {
+        "type": "feature",
+        "title": "Split Payment Checkout System",
+        "description": "Support split tenders across Cash, Credit/Debit Card, UPI, and Store Credit vouchers on a single invoice."
+      },
+      {
+        "type": "feature",
+        "title": "User Permissions & Role-Based Access Control",
+        "description": "Configurable security permissions separating Cashier billing operations from Admin discounts, purchase edits, and sales voiding."
+      },
+      {
+        "type": "improvement",
+        "title": "Modern Dark & Light Mode Interface",
+        "description": "Rebuilt POS styling with clean contrast, responsive sidebar navigation, and high-visibility typography for busy retail environments."
+      }
+    ]
+  },
+  {
+    "version": "2.5.0",
+    "title": "Multi-Terminal Sync & Network Architecture",
+    "date": "September 2026",
+    "changes": [
+      {
+        "type": "feature",
+        "title": "Multi-Counter Delta Sync Protocol",
+        "description": "Real-time background sync syncing sales, customers, and inventory changes across multiple POS terminals in the store."
+      },
+      {
+        "type": "feature",
+        "title": "Shift Register Opening & Closing",
+        "description": "End-of-day cash drawer balancing with denomination breakdown and cashier discrepancy audit slips."
+      },
+      {
+        "type": "improvement",
+        "title": "Automated Database Backups",
+        "description": "Scheduled automatic snapshots of the POS database to protect against system crashes or hardware failures."
+      }
+    ]
+  },
+  {
+    "version": "2.0.0",
+    "title": "Initial Desktop Electron Release",
+    "date": "August 2026",
+    "changes": [
+      {
+        "type": "feature",
+        "title": "Desktop Application Architecture",
+        "description": "Native Windows desktop packaging with local hardware access for barcode scanners, cash drawers, and thermal receipt printers."
+      },
+      {
+        "type": "feature",
+        "title": "Barcode Label Generation",
+        "description": "Built-in thermal barcode label generator for printing garment price tags with store branding, size, and MRP."
+      },
+      {
+        "type": "feature",
+        "title": "Sales History & Transaction Logging",
+        "description": "Full audit log of customer transactions, receipt reprints, and billing analytics."
+      }
+    ]
+  }
+]

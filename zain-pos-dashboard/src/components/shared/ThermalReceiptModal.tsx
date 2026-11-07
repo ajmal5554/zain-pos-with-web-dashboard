@@ -140,9 +140,11 @@ export function ThermalReceiptModal({ invoice, open, onClose, loading }: Thermal
         amount: Number(p.amount || 0)
       })),
       userName: invoice.cashierName || 'Staff',
-      isReplacementBill: (invoice as any).isReplacementBill,
+      isReplacementBill: (invoice as any).isReplacementBill || invoice.paymentMethod === 'EXCHANGE' || ((invoice as any).remarks || '').toLowerCase().includes('replacement'),
       originalBillNo: (invoice as any).originalBillNo,
-      exchangeCreditAmount: (invoice as any).exchangeCreditAmount
+      exchangeCreditAmount: (invoice as any).exchangeCreditAmount,
+      storeCreditAmount: (invoice as any).storeCreditAmount,
+      creditNoteCodes: (invoice as any).creditNoteCodes
     };
   }, [invoice]);
 

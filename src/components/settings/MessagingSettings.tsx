@@ -292,6 +292,25 @@ export const MessagingSettings: React.FC = () => {
                                     placeholder="Bearer EAA..."
                                     className="h-9 text-xs"
                                 />
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <Input
+                                        label="Template Name (Approved in Meta)"
+                                        value={config.metaTemplateName ?? 'tax_invoice'}
+                                        onChange={(e) => setConfig({ ...config, metaTemplateName: e.target.value.toLowerCase().replace(/\s+/g, '_') })}
+                                        placeholder="tax_invoice or hello_world"
+                                        className="h-9 text-xs"
+                                    />
+                                    <Input
+                                        label="Template Language Code"
+                                        value={config.metaLanguageCode ?? 'en'}
+                                        onChange={(e) => setConfig({ ...config, metaLanguageCode: e.target.value })}
+                                        placeholder="en or en_US"
+                                        className="h-9 text-xs"
+                                    />
+                                </div>
+                                <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                                    Meta requires an approved Utility template to send bills outside the 24h window. Use <code className="text-emerald-600 font-mono">tax_invoice</code> or <code className="text-emerald-600 font-mono">hello_world</code> for testing.
+                                </p>
                             </div>
                         )}
 

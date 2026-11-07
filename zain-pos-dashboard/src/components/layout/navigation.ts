@@ -9,17 +9,24 @@ import {
     ShieldCheck,
     Users,
     UserRoundSearch,
-    Receipt,
-    ShoppingBag
+    ShoppingBag,
+    TrendingUp,
+    Banknote,
+    Wallet,
+    Truck
 } from 'lucide-react';
 
 export const navigation = [
     { name: 'Home', href: '/', icon: Home, shortLabel: 'Home' },
     { name: 'Sales', href: '/sales', icon: ShoppingBag, shortLabel: 'Sales' },
-    { name: 'Stock', href: '/inventory', icon: Boxes, shortLabel: 'Stock' },
+    { name: 'Profit & Margins', href: '/profit', icon: TrendingUp, shortLabel: 'Profit' },
+    { name: 'Expenses', href: '/expenses', icon: Banknote, shortLabel: 'Expenses' },
+    { name: 'Cash Register', href: '/cash-drawer', icon: Wallet, shortLabel: 'Register' },
+    { name: 'Stock Levels', href: '/inventory', icon: Boxes, shortLabel: 'Stock' },
     { name: 'Products', href: '/products', icon: PackageSearch, shortLabel: 'Products' },
+    { name: 'Purchases', href: '/purchases', icon: Truck, shortLabel: 'Purchases' },
     { name: 'Customers', href: '/customers', icon: UserRoundSearch, shortLabel: 'Customers' },
-    { name: 'Reports', href: '/reports', icon: BarChart3, shortLabel: 'Reports' },
+    { name: 'GST Reports', href: '/reports', icon: BarChart3, shortLabel: 'Reports' },
     { name: 'Future Sales', href: '/forecasting', icon: HandCoins, shortLabel: 'Forecast' },
     { name: 'Users', href: '/users', icon: Users, shortLabel: 'Users' },
     { name: 'Access', href: '/permissions', icon: ShieldCheck, shortLabel: 'Access' },

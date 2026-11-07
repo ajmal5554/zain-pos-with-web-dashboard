@@ -13,6 +13,8 @@ export const DEFAULT_MESSAGING_CONFIG: MessagingConfig = {
     includeShopDetails: true,
     defaultCountryCode: '91',
     whatsappProvider: 'DIRECT',
+    metaTemplateName: 'tax_invoice',
+    metaLanguageCode: 'en_US',
     smsProvider: 'DIRECT',
 };
 

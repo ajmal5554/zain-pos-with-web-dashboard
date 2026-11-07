@@ -15,6 +15,9 @@ import activityRoutes from './routes/activity';
 import notificationRoutes from './routes/notifications';
 import adminRoutes from './routes/admin';
 import customersRoutes from './routes/customers';
+import expensesRoutes from './routes/expenses';
+import cashDrawerRoutes from './routes/cashDrawer';
+import purchasesRoutes from './routes/purchases';
 import { ensureLocalDefaults } from './bootstrap';
 
 dotenv.config();
@@ -54,6 +57,9 @@ app.use('/api/activity', activityRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/customers', customersRoutes);
+app.use('/api/expenses', expensesRoutes);
+app.use('/api/cash-drawer', cashDrawerRoutes);
+app.use('/api/purchases', purchasesRoutes);
 
 // Health check
 app.get('/health', (req, res) => {

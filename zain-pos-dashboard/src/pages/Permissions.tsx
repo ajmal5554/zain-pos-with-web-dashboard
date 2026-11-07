@@ -1,5 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ShieldCheck, ShieldAlert, Lock, Unlock, Settings2, Info, Percent } from 'lucide-react';
+import { 
+    ShieldCheck, 
+    Shield, 
+    Lock, 
+    Unlock, 
+    Settings2, 
+    Info, 
+    Percent, 
+    ShoppingCart, 
+    Package, 
+    Wallet, 
+    BarChart3, 
+    Sliders,
+    Sparkles,
+    User as UserIcon,
+    Check
+} from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { adminService, type AdminUser } from '@/features/admin/services/admin.service';
 import { isDemoModeEnabled } from '@/lib/demo';
@@ -19,24 +35,172 @@ import {
   CardTitle 
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
+import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 
-const permissionColumns: Array<{ key: keyof AdminUser; label: string }> = [
-    { key: 'permAddItem', label: 'POS Entry' },
-    { key: 'permPrintSticker', label: 'Stickers' },
-    { key: 'permManageProducts', label: 'Products' },
-    { key: 'permVoidSale', label: 'Void Bill' },
-    { key: 'permViewReports', label: 'Stats' },
-    { key: 'permViewSales', label: 'Sales' },
-    { key: 'permViewGstReports', label: 'GST' },
-    { key: 'permEditSettings', label: 'Config' },
-    { key: 'permManageInventory', label: 'Stock' },
-    { key: 'permManageUsers', label: 'Users' }
+interface PermissionGroup {
+    title: string;
+    icon: React.ElementType;
+    description: string;
+    permissions: Array<{
+        key: keyof AdminUser;
+        label: string;
+        desc: string;
+    }>;
+}
+
+const PERMISSION_GROUPS: PermissionGroup[] = [
+    {
+        title: 'POS & Checkout',
+        icon: ShoppingCart,
+        description: 'Permissions controlling bill creation, cashier limits, and checkout tender.',
+        permissions: [
+            { key: 'permAddItem', label: 'Add Items to Cart', desc: 'Can scan and add items during sale' },
+            { key: 'permEditSales', label: 'Edit / Exchange Bills', desc: 'Can process product exchanges and edit items' },
+            { key: 'permChangePayment', label: 'Modify Payment Mode', desc: 'Can change payment method after bill completion' },
+            { key: 'permVoidSale', label: 'Void / Cancel Bills', desc: 'Can void completed sales bills' },
+            { key: 'permBackDateSale', label: 'Backdate Sales', desc: 'Can enter sales for past dates' },
+        ]
+    },
+    {
+        title: 'Catalogue & Garment Pricing',
+        icon: Package,
+        description: 'Permissions controlling products, labels, and wholesale cost privacy.',
+        permissions: [
+            { key: 'permManageProducts', label: 'Manage Products', desc: 'Can create and edit garment catalogue' },
+            { key: 'permDeleteProduct', label: 'Delete Products', desc: 'Can remove items from product catalogue' },
+            { key: 'permPrintSticker', label: 'Print Barcode Stickers', desc: 'Can generate and print thermal barcode labels' },
+            { key: 'permViewCostPrice', label: 'View Cost Price', desc: 'Can see wholesale purchase costs and margins' },
+        ]
+    },
+    {
+        title: 'Inventory & Stock Counts',
+        icon: Sliders,
+        description: 'Permissions for stock movements and counts.',
+        permissions: [
+            { key: 'permManageInventory', label: 'Manage Stock & Audits', desc: 'Can adjust inventory quantities and record counts' },
+        ]
+    },
+    {
+        title: 'Cash Register & Shifts',
+        icon: Wallet,
+        description: 'Permissions for cash drawer reconciliation and petty cash expenses.',
+        permissions: [
+            { key: 'permManageCashDrawer', label: 'Cash Register & Expenses', desc: 'Can open/close shifts, count cash, and record expenses' },
+        ]
+    },
+    {
+        title: 'Reports & Administration',
+        icon: BarChart3,
+        description: 'Access to business intelligence, tax reports, and system settings.',
+        permissions: [
+            { key: 'permViewReports', label: 'General Reports', desc: 'Can view daily sales and general summaries' },
+            { key: 'permViewSales', label: 'Sales History', desc: 'Can browse full completed invoice log' },
+            { key: 'permViewGstReports', label: 'GST Tax Reports', desc: 'Can view tax slabs, HSN summaries, and tax exports' },
+            { key: 'permViewInsights', label: 'Sales Forecasting', desc: 'Can view 1-6 month demand forecasts and restocking' },
+            { key: 'permDeleteAudit', label: 'View Activity Logs', desc: 'Can inspect system audit records' },
+            { key: 'permEditSettings', label: 'Edit Store Settings', desc: 'Can configure shop details and payment methods' },
+            { key: 'permManageUsers', label: 'Manage Users', desc: 'Can create users and modify access permissions' },
+        ]
+    }
 ];
+
+type PresetRole = 'CASHIER' | 'SENIOR_CASHIER' | 'SUPERVISOR' | 'MANAGER';
+
+const ROLE_PRESETS: Record<PresetRole, Partial<AdminUser>> = {
+    CASHIER: {
+        permAddItem: true,
+        permEditSales: false,
+        permChangePayment: false,
+        permVoidSale: false,
+        permBackDateSale: false,
+        permManageProducts: false,
+        permDeleteProduct: false,
+        permPrintSticker: true,
+        permViewCostPrice: false,
+        permManageInventory: false,
+        permManageCashDrawer: true,
+        permViewReports: false,
+        permViewSales: true,
+        permViewGstReports: false,
+        permViewInsights: false,
+        permDeleteAudit: false,
+        permEditSettings: false,
+        permManageUsers: false,
+        maxDiscount: 10,
+    },
+    SENIOR_CASHIER: {
+        permAddItem: true,
+        permEditSales: true,
+        permChangePayment: false,
+        permVoidSale: true,
+        permBackDateSale: false,
+        permManageProducts: false,
+        permDeleteProduct: false,
+        permPrintSticker: true,
+        permViewCostPrice: false,
+        permManageInventory: false,
+        permManageCashDrawer: true,
+        permViewReports: true,
+        permViewSales: true,
+        permViewGstReports: false,
+        permViewInsights: false,
+        permDeleteAudit: false,
+        permEditSettings: false,
+        permManageUsers: false,
+        maxDiscount: 15,
+    },
+    SUPERVISOR: {
+        permAddItem: true,
+        permEditSales: true,
+        permChangePayment: true,
+        permVoidSale: true,
+        permBackDateSale: true,
+        permManageProducts: true,
+        permDeleteProduct: false,
+        permPrintSticker: true,
+        permViewCostPrice: true,
+        permManageInventory: true,
+        permManageCashDrawer: true,
+        permViewReports: true,
+        permViewSales: true,
+        permViewGstReports: true,
+        permViewInsights: true,
+        permDeleteAudit: false,
+        permEditSettings: false,
+        permManageUsers: false,
+        maxDiscount: 25,
+    },
+    MANAGER: {
+        permAddItem: true,
+        permEditSales: true,
+        permChangePayment: true,
+        permVoidSale: true,
+        permBackDateSale: true,
+        permManageProducts: true,
+        permDeleteProduct: true,
+        permPrintSticker: true,
+        permViewCostPrice: true,
+        permManageInventory: true,
+        permManageCashDrawer: true,
+        permViewReports: true,
+        permViewSales: true,
+        permViewGstReports: true,
+        permViewInsights: true,
+        permDeleteAudit: true,
+        permEditSettings: false,
+        permManageUsers: false,
+        maxDiscount: 50,
+    }
+};
 
 export default function PermissionsPage() {
     const [users, setUsers] = useState<AdminUser[]>([]);
+    const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
 
     useEffect(() => {
         void loadUsers();
@@ -45,8 +209,53 @@ export default function PermissionsPage() {
     async function loadUsers() {
         try {
             setLoading(true);
-            if (isDemoModeEnabled()) return;
-            setUsers(await adminService.getUsers());
+            if (isDemoModeEnabled()) {
+                const demoUsers: AdminUser[] = [
+                    {
+                        id: 'u-1',
+                        username: 'admin',
+                        name: 'Zain Store Owner',
+                        role: 'ADMIN',
+                        isActive: true,
+                        permAddItem: true,
+                        permEditSales: true,
+                        permChangePayment: true,
+                        permVoidSale: true,
+                        permBackDateSale: true,
+                        permManageProducts: true,
+                        permDeleteProduct: true,
+                        permPrintSticker: true,
+                        permViewCostPrice: true,
+                        permManageInventory: true,
+                        permManageCashDrawer: true,
+                        permViewReports: true,
+                        permViewSales: true,
+                        permViewGstReports: true,
+                        permViewInsights: true,
+                        permBulkUpdate: true,
+                        permDeleteAudit: true,
+                        permEditSettings: true,
+                        permManageUsers: true,
+                        maxDiscount: 100
+                    },
+                    {
+                        id: 'u-2',
+                        username: 'cashier1',
+                        name: 'Nikhil (Cashier)',
+                        role: 'CASHIER',
+                        isActive: true,
+                        ...ROLE_PRESETS.CASHIER,
+                        maxDiscount: 10
+                    } as AdminUser
+                ];
+                setUsers(demoUsers);
+                setSelectedUserId('u-2');
+                return;
+            }
+            const data = await adminService.getUsers();
+            setUsers(data);
+            const firstNonAdmin = data.find((u) => u.role !== 'ADMIN') || data[0];
+            if (firstNonAdmin) setSelectedUserId(firstNonAdmin.id);
         } catch (error: any) {
             toast.error(error?.response?.data?.error || 'Failed to load permissions');
         } finally {
@@ -54,134 +263,293 @@ export default function PermissionsPage() {
         }
     }
 
-    const sortedUsers = useMemo(() => [...users].sort((a, b) => a.role.localeCompare(b.role) || a.name.localeCompare(b.name)), [users]);
+    const selectedUser = useMemo(
+        () => users.find((u) => u.id === selectedUserId) || users[0],
+        [users, selectedUserId]
+    );
 
-    async function togglePermission(user: AdminUser, key: keyof AdminUser) {
-        if (user.role === 'ADMIN') return;
-        const updatedValue = !Boolean(user[key]);
-        const previous = users;
-        setUsers((current) => current.map((entry) => entry.id === user.id ? { ...entry, [key]: updatedValue } : entry));
+    async function togglePermission(key: keyof AdminUser) {
+        if (!selectedUser || selectedUser.role === 'ADMIN') return;
+        const currentVal = Boolean(selectedUser[key]);
+        const nextVal = !currentVal;
+
+        const updatedUsers = users.map((u) =>
+            u.id === selectedUser.id ? { ...u, [key]: nextVal } : u
+        );
+        setUsers(updatedUsers);
+
+        if (isDemoModeEnabled()) return;
+
         try {
-            const updated = await adminService.updateUser(user.id, { [key]: updatedValue } as Partial<AdminUser>);
-            setUsers((current) => current.map((entry) => entry.id === user.id ? updated : entry));
+            await adminService.updateUser(selectedUser.id, { [key]: nextVal } as Partial<AdminUser>);
         } catch (error: any) {
-            setUsers(previous);
             toast.error(error?.response?.data?.error || 'Failed to update permission');
+            setUsers(users); // revert
         }
     }
 
-    async function saveDiscount(user: AdminUser, value: number) {
-        try {
-            const updated = await adminService.updateUser(user.id, { maxDiscount: value });
-            setUsers((current) => current.map((entry) => entry.id === user.id ? updated : entry));
-            toast.success(`Discount limit set to ${value}%`);
-        } catch (error: any) {
-            toast.error(error?.response?.data?.error || 'Failed to update max discount');
+    async function applyPreset(presetKey: PresetRole) {
+        if (!selectedUser || selectedUser.role === 'ADMIN') return;
+        const preset = ROLE_PRESETS[presetKey];
+
+        const updatedUsers = users.map((u) =>
+            u.id === selectedUser.id ? { ...u, ...preset } : u
+        );
+        setUsers(updatedUsers);
+
+        if (isDemoModeEnabled()) {
+            toast.success(`Applied ${presetKey} role template locally`);
+            return;
         }
+
+        try {
+            setSaving(true);
+            await adminService.updateUser(selectedUser.id, preset as Partial<AdminUser>);
+            toast.success(`Applied ${presetKey} role template`);
+        } catch (error: any) {
+            toast.error(error?.response?.data?.error || 'Failed to apply template');
+            setUsers(users);
+        } finally {
+            setSaving(false);
+        }
+    }
+
+    async function handleMaxDiscountChange(val: number) {
+        if (!selectedUser || selectedUser.role === 'ADMIN') return;
+        const discount = Math.min(100, Math.max(0, val));
+
+        const updatedUsers = users.map((u) =>
+            u.id === selectedUser.id ? { ...u, maxDiscount: discount } : u
+        );
+        setUsers(updatedUsers);
+
+        if (isDemoModeEnabled()) return;
+
+        try {
+            await adminService.updateUser(selectedUser.id, { maxDiscount: discount });
+        } catch {
+            toast.error('Failed to update discount limit');
+            setUsers(users);
+        }
+    }
+
+    if (loading) {
+        return (
+            <div className="flex-1 space-y-4 pb-12">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h2 className="text-2xl font-bold tracking-tight">Access & Permissions</h2>
+                        <p className="text-muted-foreground text-sm">Control feature access and operational limits per staff member.</p>
+                    </div>
+                </div>
+                <div className="flex justify-center p-12 text-muted-foreground animate-pulse">
+                    Loading permissions...
+                </div>
+            </div>
+        );
     }
 
     return (
-        <div className="flex-1 space-y-4">
-            <div className="flex items-center justify-between">
+        <div className="flex-1 space-y-6 pb-12">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
                     <h2 className="text-2xl font-bold tracking-tight">Access & Permissions</h2>
                     <p className="text-muted-foreground text-sm">
-                        Manage what users can access in the system.
+                        Configure granular feature access and discount limits for store staff.
                     </p>
                 </div>
             </div>
 
-            <Card className="overflow-hidden">
-                <CardHeader className="flex-row items-center justify-between space-y-0 pb-2 border-b bg-muted/50">
-                    <div>
-                        <CardTitle className="text-base font-semibold">User Permissions</CardTitle>
-                        <CardDescription className="text-xs">Control operations per user.</CardDescription>
-                    </div>
-                </CardHeader>
-                <CardContent className="p-0 border-t-0">
-                    <div className="overflow-x-auto">
-                        <Table>
-                            <TableHeader>
-                                <TableRow className="bg-muted/50">
-                                    <TableHead className="min-w-[180px] font-medium sticky left-0 bg-muted/50 shadow-sm z-10">User / Role</TableHead>
-                                    {permissionColumns.map((col) => (
-                                        <TableHead key={col.key} className="text-center font-medium min-w-[90px] text-xs px-2">
-                                            {col.label}
-                                        </TableHead>
-                                    ))}
-                                    <TableHead className="text-right font-medium min-w-[140px]">Max Discount (%)</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {loading ? (
-                                    <TableRow>
-                                        <TableCell colSpan={permissionColumns.length + 2} className="h-24 text-center text-muted-foreground">
-                                            Loading users...
-                                        </TableCell>
-                                    </TableRow>
-                                ) : sortedUsers.map((user) => (
-                                    <TableRow key={user.id} className="hover:bg-muted/20 transition-colors">
-                                        <TableCell className="font-medium sticky left-0 bg-background z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
-                                            <div className="text-sm">{user.name}</div>
-                                            <Badge variant={user.role === 'ADMIN' ? "default" : "secondary"} className="mt-1 font-normal text-[10px]">
-                                                {user.role}
-                                            </Badge>
-                                        </TableCell>
-                                        {permissionColumns.map((column) => (
-                                            <TableCell key={column.key} className="text-center">
-                                                {user.role === 'ADMIN' ? (
-                                                    <div className="flex justify-center text-muted-foreground/30">
-                                                        <ShieldCheck className="h-4 w-4" />
-                                                    </div>
-                                                ) : (
-                                                    <div className="flex justify-center">
-                                                        <button
-                                                            onClick={() => void togglePermission(user, column.key)}
-                                                            className={cn(
-                                                                "relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50",
-                                                                user[column.key] ? "bg-primary" : "bg-input"
-                                                            )}
-                                                        >
-                                                            <span className={cn(
-                                                                "pointer-events-none block h-4 w-4 rounded-full bg-background shadow-lg ring-0 transition-transform",
-                                                                user[column.key] ? "translate-x-4" : "translate-x-0"
-                                                            )} />
-                                                        </button>
-                                                    </div>
-                                                )}
-                                            </TableCell>
-                                        ))}
-                                        <TableCell className="text-right">
-                                            {user.role === 'ADMIN' ? (
-                                                <span className="text-xs text-muted-foreground font-medium">Unlimited</span>
-                                            ) : (
-                                                <div className="flex justify-end relative items-center max-w-[100px] ml-auto">
-                                                    <input 
-                                                        type="number"
-                                                        defaultValue={user.maxDiscount}
-                                                        onBlur={(e) => void saveDiscount(user, Number(e.target.value) || 0)}
-                                                        className="w-full h-8 rounded-md border border-input bg-background pl-2 pr-6 text-sm tabular-nums text-right focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                                    />
-                                                    <div className="absolute right-2 text-muted-foreground pointer-events-none">
-                                                        <Percent className="h-3 w-3" />
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </TableCell>
-                                    </TableRow>
-                                ))}
-                            </TableBody>
-                        </Table>
-                    </div>
-                </CardContent>
-            </Card>
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                {/* Left Column: User Selector */}
+                <div className="lg:col-span-4 space-y-4">
+                    <Card className="rounded-2xl">
+                        <CardHeader>
+                            <CardTitle className="text-base font-bold flex items-center gap-2">
+                                <UserIcon className="w-4 h-4 text-primary" />
+                                Store Staff Accounts
+                            </CardTitle>
+                            <CardDescription>Select a staff member to configure permissions</CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-2 p-3">
+                            {users.map((u) => {
+                                const isSelected = u.id === selectedUser?.id;
+                                const isAdmin = u.role === 'ADMIN';
 
-            <div className="rounded-md border bg-card p-4 flex items-start gap-4 text-sm text-muted-foreground">
-                 <ShieldAlert className="h-5 w-5 mt-0.5 text-accent-foreground shrink-0" />
-                 <div>
-                     <p className="font-semibold text-foreground">Note on Permissions</p>
-                     <p className="mt-1">Permissions update in real time. Users might need to refresh the page to see changes.</p>
-                 </div>
+                                return (
+                                    <button
+                                        key={u.id}
+                                        onClick={() => setSelectedUserId(u.id)}
+                                        className={cn(
+                                            "w-full flex items-center justify-between p-3.5 rounded-xl border text-left transition-all",
+                                            isSelected
+                                                ? "border-primary bg-primary/5 dark:bg-primary/10 shadow-sm"
+                                                : "border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                                        )}
+                                    >
+                                        <div className="space-y-0.5">
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-semibold text-sm">{u.name}</span>
+                                                {isAdmin ? (
+                                                    <Badge variant="default" className="text-[10px] uppercase font-bold py-0 h-4">
+                                                        Admin
+                                                    </Badge>
+                                                ) : (
+                                                    <Badge variant="secondary" className="text-[10px] uppercase font-bold py-0 h-4">
+                                                        Cashier
+                                                    </Badge>
+                                                )}
+                                            </div>
+                                            <p className="text-xs text-muted-foreground font-mono">@{u.username}</p>
+                                        </div>
+
+                                        {isSelected && (
+                                            <div className="w-2 h-2 rounded-full bg-primary" />
+                                        )}
+                                    </button>
+                                );
+                            })}
+                        </CardContent>
+                    </Card>
+
+                    {/* Role Templates Card */}
+                    {selectedUser && selectedUser.role !== 'ADMIN' && (
+                        <Card className="rounded-2xl bg-slate-50/50 dark:bg-slate-900/50">
+                            <CardHeader className="pb-3">
+                                <CardTitle className="text-sm font-bold flex items-center gap-2">
+                                    <Sparkles className="w-4 h-4 text-amber-500" />
+                                    One-Click Role Templates
+                                </CardTitle>
+                                <CardDescription className="text-xs">Quickly configure standard permission sets</CardDescription>
+                            </CardHeader>
+                            <CardContent className="grid grid-cols-2 gap-2">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="text-xs font-semibold justify-start h-9"
+                                    disabled={saving}
+                                    onClick={() => void applyPreset('CASHIER')}
+                                >
+                                    Cashier
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="text-xs font-semibold justify-start h-9"
+                                    disabled={saving}
+                                    onClick={() => void applyPreset('SENIOR_CASHIER')}
+                                >
+                                    Senior Cashier
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="text-xs font-semibold justify-start h-9"
+                                    disabled={saving}
+                                    onClick={() => void applyPreset('SUPERVISOR')}
+                                >
+                                    Supervisor
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="text-xs font-semibold justify-start h-9"
+                                    disabled={saving}
+                                    onClick={() => void applyPreset('MANAGER')}
+                                >
+                                    Manager
+                                </Button>
+                            </CardContent>
+                        </Card>
+                    )}
+                </div>
+
+                {/* Right Column: Permission Matrix */}
+                <div className="lg:col-span-8 space-y-6">
+                    {selectedUser?.role === 'ADMIN' ? (
+                        <Card className="rounded-2xl p-6 text-center border-dashed">
+                            <div className="flex flex-col items-center justify-center py-8 space-y-3">
+                                <div className="p-3 bg-primary/10 rounded-full text-primary">
+                                    <ShieldCheck className="w-8 h-8" />
+                                </div>
+                                <h3 className="font-bold text-lg">Full Store Administrator Access</h3>
+                                <p className="text-sm text-muted-foreground max-w-md">
+                                    <strong>{selectedUser.name}</strong> has full, unrestricted access to all POS, financial, stock, user, and administrative functions.
+                                </p>
+                            </div>
+                        </Card>
+                    ) : selectedUser ? (
+                        <div className="space-y-6">
+                            {/* Max Discount Card */}
+                            <Card className="rounded-2xl">
+                                <CardHeader className="pb-3">
+                                    <div className="flex items-center justify-between">
+                                        <div className="space-y-1">
+                                            <CardTitle className="text-base font-bold flex items-center gap-2">
+                                                <Percent className="w-4 h-4 text-emerald-600" />
+                                                Maximum Discount Limit
+                                            </CardTitle>
+                                            <CardDescription className="text-xs">
+                                                Maximum percentage discount this cashier can grant on a bill without supervisor approval.
+                                            </CardDescription>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <Input
+                                                type="number"
+                                                min={0}
+                                                max={100}
+                                                value={selectedUser.maxDiscount ?? 0}
+                                                onChange={(e) => void handleMaxDiscountChange(Number(e.target.value))}
+                                                className="w-20 text-center font-bold text-base h-9"
+                                            />
+                                            <span className="text-sm font-semibold">%</span>
+                                        </div>
+                                    </div>
+                                </CardHeader>
+                            </Card>
+
+                            {/* Categorized Permission Groups */}
+                            {PERMISSION_GROUPS.map((group) => {
+                                const Icon = group.icon;
+
+                                return (
+                                    <Card key={group.title} className="rounded-2xl">
+                                        <CardHeader className="pb-3">
+                                            <CardTitle className="text-base font-bold flex items-center gap-2">
+                                                <Icon className="w-4 h-4 text-primary" />
+                                                {group.title}
+                                            </CardTitle>
+                                            <CardDescription className="text-xs">{group.description}</CardDescription>
+                                        </CardHeader>
+                                        <CardContent className="space-y-3 divide-y divide-slate-100 dark:divide-slate-800">
+                                            {group.permissions.map((perm) => {
+                                                const isEnabled = Boolean(selectedUser[perm.key]);
+
+                                                return (
+                                                    <div
+                                                        key={String(perm.key)}
+                                                        className="flex items-center justify-between pt-3 first:pt-0"
+                                                    >
+                                                        <div className="space-y-0.5 pr-4">
+                                                            <label className="text-sm font-semibold cursor-pointer" onClick={() => void togglePermission(perm.key)}>
+                                                                {perm.label}
+                                                            </label>
+                                                            <p className="text-xs text-muted-foreground">{perm.desc}</p>
+                                                        </div>
+                                                        <Switch
+                                                            checked={isEnabled}
+                                                            onCheckedChange={() => void togglePermission(perm.key)}
+                                                        />
+                                                    </div>
+                                                );
+                                            })}
+                                        </CardContent>
+                                    </Card>
+                                );
+                            })}
+                        </div>
+                    ) : null}
+                </div>
             </div>
         </div>
     );
