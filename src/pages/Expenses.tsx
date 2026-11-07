@@ -312,14 +312,14 @@ export const Expenses: React.FC = () => {
 
                     <div className="flex flex-wrap items-center gap-2">
                         <button
-                            className="btn btn-secondary btn-sm text-xs"
+                            className="btn btn-secondary px-4 py-2 text-sm shadow-xs"
                             disabled={exporting || loading}
                             onClick={exportCsv}
                         >
                             {exporting ? 'Exporting…' : 'Export CSV'}
                         </button>
                         <button
-                            className="btn btn-primary btn-sm text-xs shadow-sm"
+                            className="btn btn-primary px-4 py-2 text-sm shadow-sm"
                             disabled={busy || !!pending || addOpen || !!action || !!detail}
                             onClick={() => {
                                 setForm(empty());
@@ -543,7 +543,21 @@ export const Expenses: React.FC = () => {
                             </tr>
                         </thead>
                         <tbody>
-                            {data.items.map((row) => (
+                            {loading && !data.items.length ? (
+                                Array.from({ length: 5 }).map((_, i) => (
+                                    <tr key={i} className="border-t dark:border-gray-700 animate-pulse">
+                                        <td className="p-3"><div className="h-4 w-20 bg-gray-200 dark:bg-gray-700 rounded" /></td>
+                                        <td className="p-3 space-y-1.5">
+                                            <div className="h-4 w-36 bg-gray-200 dark:bg-gray-700 rounded" />
+                                            <div className="h-3 w-24 bg-gray-200 dark:bg-gray-700 rounded" />
+                                        </td>
+                                        <td className="p-3"><div className="h-4 w-20 bg-gray-200 dark:bg-gray-700 rounded" /></td>
+                                        <td className="p-3"><div className="h-4 w-16 bg-gray-200 dark:bg-gray-700 rounded" /></td>
+                                        <td className="p-3"><div className="h-5 w-16 bg-gray-200 dark:bg-gray-700 rounded-full" /></td>
+                                        <td className="p-3"><div className="h-7 w-28 bg-gray-200 dark:bg-gray-700 rounded" /></td>
+                                    </tr>
+                                ))
+                            ) : data.items.map((row) => (
                                 <tr
                                     key={row.id}
                                     className={`border-t dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-dark-bg/50 transition-colors ${
@@ -621,11 +635,11 @@ export const Expenses: React.FC = () => {
                         </tbody>
                     </table>
 
-                    {!data.items.length && (
+                    {!data.items.length && !loading && (
                         <div className="text-center py-12 text-gray-500 dark:text-gray-400 space-y-2">
                             <IconReceipt className="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto" />
                             <p className="text-sm font-medium">
-                                {loading ? 'Loading expenses…' : 'No expense entries in this date range.'}
+                                No expense entries in this date range.
                             </p>
                         </div>
                     )}

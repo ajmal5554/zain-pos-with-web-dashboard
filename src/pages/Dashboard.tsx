@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
     TrendingUp,
     TrendingDown,
@@ -7,13 +8,13 @@ import {
     AlertTriangle,
     Package,
     Calendar,
-    Cloud,
-    RefreshCw,
     Sparkles
 } from 'lucide-react';
+import { useAuthStore } from '../store/authStore';
 import { reportsService } from '../services/reports.service';
 import { db } from '../lib/db';
 import { Loading } from '../components/ui/Loading';
+import { DashboardSkeleton } from '../components/dashboard/DashboardSkeleton';
 import { formatIndianCurrency, calculatePercentageChange } from '../lib/format';
 import {
     LineChart,
@@ -25,7 +26,8 @@ import {
     ResponsiveContainer,
     Legend,
 } from 'recharts';
-import { startOfMonth, endOfMonth, eachDayOfInterval, format as formatDate } from 'date-fns';
+import { startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, format as formatDate } from 'date-fns';
+import { getStoredPaymentMethods, saveStoredPaymentMethods } from '../lib/paymentMethods';
 
 type FilterPeriod = 'today' | 'week' | 'month' | 'year' | 'all';
 type DashboardStat = {
@@ -51,6 +53,7 @@ const parseDateInputValue = (value: string): Date => {
 };
 
 export const Dashboard: React.FC = () => {
+    const { user } = useAuthStore();
     const [loading, setLoading] = useState(true);
     const [todayStats, setTodayStats] = useState<any>(null);
     const [yesterdayStats, setYesterdayStats] = useState<any>(null);
@@ -61,8 +64,18 @@ export const Dashboard: React.FC = () => {
     const [filterPeriod, setFilterPeriod] = useState<FilterPeriod>('today');
     const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
     const [selectedDate, setSelectedDate] = useState(formatDateInputValue(new Date()));
-    const [syncing, setSyncing] = useState(false);
-    const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
+    const [paymentMethods, setPaymentMethods] = useState<Record<string, boolean>>(getStoredPaymentMethods);
+
+    useEffect(() => {
+        const handlePmUpdate = (e: any) => {
+            if (e?.detail) {
+                const merged = saveStoredPaymentMethods(e.detail);
+                setPaymentMethods(merged);
+            }
+        };
+        window.addEventListener('payment-methods-updated', handlePmUpdate);
+        return () => window.removeEventListener('payment-methods-updated', handlePmUpdate);
+    }, []);
 
     useEffect(() => {
         loadDashboardData();
@@ -76,11 +89,14 @@ export const Dashboard: React.FC = () => {
         try {
             setLoading(true);
             const targetDate = parseDateInputValue(selectedDate);
-            const [dailyReport, yesterdayReport, lowStock, topSelling] = await Promise.all([
+            const [dailyReport, yesterdayReport, lowStock, topSelling, pmResult] = await Promise.all([
                 reportsService.getDailySalesReport(targetDate),
                 reportsService.getYesterdaySalesReport(),
                 reportsService.getLowStockItems(),
                 reportsService.getTopSellingProducts(5),
+                window.electronAPI?.settings?.get
+                    ? window.electronAPI.settings.get({ key: 'PAYMENT_METHODS' })
+                    : Promise.resolve(null),
             ]);
 
             setTodayStats(dailyReport);
@@ -88,24 +104,49 @@ export const Dashboard: React.FC = () => {
             setLowStockItems(lowStock);
             setTopProducts(topSelling);
 
-            // Get all-time stats (Optimized)
-            const [salesAgg, itemsAgg] = await Promise.all([
-                db.sales.aggregate({
-                    where: { status: 'COMPLETED' },
-                    _sum: { grandTotal: true },
-                    _count: { id: true }
-                }),
-                db.saleItems.aggregate({
-                    where: { sale: { status: 'COMPLETED' } },
-                    _sum: { quantity: true }
-                })
-            ]);
+            if (pmResult?.success && pmResult.data) {
+                try {
+                    const parsed = JSON.parse(pmResult.data as string);
+                    const merged = saveStoredPaymentMethods(parsed);
+                    setPaymentMethods(merged);
+                } catch (e) {
+                    console.error('Failed to parse PAYMENT_METHODS setting:', e);
+                }
+            } else {
+                try {
+                    const dbPm = await db.settings.findUnique({ where: { key: 'PAYMENT_METHODS' } });
+                    if (dbPm?.value) {
+                        const parsed = JSON.parse(dbPm.value);
+                        const merged = saveStoredPaymentMethods(parsed);
+                        setPaymentMethods(merged);
+                    }
+                } catch (e) {
+                    console.error('Failed to load fallback payment methods:', e);
+                }
+            }
 
-            setAllTimeStats({
-                totalRevenue: salesAgg._sum.grandTotal || 0,
-                totalItems: itemsAgg._sum.quantity || 0,
-                totalSales: salesAgg._count.id || 0,
-            });
+            // Get all-time stats (Optimized) - Only query for Admin
+            if (user?.role === 'ADMIN') {
+                const [salesAgg, itemsAgg] = await Promise.all([
+                    db.sales.aggregate({
+                        where: { status: 'COMPLETED' },
+                        _sum: { grandTotal: true },
+                        _count: { id: true }
+                    }),
+                    db.saleItems.aggregate({
+                        where: { sale: { status: 'COMPLETED' } },
+                        _sum: { quantity: true }
+                    })
+                ]);
+
+                setAllTimeStats({
+                    totalRevenue: salesAgg._sum?.grandTotal || 0,
+                    totalItems: itemsAgg._sum?.quantity || 0,
+                    totalSales: salesAgg._count?.id || 0,
+                });
+            } else {
+                setAllTimeStats(null);
+            }
         } catch (error) {
             console.error('Failed to load dashboard data:', error);
         } finally {
@@ -238,40 +279,8 @@ export const Dashboard: React.FC = () => {
         }
     };
 
-    const handleSync = async () => {
-        if (syncStatus !== 'idle') return; // Prevent multiple syncs
-
-        try {
-            setSyncStatus('syncing');
-            setSyncing(true); // Keep legacy syncing state for existing UI
-
-            const result = await db.syncNow();
-
-            if (result.success) {
-                setSyncStatus('success');
-            } else {
-                setSyncStatus('error');
-                console.error('Sync failed:', result.error);
-            }
-        } catch (error) {
-            setSyncStatus('error');
-            console.error('Manual sync failed:', error);
-        } finally {
-            setSyncing(false);
-
-            // Reset status after 3 seconds
-            setTimeout(() => {
-                setSyncStatus('idle');
-            }, 3000);
-        }
-    };
-
     if (loading) {
-        return (
-            <div className="flex items-center justify-center h-full">
-                <Loading size="lg" text="Loading dashboard..." />
-            </div>
-        );
+        return <DashboardSkeleton />;
     }
 
     // Calculate comparisons
@@ -288,6 +297,56 @@ export const Dashboard: React.FC = () => {
         yesterdayStats?.totalTax || 0
     );
 
+    const isSelectedDateToday = isSameDay(parseDateInputValue(selectedDate), new Date());
+
+    const greeting = (() => {
+        if (!isSelectedDateToday) {
+            return `Store Records · ${formatDate(parseDateInputValue(selectedDate), 'dd MMM yyyy')}`;
+        }
+        const hour = new Date().getHours();
+        const firstName = user?.name ? user.name.split(' ')[0] : 'Zain';
+        if (hour < 12) return `Good morning, ${firstName}! 👋`;
+        if (hour < 17) return `Good afternoon, ${firstName}! 👋`;
+        return `Good evening, ${firstName}! 👋`;
+    })();
+
+    const pulseSubtitle = (() => {
+        if (!isSelectedDateToday) {
+            const bills = todayStats?.numberOfBills || 0;
+            const sales = todayStats?.totalSales || 0;
+            return `Showing historical sales report for ${formatDate(parseDateInputValue(selectedDate), 'dd MMMM yyyy')} · ${bills} ${bills === 1 ? 'bill' : 'bills'} (${formatIndianCurrency(sales)}).`;
+        }
+
+        const bills = todayStats?.numberOfBills || 0;
+        const sales = todayStats?.totalSales || 0;
+        const hour = new Date().getHours();
+
+        // Start of day / No sales yet
+        if (bills === 0) {
+            return 'Ready for the day! The register is open and ready for the first customer bill.';
+        }
+
+        // Evening / closing time (> 7 PM)
+        if (hour >= 19) {
+            return `Great shift! ${bills} ${bills === 1 ? 'bill' : 'bills'} processed today (${formatIndianCurrency(sales)}) · Ready for day-end reconciliation.`;
+        }
+
+        // Sales ahead of yesterday
+        if (salesChange?.isIncrease && salesChange?.percentage && Math.abs(salesChange.percentage) >= 5) {
+            return `${bills} ${bills === 1 ? 'bill' : 'bills'} completed today (${formatIndianCurrency(sales)}) · Ahead of yesterday's pace!`;
+        }
+
+        // Top selling product highlight
+        if (topProducts && topProducts.length > 0 && topProducts[0]?.name) {
+            return `${bills} ${bills === 1 ? 'bill' : 'bills'} completed today (${formatIndianCurrency(sales)}) · Top seller: ${topProducts[0].name}.`;
+        }
+
+        // General active store momentum
+        return `${bills} ${bills === 1 ? 'bill' : 'bills'} completed today (${formatIndianCurrency(sales)}) · Store active and running smoothly.`;
+    })();
+
+    const isAdmin = user?.role === 'ADMIN';
+
     const stats: DashboardStat[] = [
         {
             label: "Today's Sales",
@@ -297,13 +356,13 @@ export const Dashboard: React.FC = () => {
             change: salesChange,
             subtext: 'Total revenue',
         },
-        {
+        ...(isAdmin ? [{
             label: 'All-Time Revenue',
             value: formatIndianCurrency(allTimeStats?.totalRevenue || 0),
             icon: TrendingUp,
             color: 'bg-indigo-500',
             subtext: `${allTimeStats?.totalSales || 0} invoices`,
-        },
+        }] : []),
         {
             label: 'Total Bills (Today)',
             value: todayStats?.numberOfBills || 0,
@@ -334,44 +393,33 @@ export const Dashboard: React.FC = () => {
 
     return (
         <div className="space-y-6">
-            {/* Welcome */}
-            <div className="card gradient-primary text-white flex items-center justify-between">
-                <div>
-                    <h1 className="text-2xl font-bold mb-2">Welcome to Zain POS</h1>
-                    <p className="text-white/90">
-                        Here's what's happening with your store today.
+            {/* Store Pulse Banner */}
+            <div className="card gradient-primary text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 sm:p-6 rounded-2xl shadow-sm">
+                <div className="space-y-1">
+                    <h1 className="text-xl sm:text-2xl font-bold tracking-tight">
+                        {greeting}
+                    </h1>
+                    <p className="text-white/90 text-sm font-normal">
+                        {pulseSubtitle}
                     </p>
                 </div>
-                <button
-                    onClick={handleSync}
-                    disabled={syncStatus === 'syncing'}
-                    className={`
-                        flex items-center gap-2 backdrop-blur-sm px-4 py-3 rounded-xl border transition-all active:scale-95 disabled:opacity-50
-                        ${syncStatus === 'success' ? 'bg-green-500/30 border-green-400/50 text-green-100' :
-                          syncStatus === 'error' ? 'bg-red-500/30 border-red-400/50 text-red-100' :
-                          'bg-white/20 hover:bg-white/30 border-white/30 text-white'}
-                    `}
-                >
-                    {syncing || syncStatus === 'syncing' ? (
-                        <RefreshCw className="w-5 h-5 animate-spin" />
-                    ) : syncStatus === 'success' ? (
-                        <Cloud className="w-5 h-5 text-green-200" />
-                    ) : syncStatus === 'error' ? (
-                        <Cloud className="w-5 h-5 text-red-200" />
-                    ) : (
-                        <Cloud className="w-5 h-5" />
-                    )}
-                    <span className="font-semibold">
-                        {syncing || syncStatus === 'syncing' ? 'Syncing...' :
-                         syncStatus === 'success' ? 'Synced!' :
-                         syncStatus === 'error' ? 'Sync Failed' :
-                         'Sync Cloud'}
-                    </span>
-                </button>
+                <div className="flex items-center gap-3 bg-white/15 backdrop-blur-sm border border-white/20 px-4 py-2.5 rounded-xl text-white shadow-sm flex-shrink-0 self-start sm:self-auto">
+                    <div className="p-2 bg-white/10 rounded-lg">
+                        <Calendar className="w-5 h-5 text-blue-100" />
+                    </div>
+                    <div className="text-left sm:text-right">
+                        <p className="text-xs text-blue-100 font-medium">
+                            {formatDate(new Date(), 'EEEE')}
+                        </p>
+                        <p className="text-sm font-bold tracking-wide">
+                            {formatDate(new Date(), 'dd MMMM yyyy')}
+                        </p>
+                    </div>
+                </div>
             </div>
 
             {/* Stats Grid */}
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
+            <div className={`grid grid-cols-2 ${isAdmin ? 'md:grid-cols-3 xl:grid-cols-5' : 'md:grid-cols-2 xl:grid-cols-4'} gap-3`}>
                 {stats.map((stat, index) => {
                     const Icon = stat.icon;
                     return (
@@ -470,12 +518,14 @@ export const Dashboard: React.FC = () => {
                             </select>
                         )}
 
-                        <button
-                            onClick={() => setFilterPeriod('all')}
-                            className={`px-3 py-1 text-sm rounded transition-colors ${filterPeriod === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600'}`}
-                        >
-                            All Time
-                        </button>
+                        {isAdmin && (
+                            <button
+                                onClick={() => setFilterPeriod('all')}
+                                className={`px-3 py-1 text-sm rounded transition-colors ${filterPeriod === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600'}`}
+                            >
+                                All Time
+                            </button>
+                        )}
 
                         <div className="flex items-center gap-2 border-l pl-2 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg px-2 border border-gray-200 dark:border-gray-600 focus-within:ring-1 focus-within:ring-blue-500">
                             <Calendar
@@ -563,25 +613,32 @@ export const Dashboard: React.FC = () => {
             {/* Charts and Lists */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Top Selling Products */}
-                <div className="card">
-                    <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                        <Package className="w-5 h-5" />
-                        Top Selling Products
-                    </h3>
+                <div className="card flex flex-col h-full">
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold flex items-center gap-2">
+                            <Package className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+                            Top Selling Products
+                        </h3>
+                        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+                            Top 5
+                        </span>
+                    </div>
                     {topProducts.length > 0 ? (
-                        <div className="space-y-3">
+                        <div className="space-y-2.5 flex-1">
                             {topProducts.map((product, index) => (
                                 <div
                                     key={index}
-                                    className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg"
+                                    className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg hover:bg-gray-100/70 dark:hover:bg-gray-750/70 transition-colors"
                                 >
-                                    <div>
-                                        <p className="font-medium">{product.productName}</p>
-                                        <p className="text-sm text-gray-600 dark:text-gray-400">
+                                    <div className="min-w-0 pr-2">
+                                        <p className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate">
+                                            {product.productName}
+                                        </p>
+                                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                                             {product.totalQuantity} units sold
                                         </p>
                                     </div>
-                                    <div className="text-right">
+                                    <div className="text-right flex-shrink-0">
                                         <p className="font-semibold text-green-600 dark:text-green-400">
                                             {formatIndianCurrency(product.totalRevenue)}
                                         </p>
@@ -595,142 +652,205 @@ export const Dashboard: React.FC = () => {
                 </div>
 
                 {/* Low Stock Alerts */}
-                <div className="card">
-                    <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                        <AlertTriangle className="w-5 h-5 text-orange-500" />
-                        Low Stock Alerts
-                    </h3>
+                <div className="card flex flex-col h-full">
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold flex items-center gap-2">
+                            <AlertTriangle className="w-5 h-5 text-amber-500" />
+                            Low Stock Alerts
+                            {lowStockItems.length > 0 && (
+                                <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                                    {lowStockItems.length}
+                                </span>
+                            )}
+                        </h3>
+                        <Link
+                            to="/stock"
+                            className="text-xs font-semibold text-primary-600 hover:text-primary-700 dark:text-primary-400 hover:underline flex items-center gap-1"
+                        >
+                            View Stock
+                            <span aria-hidden="true">&rarr;</span>
+                        </Link>
+                    </div>
                     {lowStockItems.length > 0 ? (
-                        <div className="space-y-3 max-h-80 overflow-y-auto">
-                            {lowStockItems.map((item: any, index) => (
-                                <div
-                                    key={index}
-                                    className="flex items-center justify-between p-3 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg"
-                                >
-                                    <div>
-                                        <p className="font-medium">{item.product.name}</p>
-                                        <p className="text-sm text-gray-600 dark:text-gray-400">
-                                            {item.size && `Size: ${item.size}`}
-                                            {item.color && ` | Color: ${item.color}`}
-                                        </p>
-                                    </div>
-                                    <div className="text-right">
-                                        <p className="font-semibold text-orange-600 dark:text-orange-400">
-                                            {item.stock} left
-                                        </p>
-                                        <p className="text-xs text-gray-500">Min: {item.minStock}</p>
-                                    </div>
-                                </div>
-                            ))}
+                        <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1 flex-1">
+                            {[...lowStockItems]
+                                .sort((a, b) => {
+                                    if (a.stock <= 0 && b.stock > 0) return -1;
+                                    if (b.stock <= 0 && a.stock > 0) return 1;
+                                    return a.stock - b.stock;
+                                })
+                                .map((item: any, index) => {
+                                    const isOversold = item.stock < 0;
+                                    const isOutOfStock = item.stock === 0;
+                                    const hasSpecificSize = item.size && item.size !== 'Standard';
+                                    const hasColor = Boolean(item.color);
+
+                                    return (
+                                        <div
+                                            key={item.id || index}
+                                            className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100/70 dark:hover:bg-gray-750/70 rounded-lg transition-colors border border-transparent hover:border-gray-200 dark:hover:border-gray-750"
+                                        >
+                                            <div className="min-w-0 pr-3">
+                                                <p className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate">
+                                                    {item.product?.name || item.name || 'Product'}
+                                                </p>
+                                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                                                    {hasSpecificSize && <span>Size: {item.size}</span>}
+                                                    {hasSpecificSize && hasColor && <span> &bull; </span>}
+                                                    {hasColor && <span>Color: {item.color}</span>}
+                                                    {(hasSpecificSize || hasColor) ? ` (Min: ${item.minStock || 5})` : `Min required: ${item.minStock || 5}`}
+                                                </p>
+                                            </div>
+                                            <div className="text-right flex-shrink-0">
+                                                {isOversold ? (
+                                                    <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-200 dark:border-rose-800/60">
+                                                        Oversold ({item.stock})
+                                                    </span>
+                                                ) : isOutOfStock ? (
+                                                    <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-200 dark:border-rose-800/60">
+                                                        Out of stock
+                                                    </span>
+                                                ) : (
+                                                    <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60">
+                                                        {item.stock} left
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
                         </div>
                     ) : (
-                        <p className="text-gray-500 text-center py-8">
-                            All products are well stocked
-                        </p>
+                        <div className="flex-1 flex flex-col items-center justify-center py-8 text-center">
+                            <Package className="w-10 h-10 text-emerald-400 mb-2 stroke-[1.5]" />
+                            <p className="text-sm font-medium text-gray-900 dark:text-gray-100">All products are well stocked</p>
+                            <p className="text-xs text-gray-400">No items currently below minimum stock threshold</p>
+                        </div>
                     )}
                 </div>
             </div>
 
             {/* Separated Transaction Audit by Payment Mode */}
-            {todayStats?.sales && (
-                <div className="space-y-6 mt-8 min-h-0">
-                    <div className="flex items-center justify-between border-b pb-2 dark:border-gray-700">
-                        <h3 className="text-xl font-black text-gray-900 dark:text-white uppercase tracking-tight">Audit by Payment Mode</h3>
-                        <div className="text-sm font-bold text-primary-600 bg-primary-50 dark:bg-primary-900/20 px-3 py-1 rounded-full border border-primary-200">
-                            Date: {formatDate(parseDateInputValue(selectedDate), 'dd MMM yyyy')}
-                        </div>
-                    </div>
+            {todayStats?.sales && (() => {
+                const availableModes = (['CASH', 'UPI', 'CARD'] as const).filter((mode) => {
+                    const isEnabled = paymentMethods[mode] !== false;
+                    if (isEnabled) return true;
+                    // If disabled in settings, only show if there are actual transactions in that mode for the selected date
+                    return (todayStats.sales || []).some((s: any) => {
+                        if (s.status !== 'COMPLETED') return false;
+                        if (s.paymentMethod === 'SPLIT' && s.payments && s.payments.length > 0) {
+                            return s.payments.some((p: any) => (p.paymentMode || '').toUpperCase() === mode && Number(p.amount || 0) > 0);
+                        }
+                        return (s.paymentMethod || 'CASH').toUpperCase() === mode && Number(s.grandTotal || 0) > 0;
+                    });
+                });
 
-                    <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 lg:gap-6 auto-rows-fr">
-                        {['CASH', 'UPI', 'CARD'].map((mode) => {
-                            const modeEntries = (todayStats.sales || [])
-                                .filter((s: any) => s.status === 'COMPLETED')
-                                .flatMap((s: any) => {
-                                    if (s.paymentMethod === 'SPLIT' && s.payments && s.payments.length > 0) {
-                                        return s.payments
-                                            .filter((p: any) => (p.paymentMode || '').toUpperCase() === mode)
-                                            .map((p: any) => ({
-                                                id: `${s.id}-${p.id || mode}`,
+                const gridColsClass = availableModes.length === 1
+                    ? 'grid-cols-1 max-w-lg mx-auto'
+                    : availableModes.length === 2
+                        ? 'grid-cols-1 md:grid-cols-2'
+                        : 'grid-cols-1 lg:grid-cols-2 xl:grid-cols-3';
+
+                return (
+                    <div className="space-y-6 mt-8 min-h-0">
+                        <div className="flex items-center justify-between border-b pb-2 dark:border-gray-700">
+                            <h3 className="text-xl font-black text-gray-900 dark:text-white uppercase tracking-tight">Audit by Payment Mode</h3>
+                            <div className="text-sm font-bold text-primary-600 bg-primary-50 dark:bg-primary-900/20 px-3 py-1 rounded-full border border-primary-200">
+                                Date: {formatDate(parseDateInputValue(selectedDate), 'dd MMM yyyy')}
+                            </div>
+                        </div>
+
+                        <div className={`grid ${gridColsClass} gap-4 lg:gap-6 auto-rows-fr`}>
+                            {availableModes.map((mode) => {
+                                const modeEntries = (todayStats.sales || [])
+                                    .filter((s: any) => s.status === 'COMPLETED')
+                                    .flatMap((s: any) => {
+                                        if (s.paymentMethod === 'SPLIT' && s.payments && s.payments.length > 0) {
+                                            return s.payments
+                                                .filter((p: any) => (p.paymentMode || '').toUpperCase() === mode)
+                                                .map((p: any) => ({
+                                                    id: `${s.id}-${p.id || mode}`,
+                                                    billNo: s.billNo,
+                                                    createdAt: s.createdAt,
+                                                    amount: Number(p.amount || 0),
+                                                    isSplit: true,
+                                                    originalTotal: s.grandTotal
+                                                }));
+                                        } else if ((s.paymentMethod || 'CASH').toUpperCase() === mode) {
+                                            return [{
+                                                id: s.id,
                                                 billNo: s.billNo,
                                                 createdAt: s.createdAt,
-                                                amount: Number(p.amount || 0),
-                                                isSplit: true,
+                                                amount: Number(s.grandTotal || 0),
+                                                isSplit: false,
                                                 originalTotal: s.grandTotal
-                                            }));
-                                    } else if ((s.paymentMethod || 'CASH').toUpperCase() === mode) {
-                                        return [{
-                                            id: s.id,
-                                            billNo: s.billNo,
-                                            createdAt: s.createdAt,
-                                            amount: Number(s.grandTotal || 0),
-                                            isSplit: false,
-                                            originalTotal: s.grandTotal
-                                        }];
-                                    }
-                                    return [];
-                                });
-                            const modeTotal = modeEntries.reduce((sum: number, tx: any) => sum + tx.amount, 0);
+                                            }];
+                                        }
+                                        return [];
+                                    });
+                                const modeTotal = modeEntries.reduce((sum: number, tx: any) => sum + tx.amount, 0);
 
-                            return (
-                                <div key={mode} className="flex flex-col h-full overflow-hidden rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-dark-card shadow-sm">
-                                    <div className={`p-4 flex justify-between items-center ${mode === 'CASH' ? 'bg-emerald-50 dark:bg-emerald-900/10 text-emerald-700' :
-                                        mode === 'UPI' ? 'bg-sky-50 dark:bg-sky-900/10 text-sky-700' :
-                                            'bg-violet-50 dark:bg-violet-900/10 text-violet-700'
-                                        }`}>
-                                        <div className="flex items-center gap-2">
-                                            <div className={`w-2 h-2 rounded-full ${mode === 'CASH' ? 'bg-emerald-500' :
-                                                mode === 'UPI' ? 'bg-sky-500' :
-                                                    'bg-violet-500'
-                                                }`} />
-                                            <span className="font-black text-xs uppercase tracking-widest">{mode} TRANSACTIONS</span>
+                                return (
+                                    <div key={mode} className="flex flex-col h-full overflow-hidden rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-dark-card shadow-sm">
+                                        <div className={`p-4 flex justify-between items-center ${mode === 'CASH' ? 'bg-emerald-50 dark:bg-emerald-900/10 text-emerald-700' :
+                                            mode === 'UPI' ? 'bg-sky-50 dark:bg-sky-900/10 text-sky-700' :
+                                                'bg-violet-50 dark:bg-violet-900/10 text-violet-700'
+                                            }`}>
+                                            <div className="flex items-center gap-2">
+                                                <div className={`w-2 h-2 rounded-full ${mode === 'CASH' ? 'bg-emerald-500' :
+                                                    mode === 'UPI' ? 'bg-sky-500' :
+                                                        'bg-violet-500'
+                                                    }`} />
+                                                <span className="font-black text-xs uppercase tracking-widest">{mode} TRANSACTIONS</span>
+                                            </div>
+                                            <span className="font-black text-lg">{formatIndianCurrency(modeTotal)}</span>
                                         </div>
-                                        <span className="font-black text-lg">{formatIndianCurrency(modeTotal)}</span>
-                                    </div>
 
-                                    <div className="flex-1 overflow-y-auto max-h-[400px] scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600">
-                                        <table className="w-full text-left">
-                                            <thead className="bg-gray-50/80 dark:bg-gray-800/80 sticky top-0 backdrop-blur-sm z-10 border-b border-gray-100 dark:border-gray-700">
-                                                <tr className="text-[10px] font-bold text-gray-400 uppercase">
-                                                    <th className="px-4 py-3">Bill</th>
-                                                    <th className="px-4 py-3">Time</th>
-                                                    <th className="px-4 py-3 text-right">Amount</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-gray-50 dark:divide-gray-800">
-                                                {modeEntries.length > 0 ? (
-                                                    modeEntries.map((tx: any) => (
-                                                        <tr key={tx.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors">
-                                                            <td className="px-4 py-3 font-mono text-gray-900 dark:text-white">
-                                                                <div className="flex items-center gap-1.5">
-                                                                    <span>#{tx.billNo}</span>
-                                                                    {tx.isSplit && (
-                                                                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                                                                            Split
-                                                                        </span>
-                                                                    )}
-                                                                </div>
-                                                            </td>
-                                                            <td className="px-4 py-3 text-xs text-gray-500 text-nowrap">{formatDate(new Date(tx.createdAt), 'hh:mm a')}</td>
-                                                            <td className="px-4 py-3 text-right font-bold text-gray-900 dark:text-white">{formatIndianCurrency(tx.amount)}</td>
-                                                        </tr>
-                                                    ))
-                                                ) : (
-                                                    <tr>
-                                                        <td colSpan={3} className="px-4 py-12 text-center text-xs text-gray-400 italic">No {mode} sales</td>
+                                        <div className="flex-1 overflow-y-auto max-h-[400px] scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600">
+                                            <table className="w-full text-left">
+                                                <thead className="bg-gray-50/80 dark:bg-gray-800/80 sticky top-0 backdrop-blur-sm z-10 border-b border-gray-100 dark:border-gray-700">
+                                                    <tr className="text-[10px] font-bold text-gray-400 uppercase">
+                                                        <th className="px-4 py-3">Bill</th>
+                                                        <th className="px-4 py-3">Time</th>
+                                                        <th className="px-4 py-3 text-right">Amount</th>
                                                     </tr>
-                                                )}
-                                            </tbody>
-                                        </table>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-50 dark:divide-gray-800">
+                                                    {modeEntries.length > 0 ? (
+                                                        modeEntries.map((tx: any) => (
+                                                            <tr key={tx.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors">
+                                                                <td className="px-4 py-3 font-mono text-gray-900 dark:text-white">
+                                                                    <div className="flex items-center gap-1.5">
+                                                                        <span>#{tx.billNo}</span>
+                                                                        {tx.isSplit && (
+                                                                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                                                                                Split
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+                                                                </td>
+                                                                <td className="px-4 py-3 text-xs text-gray-500 text-nowrap">{formatDate(new Date(tx.createdAt), 'hh:mm a')}</td>
+                                                                <td className="px-4 py-3 text-right font-bold text-gray-900 dark:text-white">{formatIndianCurrency(tx.amount)}</td>
+                                                            </tr>
+                                                        ))
+                                                    ) : (
+                                                        <tr>
+                                                            <td colSpan={3} className="px-4 py-12 text-center text-xs text-gray-400 italic">No {mode} sales</td>
+                                                        </tr>
+                                                    )}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        <div className="p-3 bg-gray-50/50 dark:bg-gray-800/50 text-[10px] font-bold text-gray-400 text-center uppercase border-t border-gray-100 dark:border-gray-800">
+                                            Count: {modeEntries.length} Invoices
+                                        </div>
                                     </div>
-                                    <div className="p-3 bg-gray-50/50 dark:bg-gray-800/50 text-[10px] font-bold text-gray-400 text-center uppercase border-t border-gray-100 dark:border-gray-800">
-                                        Count: {modeEntries.length} Invoices
-                                    </div>
-                                </div>
-                            );
-                        })}
+                                );
+                            })}
+                        </div>
                     </div>
-                </div>
-            )}
+                );
+            })()}
         </div>
     );
 };

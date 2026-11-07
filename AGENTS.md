@@ -6,12 +6,13 @@
 - **Alerts / Notifications**: Always use in-app toasts (`src/components/ui/Toast.tsx`).
 - **Modals**: Always use custom styled in-app modals (`src/components/ui/Modal.tsx`).
 
-## 2. Version Info & Changelog Maintenance (Strict Rule)
-- **Automatic Changelog Updates**: Whenever new features, improvements, or bug fixes are implemented, ALWAYS update the Version Info page (`src/components/settings/VersionInfo.tsx`) and bump the version in `package.json` without asking the user for confirmation.
+## 2. Version Info & Changelog Maintenance
+- **Build & Milestone-Based Versioning**: Versions in `package.json` and the Version Info page (`src/components/settings/VersionInfo.tsx`) represent **actual builds / installer packages or major completed milestones**, NOT individual chat edits or small tweaks.
+- **Accumulating Changes**: During ongoing development, features, improvements, and fixes accumulate under the active milestone/build.
 - **Release Entry Standards**:
-  - Add the newest version at the top of `RELEASES` in `src/components/settings/VersionInfo.tsx` with `isCurrent: true` (and remove `isCurrent: true` from the previous release).
-  - Categorize items clearly into `feature`, `improvement`, or `fix`.
-  - Include concise, descriptive titles and clear user-facing descriptions.
+  - Add or update the current version at the top of `RELEASES` in `src/components/settings/VersionInfo.tsx` with `isCurrent: true`.
+  - Group related improvements into clear, user-facing release items categorized into `feature`, `improvement`, or `fix`.
+  - Include concise, descriptive titles and clear user-facing descriptions explaining the benefit to store operations.
 
 ## 3. Sales Forecasting Scope (User Approved)
 - Preserve forecasts for 1–6 upcoming months, restocking directions, seasonal planning alerts, and period/year comparisons.

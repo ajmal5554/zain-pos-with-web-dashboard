@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Edit, Trash2, Key, UserCheck, UserX, Search, Eye, EyeOff } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Plus, Edit, Trash2, Key, UserCheck, UserX, Search, Eye, EyeOff, Shield } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
@@ -32,8 +33,10 @@ const PasswordInput = ({ label, value, onChange, disabled = false }: { label: st
 };
 
 export const Users: React.FC = () => {
+    const navigate = useNavigate();
     const currentUser = useAuthStore((state) => state.user);
     const [users, setUsers] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
 
     // Modals
@@ -64,6 +67,7 @@ export const Users: React.FC = () => {
 
     const loadUsers = async () => {
         if (!currentUser?.id) return;
+        setLoading(true);
         try {
             const res = await window.electronAPI.users.list({ requestingUserId: currentUser?.id });
             if (res.success) {
@@ -71,6 +75,8 @@ export const Users: React.FC = () => {
             }
         } catch (error) {
             console.error(error);
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -194,14 +200,24 @@ export const Users: React.FC = () => {
         <div className="space-y-6">
             <div className="flex justify-between items-center">
                 <h1 className="text-2xl font-bold">User Management</h1>
-                <Button onClick={() => {
-                    setEditingUser(null);
-                    setFormData({ username: '', password: '', name: '', role: 'CASHIER' });
-                    setShowUserModal(true);
-                }}>
-                    <Plus className="w-5 h-5" />
-                    Add User
-                </Button>
+                <div className="flex items-center gap-2">
+                    <Button 
+                        variant="secondary" 
+                        onClick={() => navigate('/permissions')}
+                        className="flex items-center gap-1.5 text-sm font-medium"
+                    >
+                        <Shield className="w-4 h-4 text-indigo-600" />
+                        Staff Permissions
+                    </Button>
+                    <Button onClick={() => {
+                        setEditingUser(null);
+                        setFormData({ username: '', password: '', name: '', role: 'CASHIER' });
+                        setShowUserModal(true);
+                    }}>
+                        <Plus className="w-5 h-5" />
+                        Add User
+                    </Button>
+                </div>
             </div>
 
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow">
@@ -229,7 +245,24 @@ export const Users: React.FC = () => {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                            {filteredUsers.map((user) => (
+                            {loading ? (
+                                Array.from({ length: 3 }).map((_, i) => (
+                                    <tr key={i} className="animate-pulse">
+                                        <td className="px-6 py-4"><div className="h-4 w-28 bg-gray-200 dark:bg-gray-700 rounded" /></td>
+                                        <td className="px-6 py-4"><div className="h-4 w-24 bg-gray-200 dark:bg-gray-700 rounded" /></td>
+                                        <td className="px-6 py-4"><div className="h-5 w-16 bg-gray-200 dark:bg-gray-700 rounded-full" /></td>
+                                        <td className="px-6 py-4"><div className="h-5 w-16 bg-gray-200 dark:bg-gray-700 rounded-full" /></td>
+                                        <td className="px-6 py-4 text-right"><div className="h-6 w-20 bg-gray-200 dark:bg-gray-700 rounded ml-auto" /></td>
+                                    </tr>
+                                ))
+                            ) : filteredUsers.length === 0 ? (
+                                <tr>
+                                    <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
+                                        No users found
+                                    </td>
+                                </tr>
+                            ) : (
+                                filteredUsers.map((user) => (
                                 <tr key={user.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                                     <td className="px-6 py-4 whitespace-nowrap font-medium">{user.name}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-gray-500">{user.username}</td>
@@ -245,6 +278,13 @@ export const Users: React.FC = () => {
                                         </span>
                                     </td>
                                     <td className="px-6 py-4 whitespace-nowrap text-right space-x-2">
+                                        <button
+                                            onClick={() => navigate('/permissions')}
+                                            className="p-1 hover:bg-indigo-50 dark:hover:bg-indigo-900/40 rounded text-indigo-600 dark:text-indigo-400"
+                                            title="Configure Permissions"
+                                        >
+                                            <Shield className="w-4 h-4" />
+                                        </button>
                                         <button
                                             onClick={() => openPasswordModal(user)}
                                             className="p-1 hover:bg-gray-200 rounded text-gray-600"
@@ -268,7 +308,7 @@ export const Users: React.FC = () => {
                                         </button>
                                     </td>
                                 </tr>
-                            ))}
+                            )))}
                         </tbody>
                     </table>
                 </div>

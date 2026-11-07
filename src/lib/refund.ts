@@ -103,7 +103,7 @@ export function validateRefundPayments(payments: Array<{ paymentMode: string; am
     if (!Array.isArray(payments)) throw new Error('Refund payments are required.');
     let sum = 0;
     for (const payment of payments) {
-        if (!['CASH', 'UPI', 'CARD'].includes(payment.paymentMode) || typeof payment.amount !== 'number' || payment.amount <= 0) {
+        if (!['CASH', 'UPI', 'CARD', 'STORE_CREDIT'].includes(payment.paymentMode) || typeof payment.amount !== 'number' || payment.amount <= 0) {
             throw new Error('Choose a valid refund payment mode and positive amount.');
         }
         sum += toPaise(payment.amount);

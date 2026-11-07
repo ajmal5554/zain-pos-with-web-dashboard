@@ -16,7 +16,9 @@ import {
     Globe,
     Info,
     Tag,
-    Wifi
+    Wifi,
+    CreditCard,
+    MessageSquare
 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -25,11 +27,13 @@ import { showToast } from '../components/ui/Toast';
 import { ReceiptDesigner } from '../components/settings/ReceiptDesigner';
 import { LabelDesigner } from '../components/settings/LabelDesigner';
 import { VersionInfo } from '../components/settings/VersionInfo';
+import { MessagingSettings } from '../components/settings/MessagingSettings';
 import { db } from '../lib/db';
 import { useAuthStore } from '../store/authStore';
+import { getStoredPaymentMethods, saveStoredPaymentMethods, PaymentMethodsConfig } from '../lib/paymentMethods';
 import packageInfo from '../../package.json';
 
-type SettingsTab = 'general' | 'sync' | 'print' | 'data' | 'version';
+type SettingsTab = 'general' | 'sync' | 'print' | 'messaging' | 'data' | 'version';
 
 export const Settings: React.FC = () => {
     const { user } = useAuthStore();
@@ -92,16 +96,11 @@ export const Settings: React.FC = () => {
         intervalMinutes: 0
     });
 
-    const [paymentMethods, setPaymentMethods] = useState({
-        CASH: true,
-        UPI: true,
-        CARD: true,
-        SPLIT: true,
-    });
+    const [paymentMethods, setPaymentMethods] = useState<PaymentMethodsConfig>(getStoredPaymentMethods);
 
     const [syncing, setSyncing] = useState(false);
     const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
-    
+
     // Bulk sync state
     const [bulkSyncing, setBulkSyncing] = useState(false);
     const [bulkSyncProgress, setBulkSyncProgress] = useState({ total: 0, synced: 0, percentage: 0, message: '' });
@@ -142,7 +141,13 @@ export const Settings: React.FC = () => {
 
             const pmResult = await window.electronAPI.settings.get({ key: 'PAYMENT_METHODS' });
             if (pmResult?.success && pmResult.data) {
-                setPaymentMethods(prev => ({ ...prev, ...JSON.parse(pmResult.data as string) }));
+                try {
+                    const parsed = JSON.parse(pmResult.data as string);
+                    const merged = saveStoredPaymentMethods(parsed);
+                    setPaymentMethods(merged);
+                } catch (e) {
+                    console.error('Failed to parse PAYMENT_METHODS setting:', e);
+                }
             }
         } catch (error) {
             console.error('Failed to load settings:', error);
@@ -151,6 +156,7 @@ export const Settings: React.FC = () => {
 
     const handleSaveShopSettings = async () => {
         try {
+            saveStoredPaymentMethods(paymentMethods);
             const userId = user?.id || 'default-user';
             const results = await Promise.all([
                 window.electronAPI.settings.set({
@@ -173,6 +179,9 @@ export const Settings: React.FC = () => {
                     shopName: shopSettings.shopName || 'Zain POS',
                     logo: shopSettings.logo || '',
                 }
+            }));
+            window.dispatchEvent(new CustomEvent('payment-methods-updated', {
+                detail: paymentMethods
             }));
             showToast('Shop settings saved!', 'success');
         } catch (error) {
@@ -430,6 +439,7 @@ export const Settings: React.FC = () => {
                         <TabButton id="general" label="Shop Info" icon={Monitor} />
                         <TabButton id="sync" label="Cloud & Backup" icon={Globe} />
                         <TabButton id="print" label="Printer & Design" icon={Printer} />
+                        <TabButton id="messaging" label="Messaging & SMS" icon={MessageSquare} />
                         <TabButton id="data" label="Data Tools" icon={Package} />
                         <TabButton id="version" label="Version Info" icon={Tag} />
                     </div>
@@ -438,67 +448,120 @@ export const Settings: React.FC = () => {
                 {/* Tab Content */}
                 <div className="p-8">
                     {activeTab === 'general' && (
-                        <div className="max-w-2xl space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                            <div>
-                                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                                    <Info className="w-5 h-5 text-blue-500" />
-                                    Business Identity
-                                </h3>
-                                <div className="space-y-6">
-                                    <div className="flex items-center gap-6 p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                                        <div className="relative group">
-                                            <div className="w-24 h-24 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-600 flex items-center justify-center overflow-hidden bg-white dark:bg-gray-900">
-                                                {shopSettings.logo ? (
-                                                    <img src={shopSettings.logo} alt="Logo" className="w-full h-full object-contain" />
-                                                ) : (
-                                                    <Monitor className="w-8 h-8 text-gray-300" />
+                        <div className="w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
+                            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                                {/* Left Column: Business Identity Form (7 cols) */}
+                                <div className="lg:col-span-7 xl:col-span-7 space-y-6">
+                                    <div className="bg-white dark:bg-dark-card rounded-2xl border border-gray-100 dark:border-dark-border p-6 shadow-xs space-y-6">
+                                        <div className="border-b border-gray-100 dark:border-dark-border pb-4">
+                                            <h3 className="text-base font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                                                <Info className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+                                                Business Identity &amp; Contact Details
+                                            </h3>
+                                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                                                These details are automatically printed on thermal receipts, customer invoices, and reports.
+                                            </p>
+                                        </div>
+
+                                        {/* Logo Upload Card */}
+                                        <div className="flex items-center gap-5 p-4 bg-gray-50 dark:bg-gray-800/40 rounded-xl border border-gray-100 dark:border-gray-800">
+                                            <div className="relative group shrink-0">
+                                                <div className="w-20 h-20 rounded-xl border-2 border-dashed border-gray-300 dark:border-gray-600 flex items-center justify-center overflow-hidden bg-white dark:bg-gray-900 shadow-2xs">
+                                                    {shopSettings.logo ? (
+                                                        <img src={shopSettings.logo} alt="Logo" className="w-full h-full object-contain p-1" />
+                                                    ) : (
+                                                        <Monitor className="w-8 h-8 text-gray-300 dark:text-gray-600" />
+                                                    )}
+                                                </div>
+                                                <label className="absolute inset-0 flex items-center justify-center bg-black/60 text-white opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity rounded-xl text-xs font-semibold text-center p-1">
+                                                    Change Logo
+                                                    <input type="file" className="hidden" accept="image/*" onChange={handleLogoChange} />
+                                                </label>
+                                            </div>
+                                            <div className="flex-1 min-w-0 space-y-1">
+                                                <p className="font-bold text-sm text-gray-900 dark:text-white">Official Shop Logo</p>
+                                                <p className="text-xs text-gray-500 dark:text-gray-400">High contrast PNG or JPEG. Prints at the top of digital and physical bills.</p>
+                                                {shopSettings.logo && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setShopSettings({ ...shopSettings, logo: '' })}
+                                                        className="text-xs font-medium text-red-500 hover:text-red-600 hover:underline pt-0.5"
+                                                    >
+                                                        Remove Logo
+                                                    </button>
                                                 )}
                                             </div>
-                                            <label className="absolute inset-0 flex items-center justify-center bg-black/50 text-white opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity rounded-lg text-xs font-bold text-center p-1">
-                                                Change Logo
-                                                <input type="file" className="hidden" accept="image/*" onChange={handleLogoChange} />
-                                            </label>
                                         </div>
-                                        <div className="flex-1 space-y-1">
-                                            <p className="font-bold">Official Shop Logo</p>
-                                            <p className="text-sm text-gray-500">This logo will appear on all your digital and printed receipts.</p>
-                                            {shopSettings.logo && (
-                                                <button onClick={() => setShopSettings({ ...shopSettings, logo: '' })} className="text-xs text-red-500 hover:underline">Remove Logo</button>
-                                            )}
+
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                            <Input
+                                                label="Shop Name"
+                                                value={shopSettings.shopName}
+                                                onChange={(e) => setShopSettings({ ...shopSettings, shopName: e.target.value })}
+                                                placeholder="e.g. ZAIN GENTS PALACE"
+                                            />
+                                            <Input
+                                                label="Email Address"
+                                                type="email"
+                                                value={shopSettings.email}
+                                                onChange={(e) => setShopSettings({ ...shopSettings, email: e.target.value })}
+                                                placeholder="shop@example.com"
+                                            />
+                                        </div>
+
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                            <Input
+                                                label="Phone Numbers"
+                                                value={shopSettings.phone}
+                                                onChange={(e) => setShopSettings({ ...shopSettings, phone: e.target.value })}
+                                                placeholder="e.g. 9037106449, 7907026827"
+                                            />
+                                            <Input
+                                                label="GSTIN"
+                                                value={shopSettings.gstin}
+                                                onChange={(e) => setShopSettings({ ...shopSettings, gstin: e.target.value })}
+                                                placeholder="e.g. 32PVGPS0686J1ZV"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="label">Full Address</label>
+                                            <textarea
+                                                value={shopSettings.address}
+                                                onChange={(e) => setShopSettings({ ...shopSettings, address: e.target.value })}
+                                                className="input min-h-[96px] py-2 leading-relaxed"
+                                                placeholder="Shop location, building, street, city, pin..."
+                                            />
+                                        </div>
+
+                                        <div className="pt-2">
+                                            <Button variant="primary" onClick={handleSaveShopSettings} className="w-full sm:w-auto px-8">
+                                                <Save className="w-4 h-4" />
+                                                Save General Settings
+                                            </Button>
                                         </div>
                                     </div>
+                                </div>
 
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <Input label="Shop Name" value={shopSettings.shopName} onChange={(e) => setShopSettings({ ...shopSettings, shopName: e.target.value })} />
-                                        <Input label="Email Address" type="email" value={shopSettings.email} onChange={(e) => setShopSettings({ ...shopSettings, email: e.target.value })} />
-                                    </div>
+                                {/* Right Column: Accepted Payment Methods (5 cols) */}
+                                <div className="lg:col-span-5 xl:col-span-5 space-y-6">
+                                    <div className="bg-white dark:bg-dark-card rounded-2xl border border-gray-100 dark:border-dark-border p-6 shadow-xs space-y-4">
+                                        <div className="border-b border-gray-100 dark:border-dark-border pb-3">
+                                            <h3 className="text-base font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                                                <CreditCard className="w-5 h-5 text-indigo-500" />
+                                                Accepted Payment Methods
+                                            </h3>
+                                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                                                Toggle methods allowed at checkout and displayed on dashboard payment breakdowns.
+                                            </p>
+                                        </div>
 
-                                    <Input label="Phone Numbers" value={shopSettings.phone} onChange={(e) => setShopSettings({ ...shopSettings, phone: e.target.value })} />
-                                    <Input label="GSTIN" value={shopSettings.gstin} onChange={(e) => setShopSettings({ ...shopSettings, gstin: e.target.value })} />
-
-                                    <div>
-                                        <label className="label">Full Address</label>
-                                        <textarea
-                                            value={shopSettings.address}
-                                            onChange={(e) => setShopSettings({ ...shopSettings, address: e.target.value })}
-                                            className="input min-h-[100px] py-2"
-                                        />
-                                    </div>
-
-                                    {/* Accepted Payment Methods */}
-                                    <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
-                                        <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
-                                            Accepted Payment Methods
-                                        </h3>
-                                        <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
-                                            Choose which payment methods appear on the POS checkout screen. At least one must remain enabled.
-                                        </p>
-                                        <div className="flex flex-wrap gap-3">
+                                        <div className="grid grid-cols-2 gap-2.5">
                                             {([
-                                                { key: 'CASH',  label: 'Cash',         onCls: 'border-green-500  bg-green-50  text-green-700  dark:bg-green-900/20  dark:text-green-300',  dotCls: 'bg-green-500'  },
-                                                { key: 'UPI',   label: 'UPI',           onCls: 'border-purple-500 bg-purple-50 text-purple-700 dark:bg-purple-900/20 dark:text-purple-300', dotCls: 'bg-purple-500' },
-                                                { key: 'CARD',  label: 'Card',          onCls: 'border-blue-500   bg-blue-50   text-blue-700   dark:bg-blue-900/20   dark:text-blue-300',   dotCls: 'bg-blue-500'   },
-                                                { key: 'SPLIT', label: 'Split Payment', onCls: 'border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-900/20 dark:text-orange-300', dotCls: 'bg-orange-500' },
+                                                { key: 'CASH', label: 'Cash', onCls: 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300', dotCls: 'bg-emerald-500' },
+                                                { key: 'UPI', label: 'UPI / QR', onCls: 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-950/30 dark:text-sky-300', dotCls: 'bg-sky-500' },
+                                                { key: 'CARD', label: 'Card (Swipe)', onCls: 'border-purple-500 bg-purple-50 text-purple-700 dark:bg-purple-950/30 dark:text-purple-300', dotCls: 'bg-purple-500' },
+                                                { key: 'SPLIT', label: 'Split Payment', onCls: 'border-amber-500 bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300', dotCls: 'bg-amber-500' },
                                             ] as const).map(({ key, label, onCls, dotCls }) => {
                                                 const enabled = paymentMethods[key];
                                                 const enabledCount = Object.values(paymentMethods).filter(Boolean).length;
@@ -508,24 +571,37 @@ export const Settings: React.FC = () => {
                                                         key={key}
                                                         type="button"
                                                         disabled={isLastEnabled}
-                                                        onClick={() => setPaymentMethods(prev => ({ ...prev, [key]: !prev[key] }))}
-                                                        className={`flex items-center gap-2 px-4 py-2 rounded-lg border-2 font-medium text-sm transition-all
-                                                            ${enabled ? onCls : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-400 dark:text-gray-600'}
-                                                            ${isLastEnabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:opacity-90'}`}
+                                                        onClick={async () => {
+                                                            const updated = saveStoredPaymentMethods({ [key]: !paymentMethods[key] });
+                                                            setPaymentMethods(updated);
+                                                            try {
+                                                                const userId = user?.id || 'default-user';
+                                                                await window.electronAPI.settings.set({
+                                                                    key: 'PAYMENT_METHODS',
+                                                                    value: JSON.stringify(updated),
+                                                                    userId
+                                                                });
+                                                                window.dispatchEvent(new CustomEvent('payment-methods-updated', {
+                                                                    detail: updated
+                                                                }));
+                                                            } catch (err) {
+                                                                console.error('Failed to auto-save payment method toggle:', err);
+                                                            }
+                                                        }}
+                                                        className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl border-2 font-semibold text-xs sm:text-sm transition-all
+                                                            ${enabled ? onCls : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-400 dark:text-gray-500'}
+                                                            ${isLastEnabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:opacity-90 active:scale-[0.98]'}`}
                                                     >
                                                         <span className={`w-2 h-2 rounded-full flex-shrink-0 ${enabled ? dotCls : 'bg-gray-300 dark:bg-gray-600'}`} />
-                                                        {label}
+                                                        <span className="truncate">{label}</span>
                                                     </button>
                                                 );
                                             })}
                                         </div>
-                                    </div>
 
-                                    <div className="pt-4">
-                                        <Button variant="primary" onClick={handleSaveShopSettings} className="w-full md:w-auto px-8">
-                                            <Save className="w-4 h-4" />
-                                            Save General Settings
-                                        </Button>
+                                        <p className="text-[11px] text-gray-400 dark:text-gray-500 leading-tight">
+                                            Tip: Turning off <strong>Card</strong> hides card payment in POS checkout, Sales History payment filters/modals, and removes 0-value card columns from Dashboard audit tables.
+                                        </p>
                                     </div>
                                 </div>
                             </div>
@@ -533,17 +609,17 @@ export const Settings: React.FC = () => {
                     )}
 
                     {activeTab === 'sync' && (
-                        <div className="max-w-4xl space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div className="w-full space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
                                 {/* Cloud Sync Section */}
-                                <div className="space-y-6 p-6 bg-blue-50/30 dark:bg-blue-900/5 rounded-xl border border-blue-100 dark:border-blue-900/30">
+                                <div className="space-y-6 p-6 bg-blue-50/30 dark:bg-blue-900/5 rounded-2xl border border-blue-100 dark:border-blue-900/30 shadow-2xs">
                                     <div className="flex items-center gap-3">
-                                        <div className="p-2 bg-blue-600 rounded-lg shadow-lg shadow-blue-200 dark:shadow-none">
+                                        <div className="p-2.5 bg-blue-600 rounded-xl shadow-md shadow-blue-200 dark:shadow-none">
                                             <Cloud className="w-6 h-6 text-white" />
                                         </div>
                                         <div>
-                                            <h3 className="font-bold text-lg">Cloud Sync</h3>
-                                            <p className="text-sm text-gray-500 italic">Connected Dashboard</p>
+                                            <h3 className="font-bold text-lg text-gray-900 dark:text-white">Cloud Sync</h3>
+                                            <p className="text-xs text-gray-500 italic">Connected Cloud Dashboard</p>
                                         </div>
                                     </div>
 
@@ -585,16 +661,15 @@ export const Settings: React.FC = () => {
                                             variant="secondary"
                                             onClick={handleSyncNow}
                                             disabled={syncStatus !== 'idle'}
-                                            className={`w-full ${
-                                                syncStatus === 'success' ? 'bg-green-100 border-green-300 text-green-700' :
-                                                syncStatus === 'error' ? 'bg-red-100 border-red-300 text-red-700' : ''
-                                            }`}
+                                            className={`w-full ${syncStatus === 'success' ? 'bg-green-100 border-green-300 text-green-700' :
+                                                    syncStatus === 'error' ? 'bg-red-100 border-red-300 text-red-700' : ''
+                                                }`}
                                         >
                                             <RefreshCw className={`w-4 h-4 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
                                             {syncStatus === 'syncing' ? 'Syncing...' :
-                                             syncStatus === 'success' ? 'Sync Complete!' :
-                                             syncStatus === 'error' ? 'Sync Failed - Retry' :
-                                             'Sync Now (Manual)'}
+                                                syncStatus === 'success' ? 'Sync Complete!' :
+                                                    syncStatus === 'error' ? 'Sync Failed - Retry' :
+                                                        'Sync Now (Manual)'}
                                         </Button>
 
                                         {/* Bulk Sync Section */}
@@ -608,7 +683,7 @@ export const Settings: React.FC = () => {
                                                     Upload ALL unsynced historical data to cloud. Run this once after configuring cloud settings.
                                                 </p>
                                             </div>
-                                            
+
                                             <Button
                                                 variant="outline"
                                                 onClick={handleBulkSync}
@@ -631,7 +706,7 @@ export const Settings: React.FC = () => {
                                             {bulkSyncing && (
                                                 <div className="mt-3 space-y-2">
                                                     <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5 overflow-hidden">
-                                                        <div 
+                                                        <div
                                                             className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
                                                             style={{ width: `${bulkSyncProgress.percentage}%` }}
                                                         />
@@ -657,14 +732,14 @@ export const Settings: React.FC = () => {
                                 </div>
 
                                 {/* Backup Section */}
-                                <div className="space-y-6 p-6 bg-purple-50/30 dark:bg-purple-900/5 rounded-xl border border-purple-100 dark:border-purple-900/30">
+                                <div className="space-y-6 p-6 bg-purple-50/30 dark:bg-purple-900/5 rounded-2xl border border-purple-100 dark:border-purple-900/30 shadow-2xs">
                                     <div className="flex items-center gap-3">
-                                        <div className="p-2 bg-purple-600 rounded-lg shadow-lg shadow-purple-200 dark:shadow-none">
+                                        <div className="p-2.5 bg-purple-600 rounded-xl shadow-md shadow-purple-200 dark:shadow-none">
                                             <Database className="w-6 h-6 text-white" />
                                         </div>
                                         <div>
-                                            <h3 className="font-bold text-lg">Auto Backup</h3>
-                                            <p className="text-sm text-gray-500 italic">Local Safety Net</p>
+                                            <h3 className="font-bold text-lg text-gray-900 dark:text-white">Auto Backup</h3>
+                                            <p className="text-xs text-gray-500 italic">Local Safety Net</p>
                                         </div>
                                     </div>
 
@@ -707,142 +782,174 @@ export const Settings: React.FC = () => {
                     )}
 
                     {activeTab === 'print' && (
-                        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                            <div className="max-w-2xl space-y-3">
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Windows Printers</h3>
-                                        <p className="text-xs text-gray-500 dark:text-gray-400">Select connected printers for thermal receipts and barcode stickers.</p>
+                        <div className="w-full space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                                {/* Left Column: Printers & Typography (6 cols) */}
+                                <div className="lg:col-span-6 space-y-6">
+                                    {/* Printers card */}
+                                    <div className="bg-white dark:bg-dark-card rounded-2xl border border-gray-100 dark:border-dark-border p-6 shadow-xs space-y-4">
+                                        <div className="flex items-center justify-between border-b border-gray-100 dark:border-dark-border pb-3">
+                                            <div>
+                                                <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100">Windows Printers</h3>
+                                                <p className="text-xs text-gray-500 dark:text-gray-400">Select connected printers for thermal receipts and barcode stickers.</p>
+                                            </div>
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => void refreshPrinters()}
+                                                disabled={refreshingPrinters}
+                                                className="flex items-center gap-1.5"
+                                            >
+                                                <RefreshCw className={`w-3.5 h-3.5 ${refreshingPrinters ? 'animate-spin' : ''}`} />
+                                                <span>{refreshingPrinters ? 'Detecting...' : 'Refresh'}</span>
+                                            </Button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="label" htmlFor="receipt-printer">Receipt Printer</label>
+                                                <select
+                                                    id="receipt-printer"
+                                                    className="input"
+                                                    value={printerSettings.receiptPrinter}
+                                                    onChange={e => setPrinterSettings({ ...printerSettings, receiptPrinter: e.target.value })}
+                                                >
+                                                    <option value="">Select a Windows printer</option>
+                                                    {printerSettings.receiptPrinter && !detectedPrinters.some(p => p.name === printerSettings.receiptPrinter) && (
+                                                        <option value={printerSettings.receiptPrinter}>{printerSettings.receiptPrinter} (not detected)</option>
+                                                    )}
+                                                    {detectedPrinters.map(p => (
+                                                        <option key={p.name} value={p.name}>{p.name}{p.isDefault ? ' (Windows default)' : ''}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="label" htmlFor="label-printer">Label Printer</label>
+                                                <select
+                                                    id="label-printer"
+                                                    className="input"
+                                                    value={printerSettings.labelPrinter}
+                                                    onChange={e => setPrinterSettings({ ...printerSettings, labelPrinter: e.target.value })}
+                                                >
+                                                    <option value="">Select a Windows printer</option>
+                                                    {printerSettings.labelPrinter && !detectedPrinters.some(p => p.name === printerSettings.labelPrinter) && (
+                                                        <option value={printerSettings.labelPrinter}>{printerSettings.labelPrinter} (not detected)</option>
+                                                    )}
+                                                    {detectedPrinters.map(p => (
+                                                        <option key={p.name} value={p.name}>{p.name}{p.isDefault ? ' (Windows default)' : ''}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        </div>
                                     </div>
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => void refreshPrinters()}
-                                        disabled={refreshingPrinters}
-                                        className="flex items-center gap-1.5"
-                                    >
-                                        <RefreshCw className={`w-3.5 h-3.5 ${refreshingPrinters ? 'animate-spin' : ''}`} />
-                                        <span>{refreshingPrinters ? 'Detecting...' : 'Refresh Printers'}</span>
-                                    </Button>
+
+                                    {/* Paper & Font card */}
+                                    <div className="bg-white dark:bg-dark-card rounded-2xl border border-gray-100 dark:border-dark-border p-6 shadow-xs space-y-4">
+                                        <div className="border-b border-gray-100 dark:border-dark-border pb-3">
+                                            <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100">Paper &amp; Typography</h3>
+                                            <p className="text-xs text-gray-500 dark:text-gray-400">Configure roll width and receipt text font family.</p>
+                                        </div>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="label">Paper Size</label>
+                                                <select
+                                                    className="input"
+                                                    value={printerSettings.pageSize}
+                                                    onChange={(e) => setPrinterSettings({ ...printerSettings, pageSize: e.target.value, contentWidth: e.target.value === '80mm' ? 72 : 48 })}
+                                                >
+                                                    <option value="80mm">Thermal 80mm (3 Inch)</option>
+                                                    <option value="58mm">Thermal 58mm (2 Inch)</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="label">Receipt Font</label>
+                                                <select
+                                                    className="input"
+                                                    value={printerSettings.fontFamily}
+                                                    onChange={(e) => setPrinterSettings({ ...printerSettings, fontFamily: e.target.value })}
+                                                >
+                                                    <option value="sans-serif">Modern Sans-Serif</option>
+                                                    <option value="monospace">Classic Mono (Speedy)</option>
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        <div className="pt-2">
+                                            <Button variant="primary" size="sm" onClick={handleSavePrinterSettings} className="px-5">
+                                                <Save className="w-4 h-4" />
+                                                Save Print Configuration
+                                            </Button>
+                                        </div>
+                                    </div>
                                 </div>
 
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="label" htmlFor="receipt-printer">Receipt Printer</label>
-                                        <select
-                                            id="receipt-printer"
-                                            className="input"
-                                            value={printerSettings.receiptPrinter}
-                                            onChange={e => setPrinterSettings({ ...printerSettings, receiptPrinter: e.target.value })}
-                                        >
-                                            <option value="">Select a Windows printer</option>
-                                            {printerSettings.receiptPrinter && !detectedPrinters.some(p => p.name === printerSettings.receiptPrinter) && (
-                                                <option value={printerSettings.receiptPrinter}>{printerSettings.receiptPrinter} (not detected)</option>
-                                            )}
-                                            {detectedPrinters.map(p => (
-                                                <option key={p.name} value={p.name}>{p.name}{p.isDefault ? ' (Windows default)' : ''}</option>
-                                            ))}
-                                        </select>
+                                {/* Right Column: Receipt Content & Hardware Test Actions (6 cols) */}
+                                <div className="lg:col-span-6 space-y-6">
+                                    {/* Receipt Content Fields */}
+                                    <div className="bg-white dark:bg-dark-card rounded-2xl border border-gray-100 dark:border-dark-border p-6 shadow-xs space-y-4">
+                                        <div className="border-b border-gray-100 dark:border-dark-border pb-3">
+                                            <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100">Receipt Content Switches</h3>
+                                            <p className="text-xs text-gray-500 dark:text-gray-400">Choose optional columns and summary lines on customer receipts.</p>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 bg-gray-50 dark:bg-gray-800/40 rounded-xl border border-gray-100 dark:border-gray-800">
+                                            <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                                                <input type="checkbox" className="w-4 h-4 rounded text-blue-600" checked={printerSettings.showPaidLine} onChange={(e) => setPrinterSettings({ ...printerSettings, showPaidLine: e.target.checked })} />
+                                                <span className="text-xs font-semibold text-gray-800 dark:text-gray-200">Show Paid Line</span>
+                                            </label>
+                                            <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                                                <input type="checkbox" className="w-4 h-4 rounded text-blue-600" checked={printerSettings.showChangeLine} onChange={(e) => setPrinterSettings({ ...printerSettings, showChangeLine: e.target.checked })} />
+                                                <span className="text-xs font-semibold text-gray-800 dark:text-gray-200">Show Change Line</span>
+                                            </label>
+                                            <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                                                <input type="checkbox" className="mt-0.5 w-4 h-4 rounded text-blue-600" checked={printerSettings.showRate} onChange={(e) => setPrinterSettings({ ...printerSettings, showRate: e.target.checked })} />
+                                                <div>
+                                                    <span className="text-xs font-semibold text-gray-800 dark:text-gray-200">Rate Column</span>
+                                                    <p className="text-[11px] text-gray-500">Item | Rate | Qty | Amt</p>
+                                                </div>
+                                            </label>
+                                            <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                                                <input type="checkbox" className="mt-0.5 w-4 h-4 rounded text-blue-600" checked={printerSettings.showRateSubline} onChange={(e) => setPrinterSettings({ ...printerSettings, showRateSubline: e.target.checked })} />
+                                                <div>
+                                                    <span className="text-xs font-semibold text-gray-800 dark:text-gray-200">Rate Subline (Qty &gt; 1)</span>
+                                                    <p className="text-[11px] text-gray-500">&quot;2 @ ₹700.00&quot; under item</p>
+                                                </div>
+                                            </label>
+                                        </div>
                                     </div>
-                                    <div>
-                                        <label className="label" htmlFor="label-printer">Label Printer</label>
-                                        <select
-                                            id="label-printer"
-                                            className="input"
-                                            value={printerSettings.labelPrinter}
-                                            onChange={e => setPrinterSettings({ ...printerSettings, labelPrinter: e.target.value })}
-                                        >
-                                            <option value="">Select a Windows printer</option>
-                                            {printerSettings.labelPrinter && !detectedPrinters.some(p => p.name === printerSettings.labelPrinter) && (
-                                                <option value={printerSettings.labelPrinter}>{printerSettings.labelPrinter} (not detected)</option>
-                                            )}
-                                            {detectedPrinters.map(p => (
-                                                <option key={p.name} value={p.name}>{p.name}{p.isDefault ? ' (Windows default)' : ''}</option>
-                                            ))}
-                                        </select>
+
+                                    {/* Hardware Testing & Diagnostic Actions */}
+                                    <div className="bg-white dark:bg-dark-card rounded-2xl border border-gray-100 dark:border-dark-border p-6 shadow-xs space-y-4">
+                                        <div className="border-b border-gray-100 dark:border-dark-border pb-3">
+                                            <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100">Printer Diagnostics &amp; Tests</h3>
+                                            <p className="text-xs text-gray-500 dark:text-gray-400">Verify USB/Network printer connectivity and test print outputs.</p>
+                                        </div>
+
+                                        <div className="flex gap-2.5 flex-wrap">
+                                            <Button variant="secondary" size="sm" onClick={handlePrintTestReceipt} disabled={testingReceipt} className="px-3">
+                                                <Printer className="w-4 h-4" />
+                                                {testingReceipt ? 'Testing...' : 'Test Receipt'}
+                                            </Button>
+                                            <Button variant="secondary" size="sm" onClick={handlePrintTestLabel} className="px-3">
+                                                <Tag className="w-4 h-4" />
+                                                Test Label
+                                            </Button>
+                                            <Button variant="outline" size="sm" onClick={handleTestReceiptConnection} className="px-3">
+                                                <Wifi className="w-4 h-4" />
+                                                Receipt Status
+                                            </Button>
+                                            <Button variant="outline" size="sm" onClick={handleTestLabelConnection} className="px-3">
+                                                <Wifi className="w-4 h-4" />
+                                                Label Status
+                                            </Button>
+                                        </div>
+                                        {receiptTestStatus && <p role="status" className="p-2.5 rounded-lg border text-xs bg-gray-50 dark:bg-gray-800/40">{receiptTestStatus}</p>}
                                     </div>
                                 </div>
-                                <p className="text-xs text-gray-500 dark:text-gray-400">Save after selecting. Printer detection identifies installed Windows printer drivers.</p>
                             </div>
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl">
-                                <div>
-                                    <label className="label">Paper Size</label>
-                                    <select
-                                        className="input"
-                                        value={printerSettings.pageSize}
-                                        onChange={(e) => setPrinterSettings({ ...printerSettings, pageSize: e.target.value, contentWidth: e.target.value === '80mm' ? 72 : 48 })}
-                                    >
-                                        <option value="80mm">Thermal 80mm (3 Inch)</option>
-                                        <option value="58mm">Thermal 58mm (2 Inch)</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="label">Receipt Font</label>
-                                    <select
-                                        className="input"
-                                        value={printerSettings.fontFamily}
-                                        onChange={(e) => setPrinterSettings({ ...printerSettings, fontFamily: e.target.value })}
-                                    >
-                                        <option value="sans-serif">Modern Sans-Serif</option>
-                                        <option value="monospace">Classic Mono (Speedy)</option>
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700 max-w-2xl">
-                                <label className="flex items-center gap-2 cursor-pointer select-none">
-                                    <input type="checkbox" className="w-4 h-4 rounded text-blue-600" checked={printerSettings.showPaidLine} onChange={(e) => setPrinterSettings({ ...printerSettings, showPaidLine: e.target.checked })} />
-                                    <span className="text-sm font-medium">Show Paid Line</span>
-                                </label>
-                                <label className="flex items-center gap-2 cursor-pointer select-none">
-                                    <input type="checkbox" className="w-4 h-4 rounded text-blue-600" checked={printerSettings.showChangeLine} onChange={(e) => setPrinterSettings({ ...printerSettings, showChangeLine: e.target.checked })} />
-                                    <span className="text-sm font-medium">Show Change Line</span>
-                                </label>
-                                <label className="flex items-start gap-2 cursor-pointer select-none">
-                                    <input type="checkbox" className="mt-0.5 w-4 h-4 rounded text-blue-600" checked={printerSettings.showRate} onChange={(e) => setPrinterSettings({ ...printerSettings, showRate: e.target.checked })} />
-                                    <div>
-                                        <span className="text-sm font-medium">Rate Column</span>
-                                        <p className="text-xs text-gray-500">Order: Item | Rate | Qty | Amt</p>
-                                    </div>
-                                </label>
-                                <label className="flex items-start gap-2 cursor-pointer select-none">
-                                    <input type="checkbox" className="mt-0.5 w-4 h-4 rounded text-blue-600" checked={printerSettings.showRateSubline} onChange={(e) => setPrinterSettings({ ...printerSettings, showRateSubline: e.target.checked })} />
-                                    <div>
-                                        <span className="text-sm font-medium">Rate Subline (when Qty &gt; 1)</span>
-                                        <p className="text-xs text-gray-500">Prints &quot;2 @ ₹700.00&quot; under item name</p>
-                                    </div>
-                                </label>
-                            </div>
-
-                            <div className="flex gap-2 flex-wrap">
-                                {/* Save Configuration Button */}
-                                <Button variant="primary" size="sm" onClick={handleSavePrinterSettings} className="px-3">
-                                    <Save className="w-4 h-4" />
-                                    Save Print Configuration
-                                </Button>
-                                
-                                {/* Print and Connection Test Buttons */}
-                                <Button variant="secondary" size="sm" onClick={handlePrintTestReceipt} disabled={testingReceipt} className="px-3">
-                                    <Printer className="w-4 h-4" />
-                                    {testingReceipt ? 'Testing receipt…' : 'Test Receipt'}
-                                </Button>
-                                <Button variant="secondary" size="sm" onClick={handlePrintTestLabel} className="px-3">
-                                    <Tag className="w-4 h-4" />
-                                    Test Label
-                                </Button>
-                                <Button variant="outline" size="sm" onClick={handleTestReceiptConnection} className="px-3">
-                                    <Wifi className="w-4 h-4" />
-                                    Receipt Status
-                                </Button>
-                                <Button variant="outline" size="sm" onClick={handleTestLabelConnection} className="px-3">
-                                    <Wifi className="w-4 h-4" />
-                                    Label Status
-                                </Button>
-                            </div>
-
-                            {receiptTestStatus && <p role="status" className="p-3 rounded border text-sm">{receiptTestStatus}</p>}
-                            <div className="grid grid-cols-1 gap-12 pt-8 border-t border-gray-200 dark:border-dark-border">
+                            {/* Full-Width Designers */}
+                            <div className="grid grid-cols-1 gap-8 pt-8 border-t border-gray-200 dark:border-dark-border">
                                 <div className="space-y-4">
                                     <h4 className="font-bold flex items-center gap-2">
                                         <FileSpreadsheet className="w-4 h-4 text-green-500" />
@@ -862,18 +969,19 @@ export const Settings: React.FC = () => {
                     )}
 
                     {activeTab === 'data' && (
-                        <div className="max-w-4xl space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                <div className="p-6 border border-gray-200 dark:border-dark-border rounded-xl hover:shadow-md transition-shadow flex flex-col items-center text-center gap-4">
-                                    <div className="p-3 bg-green-100 dark:bg-green-900/30 text-green-600 rounded-full">
+                        <div className="w-full space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
+                                <div className="p-5 bg-white dark:bg-dark-card border border-gray-100 dark:border-dark-border rounded-2xl hover:shadow-md transition-shadow flex flex-col items-center text-center gap-3.5 shadow-2xs">
+                                    <div className="p-3 bg-green-100 dark:bg-green-900/30 text-green-600 rounded-2xl">
                                         <FileSpreadsheet className="w-6 h-6" />
                                     </div>
                                     <div>
-                                        <h4 className="font-bold">Excel Template</h4>
-                                        <p className="text-sm text-gray-500">Download the ready-to-fill product spreadsheet.</p>
+                                        <h4 className="font-bold text-sm text-gray-900 dark:text-white">Excel Template</h4>
+                                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Download ready-to-fill product spreadsheet.</p>
                                     </div>
                                     <Button
                                         variant="outline"
+                                        size="sm"
                                         className="w-full mt-auto"
                                         onClick={async () => {
                                             try {
@@ -892,16 +1000,17 @@ export const Settings: React.FC = () => {
                                     </Button>
                                 </div>
 
-                                <div className="p-6 border border-gray-200 dark:border-dark-border rounded-xl hover:shadow-md transition-shadow flex flex-col items-center text-center gap-4">
-                                    <div className="p-3 bg-blue-100 dark:bg-blue-900/30 text-blue-600 rounded-full">
+                                <div className="p-5 bg-white dark:bg-dark-card border border-gray-100 dark:border-dark-border rounded-2xl hover:shadow-md transition-shadow flex flex-col items-center text-center gap-3.5 shadow-2xs">
+                                    <div className="p-3 bg-blue-100 dark:bg-blue-900/30 text-blue-600 rounded-2xl">
                                         <Upload className="w-6 h-6" />
                                     </div>
                                     <div>
-                                        <h4 className="font-bold">Bulk Import</h4>
-                                        <p className="text-sm text-gray-500">Upload your filled Excel template to bulk add products.</p>
+                                        <h4 className="font-bold text-sm text-gray-900 dark:text-white">Bulk Import</h4>
+                                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Upload filled template to bulk add products.</p>
                                     </div>
                                     <Button
                                         variant="outline"
+                                        size="sm"
                                         className="w-full mt-auto"
                                         onClick={async () => {
                                             try {
@@ -918,16 +1027,17 @@ export const Settings: React.FC = () => {
                                     </Button>
                                 </div>
 
-                                <div className="p-6 border border-gray-200 dark:border-dark-border rounded-xl hover:shadow-md transition-shadow flex flex-col items-center text-center gap-4">
-                                    <div className="p-3 bg-green-100 dark:bg-green-900/30 text-green-600 rounded-full">
+                                <div className="p-5 bg-white dark:bg-dark-card border border-gray-100 dark:border-dark-border rounded-2xl hover:shadow-md transition-shadow flex flex-col items-center text-center gap-3.5 shadow-2xs">
+                                    <div className="p-3 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 rounded-2xl">
                                         <Upload className="w-6 h-6" />
                                     </div>
                                     <div>
-                                        <h4 className="font-bold">Restore from Excel Backup</h4>
-                                        <p className="text-sm text-gray-500">Restore sales and item details from a GST report Excel export. Bills already in the database are skipped.</p>
+                                        <h4 className="font-bold text-sm text-gray-900 dark:text-white">Excel Backup Restore</h4>
+                                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Restore sales &amp; items from GST export. Skips existing bills.</p>
                                     </div>
                                     <Button
                                         variant="outline"
+                                        size="sm"
                                         className="w-full mt-auto"
                                         onClick={async () => {
                                             try {
@@ -944,16 +1054,17 @@ export const Settings: React.FC = () => {
                                     </Button>
                                 </div>
 
-                                <div className="p-6 border border-gray-200 dark:border-dark-border rounded-xl hover:shadow-md transition-shadow flex flex-col items-center text-center gap-4">
-                                    <div className="p-3 bg-purple-100 dark:bg-purple-900/30 text-purple-600 rounded-full">
+                                <div className="p-5 bg-white dark:bg-dark-card border border-gray-100 dark:border-dark-border rounded-2xl hover:shadow-md transition-shadow flex flex-col items-center text-center gap-3.5 shadow-2xs">
+                                    <div className="p-3 bg-purple-100 dark:bg-purple-900/30 text-purple-600 rounded-2xl">
                                         <Download className="w-6 h-6" />
                                     </div>
                                     <div>
-                                        <h4 className="font-bold">Full Export</h4>
-                                        <p className="text-sm text-gray-500">Export all Sales, Products, and Customer data to Excel.</p>
+                                        <h4 className="font-bold text-sm text-gray-900 dark:text-white">Full Export</h4>
+                                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Export Sales, Products, &amp; Customers to Excel.</p>
                                     </div>
                                     <Button
                                         variant="outline"
+                                        size="sm"
                                         className="w-full mt-auto"
                                         onClick={async () => {
                                             try {
@@ -968,38 +1079,41 @@ export const Settings: React.FC = () => {
                                             }
                                         }}
                                     >
-                                        Export Everything
+                                        Export All
                                     </Button>
                                 </div>
 
-                                <div className="p-6 border border-gray-200 dark:border-dark-border rounded-xl hover:shadow-md transition-shadow flex flex-col items-center text-center gap-4 bg-orange-50/30 dark:bg-orange-900/10">
-                                    <div className="p-3 bg-orange-100 dark:bg-orange-900/30 text-orange-600 rounded-full">
+                                <div className="p-5 bg-orange-50/40 dark:bg-orange-900/10 border border-orange-200/60 dark:border-orange-900/30 rounded-2xl hover:shadow-md transition-shadow flex flex-col items-center text-center gap-3.5 shadow-2xs">
+                                    <div className="p-3 bg-orange-100 dark:bg-orange-900/30 text-orange-600 rounded-2xl">
                                         <Database className="w-6 h-6" />
                                     </div>
                                     <div>
-                                        <h4 className="font-bold">Bulk Apply 5% GST</h4>
-                                        <p className="text-sm text-gray-500">Update ALL existing products to 5% tax rate.</p>
+                                        <h4 className="font-bold text-sm text-gray-900 dark:text-white">Bulk 5% GST</h4>
+                                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Update all existing products to 5% tax rate.</p>
                                     </div>
                                     <Button
                                         variant="danger"
+                                        size="sm"
                                         className="w-full mt-auto"
                                         onClick={() => setShowTaxUpdateConfirm(true)}
                                     >
-                                        Apply 5% Tax to All
+                                        Apply 5% Tax
                                     </Button>
                                 </div>
                             </div>
 
-                            <div className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700 text-sm">
-                                <p className="font-bold mb-2">Import/Export Tips:</p>
-                                <ul className="list-disc pl-6 space-y-1">
-                                    <li>Ensure barcode field is unique for every product during import.</li>
-                                    <li>The importer supports .xlsx and .xls formats.</li>
-                                    <li>Exported files can be used as backups or for custom reporting in Excel.</li>
+                            <div className="p-4 bg-gray-50 dark:bg-gray-800/40 rounded-xl border border-gray-100 dark:border-gray-700/60 text-xs text-gray-600 dark:text-gray-300">
+                                <p className="font-bold mb-1.5 text-gray-900 dark:text-white">Import/Export Tips:</p>
+                                <ul className="list-disc pl-5 space-y-1">
+                                    <li>Ensure barcode is unique for every product during import.</li>
+                                    <li>The product importer supports both <code className="font-mono">.xlsx</code> and <code className="font-mono">.xls</code> workbook formats.</li>
+                                    <li>Exported files can be saved as off-site backups or opened in Excel for custom tax accountant audits.</li>
                                 </ul>
                             </div>
                         </div>
                     )}
+
+                    {activeTab === 'messaging' && <MessagingSettings />}
 
                     {activeTab === 'version' && <VersionInfo />}
                 </div>

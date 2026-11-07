@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 interface ModalProps {
@@ -48,9 +49,10 @@ export const Modal: React.FC<ModalProps> = ({
         xl: 'max-w-6xl',
     };
 
-    return (
+    const modalContent = (
         <div
             className="modal-overlay"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             onMouseDown={(e) => {
                 if (e.target === e.currentTarget) onCloseRef.current();
             }}
@@ -74,4 +76,10 @@ export const Modal: React.FC<ModalProps> = ({
             </div>
         </div>
     );
+
+    if (typeof document !== 'undefined') {
+        return createPortal(modalContent, document.body);
+    }
+
+    return modalContent;
 };

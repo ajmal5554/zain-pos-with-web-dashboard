@@ -403,6 +403,12 @@ export const PermissionMiddleware = {
         resource: 'inventory'
     }),
 
+    viewMovements: PermissionService.createPermissionMiddleware(['permManageInventory', 'permManageProducts'], {
+        action: 'view-movements',
+        resource: 'inventory',
+        checkType: 'any'
+    }),
+
     // Reports and data
     viewReports: PermissionService.createPermissionMiddleware(['permViewReports'], {
         action: 'view-reports',
@@ -434,6 +440,12 @@ export const PermissionMiddleware = {
     manageCashDrawer: PermissionService.createPermissionMiddleware(['permManageCashDrawer'], {
         action: 'manage-cash-drawer',
         resource: 'cash-register'
+    }),
+
+    // Activity / Audit Logs
+    viewAuditLog: PermissionService.createPermissionMiddleware(['permDeleteAudit'], {
+        action: 'view-audit-log',
+        resource: 'audit-log'
     }),
 
     // Any authenticated user

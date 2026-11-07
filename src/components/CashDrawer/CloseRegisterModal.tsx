@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
     X, Lock, TrendingUp, TrendingDown, Minus, Plus,
     AlertCircle, Loader2, RefreshCw, Trash2, ChevronRight, DollarSign
@@ -105,9 +106,10 @@ export const CloseRegisterModal: React.FC<CloseRegisterModalProps> = ({ onClose,
     const txByCashOut = summary?.transactions.filter(t => t.type === 'CASH_OUT') ?? [];
     const txByCashIn = summary?.transactions.filter(t => t.type === 'CASH_IN') ?? [];
 
-    return (
+    const modalContent = (
         <div
             className="modal-overlay"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             onClick={(e) => e.target === e.currentTarget && onClose()}
         >
             <div className="bg-white dark:bg-dark-card rounded-2xl shadow-2xl w-full max-w-lg border border-gray-200 dark:border-dark-border animate-slide-up max-h-[90vh] flex flex-col">
@@ -287,6 +289,8 @@ export const CloseRegisterModal: React.FC<CloseRegisterModalProps> = ({ onClose,
             </div>
         </div>
     );
+
+    return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 };
 
 // ─── Sub-components ──────────────────────────────────────────────────────────

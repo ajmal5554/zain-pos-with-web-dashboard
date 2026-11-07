@@ -13,6 +13,7 @@ export interface InventoryWorkspaceViewProps {
     onViewMovements?: (variantId: string) => void;
     onEditProduct?: (productId: string) => void;
     onAdjustStock?: (variant: InventoryVariant) => void;
+    children?: React.ReactNode;
 }
 
 type Filters = {
@@ -52,7 +53,7 @@ const FilterSelect: React.FC<{ label: string; value: string; options: Array<{ va
     return <div className="min-w-[145px] flex-1"><label className="label text-xs" htmlFor={`inventory-filter-${label.toLowerCase()}`}>{label}</label><select id={`inventory-filter-${label.toLowerCase()}`} aria-label={`Filter by ${label.toLowerCase()}`} className="input text-sm" value={value} onChange={event => onChange(event.target.value)}><option value="">All {plural}</option>{available.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>;
 };
 
-const InventoryWorkspaceData: React.FC<InventoryWorkspaceViewProps> = ({ scope, onOpenAudit, onViewMovements, onEditProduct, onAdjustStock }) => {
+const InventoryWorkspaceData: React.FC<InventoryWorkspaceViewProps> = ({ scope, onOpenAudit, onViewMovements, onEditProduct, onAdjustStock, children }) => {
     const { user } = useAuthStore();
     const canEditProducts = Boolean(user && (user.role === 'ADMIN' || user.permManageProducts));
     const [groupBy, setGroupBy] = useState<InventoryGroupBy>('STYLE');
@@ -148,7 +149,10 @@ const InventoryWorkspaceData: React.FC<InventoryWorkspaceViewProps> = ({ scope, 
         <div className="space-y-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
                 <div><h2 className="text-xl font-bold text-gray-900 dark:text-white">{titleFor[scope]}</h2><p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{scope === 'TRACKED' ? 'Brand, design, size and stock — with a separate barcode for each item.' : scope === 'LEGACY' ? 'Your old catalogue remains separate while stock is counted and relabelled.' : 'Styles and sizes prepared for your next relabelling batch.'}</p></div>
-                <Button variant="outline" onClick={() => { void fetchInventory(); }} disabled={loading}><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button>
+                <div className="flex flex-wrap items-center gap-2">
+                    <Button variant="outline" onClick={() => { void fetchInventory(); }} disabled={loading}><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button>
+                    {children}
+                </div>
             </div>
             {scope === 'TRACKED' && <p className="rounded-lg border border-indigo-100 dark:border-indigo-900/50 bg-indigo-50/60 dark:bg-indigo-950/20 px-4 py-3 text-sm text-indigo-900 dark:text-indigo-200">Only audited items with their new labels are included in these stock totals.</p>}
             {scope !== 'TRACKED' && <div className={`rounded-xl border p-4 text-sm ${scope === 'LEGACY' ? 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : 'border-indigo-200 bg-indigo-50 text-indigo-900 dark:border-indigo-900 dark:bg-indigo-950/20 dark:text-indigo-200'}`}><p className="font-semibold">{scope === 'LEGACY' ? 'Recorded balance is unverified' : 'Prepared items are not live stock'}</p><p className="mt-1">{scope === 'LEGACY' ? 'These balances are not a physical stock count. They are excluded from tracked pieces and tracked stock value.' : 'Prepared items are not available at checkout. Finish the count and relabelling process before activating them.'}</p></div>}
@@ -181,7 +185,21 @@ const InventoryWorkspaceData: React.FC<InventoryWorkspaceViewProps> = ({ scope, 
                 {stale && <p className="px-4 py-2 text-xs text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/20">Showing the last loaded results{loading ? ' while your new results load.' : '. Refresh to see current inventory.'}</p>}
                 {emptyTracked ? <div className="px-6 py-12 text-center"><div className="inline-flex rounded-full bg-indigo-50 dark:bg-indigo-950/40 p-4 mb-4"><Package className="h-8 w-8 text-indigo-500" /></div><h3 className="text-lg font-semibold text-gray-900 dark:text-white">Your audited stock will appear here</h3><p className="max-w-md mx-auto mt-2 text-sm text-gray-500 dark:text-gray-400">Upload your Excel audit, give the items new barcodes and check their counts.</p>{onOpenAudit && <Button variant="primary" className="mt-5 mx-auto" onClick={() => { if (isCurrent()) onOpenAudit(); }}>Import Excel stock<ArrowRight className="h-4 w-4" /></Button>}</div> : (
                     <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-gray-50 dark:bg-gray-900/30 text-xs uppercase text-gray-500 dark:text-gray-400"><tr><th className="px-4 py-3 min-w-[270px]">{groupBy === 'STYLE' ? 'Details / Barcode' : 'Style / Details'}</th><th className="px-4 py-3">Size</th><th className="px-4 py-3 text-right">Selling price / MRP</th><th className="px-4 py-3 text-right">{quantityFor[scope]}</th><th className="px-4 py-3">Updated</th>{showActions && <th className="px-4 py-3 text-right">Actions</th>}</tr></thead><tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                        {data?.items.map(group => {
+                        {loading && !data?.items.length ? (
+                            Array.from({ length: 6 }).map((_, i) => (
+                                <tr key={i} className="animate-pulse">
+                                    <td className="px-4 py-3.5 space-y-1.5">
+                                        <div className="h-4 w-36 bg-gray-200 dark:bg-gray-700 rounded" />
+                                        <div className="h-3 w-20 bg-gray-200 dark:bg-gray-700 rounded" />
+                                    </td>
+                                    <td className="px-4 py-3.5"><div className="h-5 w-10 bg-gray-200 dark:bg-gray-700 rounded" /></td>
+                                    <td className="px-4 py-3.5 text-right"><div className="h-4 w-16 bg-gray-200 dark:bg-gray-700 rounded ml-auto" /></td>
+                                    <td className="px-4 py-3.5 text-right"><div className="h-4 w-12 bg-gray-200 dark:bg-gray-700 rounded ml-auto" /></td>
+                                    <td className="px-4 py-3.5"><div className="h-4 w-20 bg-gray-200 dark:bg-gray-700 rounded" /></td>
+                                    {showActions && <td className="px-4 py-3.5 text-right"><div className="h-7 w-20 bg-gray-200 dark:bg-gray-700 rounded ml-auto" /></td>}
+                                </tr>
+                            ))
+                        ) : data?.items.map(group => {
                             const shared = groupBy === 'STYLE' ? sharedAttributes(group) : [];
                             const sharedKeys = new Set(shared.map(([key]) => key));
                             return <React.Fragment key={group.id}>
@@ -189,7 +207,7 @@ const InventoryWorkspaceData: React.FC<InventoryWorkspaceViewProps> = ({ scope, 
                                 {group.variants.map(variant => <tr key={variant.id} data-variant-id={variant.id} data-product-id={variant.productId} className="hover:bg-gray-50 dark:hover:bg-gray-900/20"><td className="px-4 py-3">{groupBy === 'SIZE' && <p className="font-medium text-gray-900 dark:text-white">{variant.name}<span className="ml-2 text-xs font-normal text-gray-500">{variant.category}</span></p>}<p className="font-mono text-xs text-gray-500">{variant.barcode || variant.sku || 'No barcode'}</p><div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">{visibleAttributes(variant).filter(([key]) => !sharedKeys.has(key)).map(([key, value]) => <span key={key}>{variant.attributeLabels?.[key] || prettyLabel(key)}: {value}</span>)}</div></td><td className="px-4 py-3"><span className="inline-flex min-w-[36px] justify-center rounded-md bg-gray-100 dark:bg-gray-800 px-2 py-1 text-xs font-semibold text-gray-700 dark:text-gray-200">{variant.size || 'Standard'}</span></td><td className="px-4 py-3 text-right whitespace-nowrap">{money(variant.sellingPrice)}{variant.sellingPrice !== variant.mrp && <p className="mt-0.5 text-xs text-gray-500">MRP: {money(variant.mrp)}</p>}</td><td className={`px-4 py-3 text-right font-semibold ${variant.stock < 0 ? 'text-red-600 dark:text-red-400' : variant.stock === 0 ? 'text-gray-400' : 'text-gray-900 dark:text-white'}`}>{scope === 'TRACKED' && onAdjustStock ? <QuickStockCount variant={variant} disabled={stale} onChanged={() => { void fetchInventory(); }} /> : variant.stock.toLocaleString('en-IN')}</td><td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{updatedTime(variant.updatedAt)}</td>{showActions && <td className="px-4 py-3"><div className="flex justify-end gap-1">{onViewMovements && <Button variant="ghost" size="sm" disabled={stale} aria-label={`Movement history for ${variant.name} ${variant.size || 'Standard'}`} title="Movement history" onClick={() => viewMovements(variant.id)}><History className="h-4 w-4" /></Button>}{scope === 'TRACKED' && onAdjustStock && <Button variant="ghost" size="sm" disabled={stale} aria-label={`Adjust stock for ${variant.name} ${variant.size || 'Standard'}`} title="Edit count or record stock received" onClick={() => { if (isCurrent() && actionsReady.current) onAdjustStock(variant); }}><SlidersHorizontal className="h-4 w-4" />Edit count</Button>}{canEditProducts && onEditProduct && <Button variant="ghost" size="sm" disabled={stale} aria-label={`Edit product ${variant.name} ${variant.size || 'Standard'}`} title="Edit product" onClick={() => editProduct(variant.productId)}><Pencil className="h-4 w-4" /></Button>}</div></td>}</tr>)}
                             </React.Fragment>;
                         })}
-                        {!data?.items.length && <tr><td colSpan={tableColumns} className="p-10 text-center text-gray-500">{loading ? 'Loading inventory…' : error ? 'Inventory is unavailable. Retry loading above.' : filtered ? 'No stock matches these filters.' : scope === 'PREPARED' ? 'No prepared styles yet.' : 'No old items remain.'}{filtered && !loading && !error && <Button variant="outline" size="sm" className="mt-3 mx-auto" onClick={clearFilters}>Clear filters</Button>}</td></tr>}
+                        {!data?.items.length && !loading && <tr><td colSpan={tableColumns} className="p-10 text-center text-gray-500">{error ? 'Inventory is unavailable. Retry loading above.' : filtered ? 'No stock matches these filters.' : scope === 'PREPARED' ? 'No prepared styles yet.' : 'No old items remain.'}{filtered && !error && <Button variant="outline" size="sm" className="mt-3 mx-auto" onClick={clearFilters}>Clear filters</Button>}</td></tr>}
                     </tbody></table></div>
                 )}
                 {!emptyTracked && <div className="px-4 py-3 border-t border-gray-200 dark:border-dark-border flex flex-wrap items-center justify-between gap-3 text-sm text-gray-500"><span>{first}–{last} of {(data?.totalMatching || 0).toLocaleString('en-IN')} {groupBy === 'STYLE' ? 'styles' : 'size entries'}</span><div className="flex items-center gap-2"><Button variant="outline" size="sm" aria-label="Previous inventory page" disabled={loading || Boolean(error) || !data || data.page <= 1} onClick={() => { requestId.current += 1; actionsReady.current = false; setLoading(true); setPage(value => value - 1); }}><ChevronLeft className="h-4 w-4" /></Button><span>Page {data?.page || 1} of {data?.totalPages || 1}</span><Button variant="outline" size="sm" aria-label="Next inventory page" disabled={loading || Boolean(error) || !data || data.page >= data.totalPages} onClick={() => { requestId.current += 1; actionsReady.current = false; setLoading(true); setPage(value => value + 1); }}><ChevronRight className="h-4 w-4" /></Button></div></div>}

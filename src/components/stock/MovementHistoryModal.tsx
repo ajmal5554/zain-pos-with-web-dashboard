@@ -23,7 +23,7 @@ export const MovementHistoryModal: React.FC<{ variantId: string; onClose: () => 
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const limit = 50;
-    const isCurrent = () => { const active = useAuthStore.getState().user; return Boolean(mounted.current && active && active.id === actor.current && active.isActive !== false && (active.role === 'ADMIN' || active.permManageInventory)); };
+    const isCurrent = () => { const active = useAuthStore.getState().user; return Boolean(mounted.current && active && active.id === actor.current && active.isActive !== false && (active.role === 'ADMIN' || active.permManageInventory || active.permManageProducts)); };
     const load = async () => {
         if (!isCurrent()) return;
         const request = ++requestId.current;

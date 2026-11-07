@@ -996,7 +996,7 @@ export const ActivityPage: React.FC = () => {
         };
     };
 
-    if (user?.role !== 'ADMIN') {
+    if (user?.role !== 'ADMIN' && !user?.permDeleteAudit) {
         return (
             <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
                 <div className="bg-red-50 p-6 rounded-full mb-4">
@@ -1004,7 +1004,7 @@ export const ActivityPage: React.FC = () => {
                 </div>
                 <h2 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h2>
                 <p className="text-gray-500 max-w-sm">
-                    Only administrators can view the system activity logs.
+                    Only administrators or authorized staff can view system activity logs.
                 </p>
             </div>
         );

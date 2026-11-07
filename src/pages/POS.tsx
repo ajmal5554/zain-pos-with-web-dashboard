@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { CreditCard, Trash2, X, Plus, Minus, Scan, Save, Banknote, Smartphone, Printer, ArrowRight, CheckCircle, AlertTriangle, AlertCircle, User, UserPlus, Phone, Search, ChevronDown, Check } from 'lucide-react';
+import { CreditCard, Trash2, X, Plus, Minus, Scan, Save, Banknote, Smartphone, Printer, ArrowRight, CheckCircle, AlertTriangle, AlertCircle, User, UserPlus, Phone, Search, ChevronDown, Check, MessageSquare } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
@@ -8,9 +8,14 @@ import { useAuthStore } from '../store/authStore';
 import { useCartStore } from '../store/cartStore';
 import { db } from '../lib/db';
 import { printService } from '../services/print.service';
+import { messagingService } from '../services/messaging.service';
+import { InvoiceMessageModal } from '../components/pos/InvoiceMessageModal';
 import { auditService } from '../services/audit.service';
 import { getSaleEditLockReason } from '../lib/saleEdit';
 import { formatVariantDescription } from '../lib/catalogueDescription';
+import { getStoredPaymentMethods, saveStoredPaymentMethods } from '../lib/paymentMethods';
+import type { CreditNoteRecord } from '../types/creditNote';
+import { POSSkeleton } from '../components/pos/POSSkeleton';
 
 import { useLocation } from 'react-router-dom';
 
@@ -104,9 +109,23 @@ export const POS: React.FC = () => {
     const [splitAmounts, setSplitAmounts] = useState({ CASH: 0, CARD: 0, UPI: 0 });
 
     // Which payment methods are enabled (loaded from PAYMENT_METHODS setting)
-    const [enabledPaymentMethods, setEnabledPaymentMethods] = useState({
-        CASH: true, UPI: true, CARD: true, SPLIT: true
-    });
+    const [enabledPaymentMethods, setEnabledPaymentMethods] = useState(getStoredPaymentMethods);
+
+    useEffect(() => {
+        const handlePmUpdate = (e: any) => {
+            if (e?.detail) {
+                const merged = saveStoredPaymentMethods(e.detail);
+                setEnabledPaymentMethods(merged);
+                const current = useCartStore.getState().paymentMethod;
+                if (e.detail[current] === false) {
+                    const first = (['CASH', 'UPI', 'CARD', 'SPLIT'] as const).find(m => e.detail[m] !== false);
+                    if (first) useCartStore.getState().setPaymentMethod(first);
+                }
+            }
+        };
+        window.addEventListener('payment-methods-updated', handlePmUpdate);
+        return () => window.removeEventListener('payment-methods-updated', handlePmUpdate);
+    }, []);
 
     // Customer Selection State (Walk-in Customer by default, searchable by Name or Phone)
     const [customerName, setCustomerName] = useState('Walk-in Customer');
@@ -119,6 +138,20 @@ export const POS: React.FC = () => {
     const [showQuickAddModal, setShowQuickAddModal] = useState(false);
     const [quickAddForm, setQuickAddForm] = useState({ name: '', phone: '', gstin: '' });
     const [isSavingCustomer, setIsSavingCustomer] = useState(false);
+
+    // Store Credit / Credit Note State
+    const [customerStoreCredits, setCustomerStoreCredits] = useState<CreditNoteRecord[]>([]);
+    const [appliedCreditNotes, setAppliedCreditNotes] = useState<Array<{ creditNoteId: string; code: string; amount: number; maxAvailable: number }>>([]);
+    const [isCreditNoteModalOpen, setIsCreditNoteModalOpen] = useState(false);
+    const [manualCreditCode, setManualCreditCode] = useState('');
+    const [isCheckingCreditCode, setIsCheckingCreditCode] = useState(false);
+
+    // Invoice Messaging State (WhatsApp / SMS fallback & Store Credit notification)
+    const [isInvoiceMessageModalOpen, setIsInvoiceMessageModalOpen] = useState(false);
+    const [invoiceModalSale, setInvoiceModalSale] = useState<any>(null);
+    const [invoiceModalCredits, setInvoiceModalCredits] = useState<Array<{ code: string; amount: number }>>([]);
+    const [invoiceModalActiveCredit, setInvoiceModalActiveCredit] = useState(0);
+    const [invoiceModalCreditCodes, setInvoiceModalCreditCodes] = useState<string[]>([]);
 
     const customerInputRef = useRef<HTMLInputElement>(null);
     const customerDropdownRef = useRef<HTMLDivElement>(null);
@@ -156,16 +189,63 @@ export const POS: React.FC = () => {
         };
     }, []);
 
-    // Auto-sync paidAmount for non-cash payments when discount changes
-    // CASH: let it stay (customer may over-pay and receive change)
-    // CARD / UPI: customer pays exact final amount, so keep paidAmount in sync
+    const totalAppliedCredit = useMemo(() => {
+        return roundCurrency(appliedCreditNotes.reduce((sum, c) => sum + c.amount, 0));
+    }, [appliedCreditNotes]);
+
+    const fetchCustomerStoreCredits = useCallback(async (phoneToQuery?: string) => {
+        const cleanPhone = (phoneToQuery !== undefined ? phoneToQuery : customerPhone || '').replace(/\D/g, '');
+        if (cleanPhone.length >= 10) {
+            try {
+                const res = await window.electronAPI.creditNotes.getActiveForCustomer(cleanPhone);
+                if (res.success && res.data) {
+                    const credits = res.data.creditNotes || [];
+                    setCustomerStoreCredits(credits);
+                    return credits;
+                }
+            } catch (err) {
+                console.error('Failed to fetch customer store credits:', err);
+                setCustomerStoreCredits([]);
+            }
+        } else {
+            setCustomerStoreCredits([]);
+        }
+        return [];
+    }, [customerPhone]);
+
+    // Query active store credit when customer phone changes
+    useEffect(() => {
+        void fetchCustomerStoreCredits(customerPhone);
+    }, [customerPhone, fetchCustomerStoreCredits]);
+
+    // Keep applied credit capped within current cart total
+    useEffect(() => {
+        const grand = Math.max(0, getGrandTotal() - (parseFloat(discountAmount) || 0));
+        if (totalAppliedCredit > grand && appliedCreditNotes.length > 0) {
+            let remainingCap = grand;
+            setAppliedCreditNotes(prev => {
+                return prev.map(c => {
+                    const amt = Math.min(c.maxAvailable, remainingCap);
+                    remainingCap = Math.max(0, remainingCap - amt);
+                    return { ...c, amount: roundCurrency(amt) };
+                }).filter(c => c.amount > 0);
+            });
+        }
+    }, [items, discountAmount, totalAppliedCredit, getGrandTotal]);
+
+    // Auto-sync paidAmount for payments when discount or store credit changes
     useEffect(() => {
         if (!showPayment) return;
-        if (paymentMethod === 'CASH' || paymentMethod === 'SPLIT') return;
         const discount = parseFloat(discountAmount) || 0;
         const finalTotal = Math.max(0, getGrandTotal() - discount);
-        setPaidAmount(finalTotal.toFixed(2));
-    }, [discountAmount, paymentMethod, showPayment]);
+        const remainingDue = Math.max(0, finalTotal - totalAppliedCredit);
+
+        if (paymentMethod !== 'CASH' && paymentMethod !== 'SPLIT') {
+            setPaidAmount(remainingDue.toFixed(2));
+        } else if (remainingDue === 0) {
+            setPaidAmount('0.00');
+        }
+    }, [discountAmount, paymentMethod, showPayment, totalAppliedCredit, getGrandTotal]);
 
     // Keyboard focus shortcuts for reliable scanner/search switching.
     useEffect(() => {
@@ -301,6 +381,9 @@ export const POS: React.FC = () => {
         setCustomerSearchInput('Walk-in Customer');
         setShowCustomerDropdown(false);
         setCustomerHighlightIndex(-1);
+        setCustomerStoreCredits([]);
+        setAppliedCreditNotes([]);
+        setManualCreditCode('');
         setSaleSuccess(false);
         setPrintError(false);
         setIsEditMode(false);
@@ -439,7 +522,7 @@ export const POS: React.FC = () => {
                     setBillNo(sale.billNo);
                     setCurrentSaleId(sale.id);
                     setOriginalSaleData(sale);
-                    setOriginalPaidAmount(sale.paidAmount || 0);
+                    setOriginalPaidAmount(roundCurrency((sale.paidAmount || 0) - (sale.changeAmount || 0)));
                     setPaidAmount(keepDraft ? session!.paidAmount : String(sale.paidAmount ?? ''));
                     setDiscountAmount(keepDraft ? session!.discountAmount : String(sale.discount ?? ''));
                     setPaymentMethod(keepDraft ? session!.paymentMethod : sale.paymentMethod || 'CASH');
@@ -487,46 +570,6 @@ export const POS: React.FC = () => {
     };
 
     const loadShopSettings = async () => {
-        // Refresh User Permissions on Mount
-        if (user?.id) {
-            try {
-                const freshUser = await db.users.findUnique({
-                    where: { id: user.id },
-                    select: {
-                        id: true,
-                        username: true,
-                        name: true,
-                        role: true,
-                        isActive: true,
-                        permPrintSticker: true,
-                        permAddItem: true,
-                        permDeleteProduct: true,
-                        permVoidSale: true,
-                        permViewReports: true,
-                        permViewSales: true,
-                        permViewGstReports: true,
-                        permEditSettings: true,
-                        permManageProducts: true,
-                        permEditSales: true,
-                        permManageInventory: true,
-                        permManageUsers: true,
-                        permViewCostPrice: true,
-                        permChangePayment: true,
-                        permDeleteAudit: true,
-                        permBulkUpdate: true,
-                        permBackDateSale: true,
-                        permViewInsights: true,
-                        maxDiscount: true,
-                    }
-                });
-                if (freshUser) {
-                    useAuthStore.getState().login(freshUser);
-                }
-            } catch (e) {
-                console.error("Failed to refresh user permissions", e);
-            }
-        }
-
         try {
             const result = await db.settings.findUnique({ where: { key: 'SHOP_SETTINGS' } });
             if (result?.value) {
@@ -537,10 +580,19 @@ export const POS: React.FC = () => {
         }
 
         try {
-            const pmResult = await db.settings.findUnique({ where: { key: 'PAYMENT_METHODS' } });
-            if (pmResult?.value) {
-                const loaded = JSON.parse(pmResult.value);
-                setEnabledPaymentMethods(prev => ({ ...prev, ...loaded }));
+            let pmData: string | null = null;
+            const res = await window.electronAPI?.settings?.get?.({ key: 'PAYMENT_METHODS' });
+            if (res?.success && res.data) {
+                pmData = res.data as string;
+            } else {
+                const pmResult = await db.settings.findUnique({ where: { key: 'PAYMENT_METHODS' } });
+                if (pmResult?.value) pmData = pmResult.value;
+            }
+
+            if (pmData) {
+                const loaded = JSON.parse(pmData);
+                const merged = saveStoredPaymentMethods(loaded);
+                setEnabledPaymentMethods(merged);
                 // If the active payment method was disabled in settings, reset to first enabled
                 const current = useCartStore.getState().paymentMethod;
                 if (loaded[current] === false) {
@@ -970,14 +1022,88 @@ export const POS: React.FC = () => {
         const taxable = roundCurrency(finalTotal / GST_INCLUSIVE_FACTOR);
         const tax = roundCurrency(finalTotal - taxable);
 
+        const creditApplied = Math.min(finalTotal, totalAppliedCredit);
+        const remainingDue = roundCurrency(Math.max(0, finalTotal - creditApplied));
+
         const paid = paymentMethod === 'SPLIT'
             ? roundCurrency(Object.values(splitAmounts).reduce((a, b) => a + b, 0))
             : roundCurrency(parseFloat(paidAmount) || 0);
 
-        const change = roundCurrency(paid - finalTotal);
+        const change = remainingDue === 0 ? 0 : roundCurrency(Math.max(0, paid - remainingDue));
         const balanceDue = roundCurrency(finalTotal - originalPaidAmount);
 
-        return { subtotal, taxable, tax, discount, finalTotal, paid, change, balanceDue };
+        return { subtotal, taxable, tax, discount, finalTotal, creditApplied, remainingDue, paid, change, balanceDue };
+    };
+
+    const handleApplyCreditNote = (cn: CreditNoteRecord, customAmount?: number) => {
+        const grand = Math.max(0, getGrandTotal() - (parseFloat(discountAmount) || 0));
+        const effectiveCap = currentSaleId ? Math.max(0, grand - originalPaidAmount) : grand;
+        const currentOtherCredit = appliedCreditNotes
+            .filter(c => c.creditNoteId !== cn.id)
+            .reduce((sum, c) => sum + c.amount, 0);
+        const maxNeeded = Math.max(0, effectiveCap - currentOtherCredit);
+
+        if (maxNeeded <= 0) {
+            showNotification(currentSaleId ? 'Bill has no unpaid balance due.' : 'Cart total is already fully covered by store credit.', 'warning');
+            return;
+        }
+
+        const available = cn.remainingAmount;
+        const toApply = customAmount !== undefined 
+            ? Math.min(customAmount, available, maxNeeded)
+            : Math.min(available, maxNeeded);
+
+        if (toApply <= 0) {
+            showNotification('No credit amount to apply.', 'warning');
+            return;
+        }
+
+        const newRemainingDue = roundCurrency(Math.max(0, effectiveCap - (currentOtherCredit + toApply)));
+        if (paymentMethod === 'CASH' && (parseFloat(paidAmount) || 0) > newRemainingDue) {
+            setPaidAmount(newRemainingDue > 0 ? newRemainingDue.toFixed(2) : '0.00');
+        }
+
+        setAppliedCreditNotes(prev => {
+            const filtered = prev.filter(c => c.creditNoteId !== cn.id);
+            return [...filtered, {
+                creditNoteId: cn.id,
+                code: cn.code,
+                amount: roundCurrency(toApply),
+                maxAvailable: available
+            }];
+        });
+        showNotification(`Applied ₹${toApply.toFixed(2)} from Credit Note ${cn.code}`, 'success');
+        markAsChanged();
+    };
+
+    const handleRemoveCreditNote = (creditNoteId: string) => {
+        setAppliedCreditNotes(prev => prev.filter(c => c.creditNoteId !== creditNoteId));
+        markAsChanged();
+    };
+
+    const handleLookupAndApplyCode = async () => {
+        const cleanCode = manualCreditCode.trim().toUpperCase();
+        if (!cleanCode) return;
+        setIsCheckingCreditCode(true);
+        try {
+            const res = await window.electronAPI.creditNotes.getByCode(cleanCode);
+            if (!res.success || !res.data) {
+                showNotification(`Credit Note ${cleanCode} not found.`, 'error');
+                return;
+            }
+            const cn: CreditNoteRecord = res.data;
+            if (cn.status !== 'ACTIVE' || cn.remainingAmount <= 0) {
+                showNotification(`Credit Note ${cn.code} is ${cn.status.toLowerCase()} (Remaining: ₹${cn.remainingAmount.toFixed(2)}).`, 'warning');
+                return;
+            }
+            handleApplyCreditNote(cn);
+            setManualCreditCode('');
+            setIsCreditNoteModalOpen(false);
+        } catch (err: any) {
+            showNotification(err.message || 'Failed to verify Credit Note', 'error');
+        } finally {
+            setIsCheckingCreditCode(false);
+        }
     };
 
 
@@ -1034,6 +1160,9 @@ export const POS: React.FC = () => {
         setCustomerSearchInput('Walk-in Customer');
         setShowCustomerDropdown(false);
         setCustomerHighlightIndex(-1);
+        setCustomerStoreCredits([]);
+        setAppliedCreditNotes([]);
+        setManualCreditCode('');
         setSaleSuccess(false);
         setPrintError(false);
         setIsEditMode(false);
@@ -1049,16 +1178,16 @@ export const POS: React.FC = () => {
     const handleCompleteSale = async (shouldPrint = true) => {
         if (items.length === 0) return;
 
-        const { tax, discount, finalTotal, paid, change } = calculateTotals();
+        const { tax, discount, finalTotal, creditApplied, remainingDue, paid, change } = calculateTotals();
 
-        // Validate split payment amounts sum to total
-        if (paymentMethod === 'SPLIT') {
+        // Validate split payment amounts sum to remaining due
+        if (paymentMethod === 'SPLIT' && remainingDue > 0) {
             const splitTotal = Object.values(splitAmounts).reduce((a, b) => a + b, 0);
-            const difference = Math.abs(splitTotal - finalTotal);
+            const difference = Math.abs(splitTotal - remainingDue);
             
             if (difference > 0.01) {  // Allow 1 paisa rounding difference
                 showNotification(
-                    `Split payment error: Split Total (₹${splitTotal.toFixed(2)}) does not match Bill Total (₹${finalTotal.toFixed(2)}). Difference: ₹${difference.toFixed(2)}`,
+                    `Split payment error: Split Total (₹${splitTotal.toFixed(2)}) does not match Remaining Due (₹${remainingDue.toFixed(2)}). Difference: ₹${difference.toFixed(2)}`,
                     'error'
                 );
                 return;
@@ -1104,8 +1233,8 @@ export const POS: React.FC = () => {
         }
         setShowNoDiscountConfirm(false);
 
-        if (paid < finalTotal) {
-            showNotification('Paid amount is less than total!', 'warning');
+        if (remainingDue > 0 && paid < remainingDue) {
+            showNotification(`Paid amount (₹${paid.toFixed(2)}) is less than remaining due (₹${remainingDue.toFixed(2)})!`, 'warning');
             return;
         }
 
@@ -1115,6 +1244,39 @@ export const POS: React.FC = () => {
             const subtotal = roundCurrency(getSubtotal());
             const cgst = roundCurrency(tax / 2);
             const sgst = roundCurrency(tax / 2);
+
+            const paymentsList: Array<{ paymentMode: string; amount: number }> = [];
+            if (creditApplied > 0) {
+                paymentsList.push({
+                    paymentMode: 'STORE_CREDIT',
+                    amount: creditApplied
+                });
+            }
+            if (remainingDue > 0) {
+                if (paymentMethod === 'SPLIT') {
+                    for (const [mode, amt] of Object.entries(splitAmounts)) {
+                        if (amt > 0) paymentsList.push({ paymentMode: mode, amount: amt });
+                    }
+                } else {
+                    paymentsList.push({
+                        paymentMode: paymentMethod,
+                        amount: remainingDue
+                    });
+                }
+            } else if (creditApplied === 0) {
+                paymentsList.push({
+                    paymentMode: 'CASH',
+                    amount: 0
+                });
+            }
+
+            const finalPaidAmount = paymentMethod === 'SPLIT'
+                ? roundCurrency(creditApplied + Object.values(splitAmounts).reduce((a, b) => a + b, 0))
+                : roundCurrency(creditApplied + (remainingDue === 0 ? 0 : paid));
+
+            const mainPaymentMethod = creditApplied > 0 && remainingDue === 0
+                ? 'STORE_CREDIT'
+                : paymentMethod;
 
             if (currentSaleId) {
                 // If Sale ID is present, we are in UPDATE mode
@@ -1135,10 +1297,8 @@ export const POS: React.FC = () => {
                     cgst,
                     sgst,
                     grandTotal: finalTotal,
-                    paymentMethod: paymentMethod === 'SPLIT' ? 'SPLIT' : paymentMethod,
-                    paidAmount: paymentMethod === 'SPLIT'
-                        ? Object.values(splitAmounts).reduce((a, b) => a + b, 0)
-                        : paid,
+                    paymentMethod: mainPaymentMethod,
+                    paidAmount: finalPaidAmount,
                     changeAmount: change,
                     items: items.map((item: any) => ({
                         variantId: item.variantId,
@@ -1153,18 +1313,8 @@ export const POS: React.FC = () => {
                         taxAmount: roundCurrency(((item.sellingPrice * item.quantity - item.discount) * item.taxRate) / (100 + item.taxRate)),
                         total: roundCurrency(item.sellingPrice * item.quantity - item.discount),
                     })),
-                    payments: paymentMethod === 'SPLIT'
-                        ? Object.entries(splitAmounts)
-                            .filter(([_, amt]) => amt > 0)
-                            .map(([mode, amt]) => ({ paymentMode: mode, amount: amt }))
-                        : [{
-                            paymentMode: paymentMethod,
-                            amount: finalTotal
-                        }]
+                    payments: paymentsList
                 };
-
-                // NOTE: Change detection is now handled by useEffect and button disable state
-                // No need to validate here - button is already disabled if no changes
 
                 const updateResult = await (window.electronAPI as any).sales.updateSale({
                     saleId: currentSaleId,
@@ -1174,16 +1324,17 @@ export const POS: React.FC = () => {
 
                 if (updateResult.success) {
                     const sale = updateResult.data;
+                    const netPreviouslyPaid = roundCurrency((sale.paidAmount || 0) - (sale.changeAmount || 0));
                     setCurrentSaleId(sale.id);
                     setOriginalSaleData(sale);
-                    setOriginalPaidAmount(sale.paidAmount || 0);
+                    setOriginalPaidAmount(netPreviouslyPaid);
                     setIsEditMode(true);
                     setHasChanges(false);
                     persistActiveSaleSession({
                         saleId: sale.id,
                         billNo: sale.billNo,
                         originalSaleData: sale,
-                        originalPaidAmount: sale.paidAmount || 0,
+                        originalPaidAmount: netPreviouslyPaid,
                         paidAmount: (sale.paidAmount ?? '').toString(),
                         discountAmount: (sale.discount ?? '').toString(),
                         paymentMethod: sale.paymentMethod || 'CASH',
@@ -1196,6 +1347,7 @@ export const POS: React.FC = () => {
                     if (shouldPrint) {
                         await printReceipt(sale);
                     }
+                    await fetchCustomerStoreCredits(customerPhone);
                     setSaleSuccess(true);
                     setTimeout(() => setSaleSuccess(false), 2500);
                     setProcessing(false);
@@ -1204,6 +1356,13 @@ export const POS: React.FC = () => {
                     throw new Error(updateResult.error);
                 }
             }
+
+            const capturedAppliedCredits = appliedCreditNotes.map(c => ({
+                creditNoteId: c.creditNoteId,
+                code: c.code,
+                amount: c.amount
+            }));
+            const appliedCodesStr = capturedAppliedCredits.map(c => c.code).join(', ');
 
             // Prepare Checkout Data (New Sale)
             const checkoutData = {
@@ -1217,11 +1376,12 @@ export const POS: React.FC = () => {
                 cgst,
                 sgst,
                 grandTotal: finalTotal,
-                paymentMethod: paymentMethod === 'SPLIT' ? 'SPLIT' : paymentMethod,
-                paidAmount: paymentMethod === 'SPLIT'
-                    ? Object.values(splitAmounts).reduce((a, b) => a + b, 0)
-                    : paid,
+                paymentMethod: mainPaymentMethod,
+                paidAmount: finalPaidAmount,
                 changeAmount: change,
+                remarks: creditApplied > 0 && appliedCodesStr
+                    ? `Redeemed Store Credit: ${appliedCodesStr}`
+                    : undefined,
                 items: items.map((item: any) => ({
                     variantId: item.variantId,
                     productName: item.productName,
@@ -1234,31 +1394,27 @@ export const POS: React.FC = () => {
                     taxAmount: roundCurrency(((item.sellingPrice * item.quantity - item.discount) * item.taxRate) / (100 + item.taxRate)),
                     total: roundCurrency(item.sellingPrice * item.quantity - item.discount),
                 })),
-                payments: paymentMethod === 'SPLIT'
-                    ? Object.entries(splitAmounts)
-                        .filter(([_, amt]) => amt > 0)
-                        .map(([mode, amt]) => ({ paymentMode: mode, amount: amt }))
-                    : [{
-                        paymentMode: paymentMethod,
-                        amount: finalTotal
-                    }]
+                payments: paymentsList,
+                creditNoteRedemptions: capturedAppliedCredits
             };
 
             const result = await window.electronAPI.sales.checkout(checkoutData);
 
             if (result.success) {
                 const sale = result.data;
+                const netPreviouslyPaid = roundCurrency((sale.paidAmount || 0) - (sale.changeAmount || 0));
                 setBillNo(sale.billNo); // Sync with server-assigned bill number
                 setCurrentSaleId(sale.id);
                 setOriginalSaleData(sale);
-                setOriginalPaidAmount(sale.paidAmount || 0);
+                setOriginalPaidAmount(netPreviouslyPaid);
                 setIsEditMode(true);
                 setHasChanges(false);
+                setAppliedCreditNotes([]);
                 persistActiveSaleSession({
                     saleId: sale.id,
                     billNo: sale.billNo,
                     originalSaleData: sale,
-                    originalPaidAmount: sale.paidAmount || 0,
+                    originalPaidAmount: netPreviouslyPaid,
                     paidAmount: (sale.paidAmount ?? '').toString(),
                     discountAmount: (sale.discount ?? '').toString(),
                     paymentMethod: sale.paymentMethod || 'CASH',
@@ -1270,7 +1426,73 @@ export const POS: React.FC = () => {
                 });
                 // Print receipt
                 if (shouldPrint) {
-                    await printReceipt(sale);
+                    await printReceipt(sale, capturedAppliedCredits);
+                }
+
+                // Immediately refresh customer active store credits from backend
+                const refreshedCredits = await fetchCustomerStoreCredits(customerPhone);
+                const totalAvailCredit = (refreshedCredits || []).reduce((sum: number, c: any) => sum + (c.remainingAmount || 0), 0);
+                const availCodes = (refreshedCredits || []).map((c: any) => c.code).filter(Boolean);
+
+                // Customer phone invoice messaging (WhatsApp with smart SMS fallback)
+                const phoneForMessaging = (sale.customerPhone || customerPhone || '').trim();
+                const cleanPhoneDigits = phoneForMessaging.replace(/\D/g, '');
+                if (cleanPhoneDigits.length >= 10) {
+                    void (async () => {
+                        try {
+                            const msgCfg = await messagingService.getConfig();
+                            if (!msgCfg.enabled) return;
+
+                            const messagePayload = {
+                                saleId: sale.id,
+                                billNo: sale.billNo,
+                                date: sale.actualSaleDate || sale.createdAt,
+                                customerName: sale.customerName || customerName,
+                                customerPhone: phoneForMessaging,
+                                items: (sale.items || []).map((i: any) => ({
+                                    name: i.productName || i.name || 'Item',
+                                    variantInfo: i.variantInfo,
+                                    quantity: i.quantity,
+                                    sellingPrice: i.sellingPrice || i.rate || 0,
+                                    total: i.total || 0,
+                                })),
+                                subtotal: sale.subtotal,
+                                discount: sale.discount,
+                                grandTotal: sale.grandTotal,
+                                paymentMethod: sale.paymentMethod,
+                                paidAmount: sale.paidAmount,
+                                changeAmount: sale.changeAmount,
+                                appliedStoreCredit: capturedAppliedCredits,
+                                activeStoreCreditBalance: totalAvailCredit,
+                                activeStoreCreditCodes: availCodes,
+                                shopName: shopSettings?.shopName,
+                                shopAddress: shopSettings?.address,
+                                shopPhone: shopSettings?.phone,
+                                gstin: shopSettings?.gstin,
+                            };
+
+                            if (msgCfg.autoSend) {
+                                const sendRes = await messagingService.sendInvoice(messagePayload);
+                                if (sendRes.success) {
+                                    if (sendRes.fallback) {
+                                        showToast(`No WhatsApp account. Invoice sent via SMS to ${phoneForMessaging}`, 'warning');
+                                    } else {
+                                        showToast(`Invoice messaged to ${phoneForMessaging} via ${sendRes.channel}!`, 'success');
+                                    }
+                                } else if (sendRes.error) {
+                                    showToast(`Invoice messaging failed: ${sendRes.error}`, 'error');
+                                }
+                            } else {
+                                setInvoiceModalSale(sale);
+                                setInvoiceModalCredits(capturedAppliedCredits || []);
+                                setInvoiceModalActiveCredit(totalAvailCredit);
+                                setInvoiceModalCreditCodes(availCodes);
+                                setIsInvoiceMessageModalOpen(true);
+                            }
+                        } catch (msgErr) {
+                            console.warn('Post-checkout invoice messaging error:', msgErr);
+                        }
+                    })();
                 }
 
                 setSaleSuccess(true);
@@ -1289,7 +1511,7 @@ export const POS: React.FC = () => {
         }
     };
 
-    const printReceipt = async (sale: any) => {
+    const printReceipt = async (sale: any, appliedCredits?: Array<{ code: string; amount: number }>) => {
         try {
             // Detect replacement bill and extract exchange credit
             const isReplBill = sale.paymentMethod === 'EXCHANGE' || (sale.remarks || '').includes('Replacement sale for Invoice');
@@ -1297,6 +1519,15 @@ export const POS: React.FC = () => {
             const exchCreditAmt = exchCreditPmt ? Number(exchCreditPmt.amount || 0) : 0;
             const origBillMatch = sale.remarks?.match(/Invoice #(\d+)/);
             const origBillNo = origBillMatch?.[1] || '';
+
+            // Extract store credit details
+            const storeCreditPmt = (sale.payments || []).find((p: any) => p.paymentMode === 'STORE_CREDIT');
+            const storeCreditAmt = storeCreditPmt
+                ? Number(storeCreditPmt.amount || 0)
+                : (sale.paymentMethod === 'STORE_CREDIT' ? Number(sale.grandTotal || 0) : (appliedCredits?.reduce((s, c) => s + c.amount, 0) || 0));
+            const codesFromArgs = (appliedCredits || []).map(c => c.code).filter(Boolean);
+            const cnMatch = (sale.remarks || '').match(/Redeemed Store Credit:\s*([A-Za-z0-9-,\s]+)/);
+            const creditCodes = codesFromArgs.length > 0 ? codesFromArgs.join(', ') : (cnMatch ? cnMatch[1].trim() : undefined);
 
             const receiptData = {
                 billNo: sale.billNo,
@@ -1336,6 +1567,9 @@ export const POS: React.FC = () => {
                 isReplacementBill: isReplBill && exchCreditAmt > 0,
                 originalBillNo: origBillNo,
                 exchangeCreditAmount: exchCreditAmt,
+                // Store Credit fields
+                storeCreditAmount: storeCreditAmt,
+                creditNoteCodes: creditCodes,
             };
 
             await printService.printReceipt(receiptData);
@@ -1429,14 +1663,22 @@ export const POS: React.FC = () => {
     const visibleProducts = useMemo(() => filteredProducts.slice(0, 200), [filteredProducts]);
 
     // Display helpers for Footer
-    // Display helpers for Footer
-    const { subtotal, tax, finalTotal, change } = calculateTotals();
+    const { subtotal, tax, finalTotal, creditApplied, remainingDue, change, balanceDue } = calculateTotals();
 
-    if (loadingSession || sessionError) {
-        return <div className="h-full flex flex-col items-center justify-center gap-4 p-6">
-            <p role="status">{loadingSession ? 'Checking the current bill…' : sessionError}</p>
-            {!loadingSession && <Button onClick={() => void loadData()}>Retry loading bill</Button>}
-        </div>;
+    if (loadingSession) {
+        return <POSSkeleton />;
+    }
+
+    if (sessionError) {
+        return (
+            <div className="h-full flex flex-col items-center justify-center gap-4 p-6">
+                <div className="p-3 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-full">
+                    <AlertCircle className="w-8 h-8" />
+                </div>
+                <p role="status" className="text-base font-semibold text-gray-800 dark:text-gray-200">{sessionError}</p>
+                <Button onClick={() => void loadData()}>Retry loading bill</Button>
+            </div>
+        );
     }
 
     return (
@@ -1573,21 +1815,21 @@ export const POS: React.FC = () => {
             {/* 1. TOP HEADER: Invoice Details */}
             <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center text-sm shadow-sm">
                 {/* Left: invoice fields — fills remaining space */}
-                <div className="flex items-center gap-2 flex-1 min-w-0 p-2">
-                    <div className="flex flex-col flex-shrink-0">
-                        <label className="text-gray-500 font-bold text-xs uppercase">Bill No</label>
-                        <div className="font-mono font-bold text-lg bg-gray-100 dark:bg-gray-900 px-2 py-1 rounded border border-gray-300">
+                <div className="flex items-end gap-2 flex-1 min-w-0 p-2">
+                    <div className="flex flex-col flex-shrink-0 gap-1">
+                        <label className="text-gray-500 font-bold text-xs uppercase h-4 flex items-center">Bill No</label>
+                        <div className="h-9 px-3 font-mono font-bold text-base bg-gray-100 dark:bg-gray-900 rounded-md border border-gray-300 dark:border-gray-600 flex items-center justify-center text-gray-900 dark:text-gray-100 shadow-2xs">
                             {billNo}
                         </div>
                     </div>
-                    <div className="flex flex-col flex-shrink-0">
-                        <label className="text-gray-500 font-bold text-xs uppercase">Invoice Date</label>
-                        <div className="font-mono text-sm bg-gray-100 dark:bg-gray-900 px-2 py-1 rounded border border-gray-300 text-gray-500">
+                    <div className="flex flex-col flex-shrink-0 gap-1">
+                        <label className="text-gray-500 font-bold text-xs uppercase h-4 flex items-center">Invoice Date</label>
+                        <div className="h-9 px-3 font-mono font-medium text-sm bg-gray-100 dark:bg-gray-900 rounded-md border border-gray-300 dark:border-gray-600 flex items-center justify-center text-gray-700 dark:text-gray-300 shadow-2xs">
                             {new Date().toLocaleDateString('en-GB')}
                         </div>
                     </div>
-                    <div className="flex flex-col flex-1 min-w-0 relative" ref={customerDropdownRef}>
-                        <div className="flex items-center justify-between">
+                    <div className="flex flex-col flex-1 min-w-0 relative gap-1" ref={customerDropdownRef}>
+                        <div className="flex items-center justify-between h-4">
                             <label className="text-gray-500 font-bold text-xs uppercase flex items-center gap-1.5 truncate">
                                 <span>Customer</span>
                                 {customerPhone && (
@@ -1596,19 +1838,41 @@ export const POS: React.FC = () => {
                                         {customerPhone}
                                     </span>
                                 )}
+                                {customerStoreCredits.length > 0 && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsCreditNoteModalOpen(true)}
+                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200 border border-amber-300 dark:border-amber-700 animate-pulse hover:bg-amber-200 transition-all cursor-pointer"
+                                        title="Customer has store credit! Click to apply"
+                                    >
+                                        <CreditCard className="w-3 h-3 text-amber-700 dark:text-amber-400" />
+                                        <span>₹{customerStoreCredits.reduce((s, c) => s + c.remainingAmount, 0).toFixed(0)} Credit</span>
+                                    </button>
+                                )}
                             </label>
-                            <button
-                                type="button"
-                                onClick={() => handleOpenQuickAdd()}
-                                className="text-[11px] font-bold text-primary-600 hover:text-primary-700 dark:text-primary-400 flex items-center gap-0.5 hover:underline flex-shrink-0"
-                                title="Register new customer"
-                            >
-                                <UserPlus className="w-3 h-3" />
-                                <span>+ New</span>
-                            </button>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setIsCreditNoteModalOpen(true)}
+                                    className="text-[11px] font-bold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 flex items-center gap-0.5 hover:underline flex-shrink-0"
+                                    title="Apply or Check Credit Note / Store Credit"
+                                >
+                                    <CreditCard className="w-3 h-3" />
+                                    <span>Credit Note</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => handleOpenQuickAdd()}
+                                    className="text-[11px] font-bold text-primary-600 hover:text-primary-700 dark:text-primary-400 flex items-center gap-0.5 hover:underline flex-shrink-0"
+                                    title="Register new customer"
+                                >
+                                    <UserPlus className="w-3 h-3" />
+                                    <span>+ New</span>
+                                </button>
+                            </div>
                         </div>
 
-                        <div className="relative mt-0.5">
+                        <div className="relative">
                             <div className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-gray-400">
                                 <User className="w-4 h-4" />
                             </div>
@@ -1817,8 +2081,8 @@ export const POS: React.FC = () => {
                     </div>
                 </div>
                 {/* Right: Scan Barcode — exactly w-64 to align above product sidebar */}
-                <div className="w-64 flex-shrink-0 flex flex-col p-2 border-l border-gray-200 dark:border-gray-700">
-                    <label className="text-primary-600 font-bold text-xs uppercase flex items-center gap-1">
+                <div className="w-64 flex-shrink-0 flex flex-col p-2 border-l border-gray-200 dark:border-gray-700 gap-1">
+                    <label className="text-primary-600 font-bold text-xs uppercase flex items-center gap-1 h-4">
                         <Scan className="w-3 h-3" /> Scan Barcode (F1)
                     </label>
                     <form onSubmit={handleBarcodeSubmit} className="flex">
@@ -2018,9 +2282,21 @@ export const POS: React.FC = () => {
                                                 <span className="font-bold text-gray-600">₹{originalPaidAmount.toFixed(2)}</span>
                                             </div>
                                         )}
+                                        {totalAppliedCredit > 0 && (
+                                            <div className="flex flex-col items-end pr-4 border-r border-gray-200 dark:border-gray-700">
+                                                <span className="text-[10px] uppercase font-bold text-indigo-600 dark:text-indigo-400">Credit Applied</span>
+                                                <span className="font-bold text-indigo-600 dark:text-indigo-400">-₹{creditApplied.toFixed(2)}</span>
+                                            </div>
+                                        )}
                                         <div className="flex flex-col items-end">
-                                            <span className="text-[10px] uppercase font-bold text-primary-500">Net Payable</span>
-                                            <span className="text-3xl font-black text-primary-600 tracking-tight leading-none">₹{finalTotal.toFixed(0)}</span>
+                                            <span className="text-[10px] uppercase font-bold text-primary-500">
+                                                {currentSaleId
+                                                    ? (balanceDue > 0 ? 'Balance Due' : (balanceDue < 0 ? 'Refund Due' : 'Balance Due'))
+                                                    : (totalAppliedCredit > 0 ? 'Remaining Due' : 'Net Payable')}
+                                            </span>
+                                            <span className="text-3xl font-black text-primary-600 tracking-tight leading-none">
+                                                ₹{(currentSaleId ? Math.max(0, balanceDue) : remainingDue).toFixed(0)}
+                                            </span>
                                         </div>
                                         <button
                                             onClick={() => setShowPayment(false)}
@@ -2033,6 +2309,65 @@ export const POS: React.FC = () => {
                                         </button>
                                     </div>
                                 </div>
+
+                                {/* Store Credit Banner / Active Redemptions (only shown when credit is applied or customer has available credit) */}
+                                {(appliedCreditNotes.length > 0 || (customerStoreCredits.length > 0 && (!currentSaleId || balanceDue > 0))) && (
+                                    <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-indigo-50/80 dark:bg-indigo-950/40 rounded-lg border border-indigo-200 dark:border-indigo-800 text-xs">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <CreditCard className="w-4 h-4 text-indigo-600 dark:text-indigo-400 flex-shrink-0" />
+                                            {appliedCreditNotes.length > 0 ? (
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                    <span className="font-bold text-indigo-900 dark:text-indigo-200">Applied Store Credit:</span>
+                                                    {appliedCreditNotes.map(cn => (
+                                                        <span key={cn.creditNoteId} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-mono bg-white dark:bg-gray-800 border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 font-bold shadow-xs">
+                                                            {cn.code}: ₹{cn.amount.toFixed(2)}
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleRemoveCreditNote(cn.creditNoteId)}
+                                                                className="text-gray-400 hover:text-red-500 ml-0.5"
+                                                                title="Remove credit"
+                                                            >
+                                                                <X className="w-3 h-3" />
+                                                            </button>
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <div className="text-indigo-800 dark:text-indigo-300">
+                                                    Customer has <span className="font-bold">₹{customerStoreCredits.reduce((s, c) => s + c.remainingAmount, 0).toFixed(2)}</span> store credit available.
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            {appliedCreditNotes.length === 0 && customerStoreCredits.length > 0 && (!currentSaleId || balanceDue > 0) && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        let needed = currentSaleId ? balanceDue : finalTotal;
+                                                        for (const cn of customerStoreCredits) {
+                                                            if (needed <= 0) break;
+                                                            const take = Math.min(cn.remainingAmount, needed);
+                                                            handleApplyCreditNote(cn, take);
+                                                            needed -= take;
+                                                        }
+                                                    }}
+                                                    className="py-1 px-2.5 rounded-md text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white transition-colors"
+                                                >
+                                                    Apply Customer Credit
+                                                </button>
+                                            )}
+                                            {(!currentSaleId || balanceDue > 0) && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setIsCreditNoteModalOpen(true)}
+                                                    className="py-1 px-2 rounded-md border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100/50 dark:hover:bg-indigo-900/50 text-xs font-bold transition-colors"
+                                                >
+                                                    {appliedCreditNotes.length > 0 ? 'Edit / Add Note' : 'Enter Voucher Code'}
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
 
                                 {/* Inline feedback banners */}
                                 {saleSuccess && (
@@ -2049,58 +2384,63 @@ export const POS: React.FC = () => {
                                 )}
 
                                 {/* Row 2: Interaction Controls */}
-                                <div className="flex flex-wrap lg:flex-nowrap gap-3 items-end">
+                                <div className="flex flex-wrap lg:flex-nowrap gap-3 items-end pt-1">
 
-                                    {/* Left: Settings (Discount & Payment Method) */}
-                                    <div className="flex gap-2 bg-gray-50 dark:bg-gray-800/50 p-2 rounded-lg border border-gray-200 dark:border-gray-700 shadow-inner">
-                                        <div className="flex flex-col gap-1">
-                                            <label className="text-[10px] uppercase font-bold text-gray-500 pl-1">Discount</label>
-                                            <Input
-                                                ref={discountInputRef}
-                                                type="number"
-                                                value={discountAmount}
-                                                onChange={(e) => { setDiscountAmount(e.target.value); markAsChanged(); }}
-                                                className="w-24 h-11 font-bold border-orange-200 focus:border-orange-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                                                placeholder="0"
-                                            />
-                                        </div>
-                                        <div className="flex flex-col gap-1">
-                                            <label className="text-[10px] uppercase font-bold text-gray-500 pl-1">Payment Method</label>
-                                            <div className="flex bg-white dark:bg-gray-700 rounded-md p-1 gap-1 border border-gray-200 dark:border-gray-600 ring-1 ring-gray-100 h-11">
-                                                {(['CASH', 'UPI', 'CARD', 'SPLIT'] as const).filter(m => enabledPaymentMethods[m]).map((m) => {
-                                                    const isActive = paymentMethod === m;
-                                                    const colorClasses = {
-                                                        CASH: isActive ? 'bg-green-600 text-white shadow-md ring-2 ring-green-100' : 'text-green-600 hover:bg-green-50',
-                                                        UPI: isActive ? 'bg-purple-600 text-white shadow-md ring-2 ring-purple-100' : 'text-purple-600 hover:bg-purple-50',
-                                                        CARD: isActive ? 'bg-blue-600 text-white shadow-md ring-2 ring-blue-100' : 'text-blue-600 hover:bg-blue-50',
-                                                        SPLIT: isActive ? 'bg-orange-600 text-white shadow-md ring-2 ring-orange-100' : 'text-orange-600 hover:bg-orange-50'
-                                                    } as any;
+                                    {/* Discount */}
+                                    <div className="flex flex-col gap-1">
+                                        <label className="text-[10px] uppercase font-bold text-gray-500 pl-0.5">Discount</label>
+                                        <Input
+                                            ref={discountInputRef}
+                                            type="number"
+                                            value={discountAmount}
+                                            onChange={(e) => { setDiscountAmount(e.target.value); markAsChanged(); }}
+                                            className="w-24 h-11 font-bold border-orange-200 focus:border-orange-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                            placeholder="0"
+                                        />
+                                    </div>
 
-                                                    return (
-                                                        <button
-                                                            key={m}
-                                                            onClick={() => {
-                                                                setPaymentMethod(m as any);
-                                                                markAsChanged();
-                                                                if (m === 'SPLIT') setSplitAmounts({ CASH: 0, CARD: 0, UPI: 0 });
-                                                            }}
-                                                            className={`px-3 h-full rounded text-[11px] font-bold uppercase transition-all ${colorClasses[m]}`}
-                                                        >
-                                                            {m === 'SPLIT' ? 'Split' : m}
-                                                        </button>
-                                                    );
-                                                })}
-                                            </div>
+                                    {/* Payment Method */}
+                                    <div className="flex flex-col gap-1">
+                                        <label className="text-[10px] uppercase font-bold text-gray-500 pl-0.5">Payment Method</label>
+                                        <div className="flex bg-gray-100 dark:bg-gray-800 rounded-lg p-1 gap-1 border border-gray-200 dark:border-gray-700 h-11 items-center">
+                                            {(['CASH', 'UPI', 'CARD', 'SPLIT'] as const).filter(m => enabledPaymentMethods[m]).map((m) => {
+                                                const isActive = paymentMethod === m;
+                                                const colorClasses = {
+                                                    CASH: isActive ? 'bg-green-600 text-white shadow-md ring-2 ring-green-100' : 'text-green-600 hover:bg-green-50',
+                                                    UPI: isActive ? 'bg-purple-600 text-white shadow-md ring-2 ring-purple-100' : 'text-purple-600 hover:bg-purple-50',
+                                                    CARD: isActive ? 'bg-blue-600 text-white shadow-md ring-2 ring-blue-100' : 'text-blue-600 hover:bg-blue-50',
+                                                    SPLIT: isActive ? 'bg-orange-600 text-white shadow-md ring-2 ring-orange-100' : 'text-orange-600 hover:bg-orange-50'
+                                                } as any;
+
+                                                return (
+                                                    <button
+                                                        key={m}
+                                                        onClick={() => {
+                                                            setPaymentMethod(m as any);
+                                                            markAsChanged();
+                                                            if (m === 'SPLIT') setSplitAmounts({ CASH: 0, CARD: 0, UPI: 0 });
+                                                        }}
+                                                        className={`px-3.5 h-full rounded-md text-[11px] font-bold uppercase transition-all flex items-center justify-center ${colorClasses[m]}`}
+                                                    >
+                                                        {m === 'SPLIT' ? 'Split' : m}
+                                                    </button>
+                                                );
+                                            })}
                                         </div>
                                     </div>
 
                                     {/* Middle: Active Payment Inputs */}
                                     <div className="flex-1 min-w-[280px] flex items-end">
-                                        {paymentMethod === 'SPLIT' ? (
-                                            <div className="w-full flex gap-2 h-full items-end pb-1">
+                                        {remainingDue === 0 && creditApplied > 0 ? (
+                                            <div className="w-full flex items-center p-3 h-11 bg-emerald-50 dark:bg-emerald-950/40 rounded-lg border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-sm font-bold">
+                                                <CheckCircle className="w-5 h-5 mr-2 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
+                                                <span>Fully covered by Store Credit (₹{creditApplied.toFixed(2)})!</span>
+                                            </div>
+                                        ) : paymentMethod === 'SPLIT' ? (
+                                            <div className="w-full flex gap-2 h-full items-end">
                                                 {(['CASH', 'CARD', 'UPI'] as const).filter(m => enabledPaymentMethods[m]).map((mode) => (
                                                     <div key={mode} className="flex-1 flex flex-col gap-1">
-                                                        <label className="text-[9px] uppercase font-bold text-orange-500 pl-1">{mode}</label>
+                                                        <label className="text-[10px] uppercase font-bold text-orange-500 pl-0.5">{mode}</label>
                                                         <Input
                                                             type="number"
                                                             value={(splitAmounts as any)[mode] || ''}
@@ -2110,16 +2450,16 @@ export const POS: React.FC = () => {
                                                         />
                                                     </div>
                                                 ))}
-                                                <div className="flex flex-col gap-1 items-center px-1 pb-1">
-                                                    <span className="text-[9px] uppercase font-bold text-gray-400">
-                                                        {Object.values(splitAmounts).reduce((a, b) => a + b, 0) < finalTotal ? 'Need' : 'Status'}
-                                                    </span>
-                                                    <div className={`text-sm font-black p-1.5 rounded-md border min-w-[70px] text-center ${Object.values(splitAmounts).reduce((a, b) => a + b, 0) >= finalTotal
+                                                <div className="flex flex-col gap-1 items-center px-1">
+                                                    <label className="text-[10px] uppercase font-bold text-gray-400">
+                                                        {Object.values(splitAmounts).reduce((a, b) => a + b, 0) < remainingDue ? 'Need' : 'Status'}
+                                                    </label>
+                                                    <div className={`text-sm font-black h-11 px-3 rounded-lg border min-w-[70px] flex items-center justify-center ${Object.values(splitAmounts).reduce((a, b) => a + b, 0) >= remainingDue
                                                         ? 'text-green-600 bg-green-50 border-green-200'
                                                         : 'text-red-600 bg-red-50 border-red-200 shadow-sm'
                                                         }`}>
-                                                        {Object.values(splitAmounts).reduce((a, b) => a + b, 0) < finalTotal
-                                                            ? `₹${(finalTotal - Object.values(splitAmounts).reduce((a, b) => a + b, 0)).toFixed(0)}`
+                                                        {Object.values(splitAmounts).reduce((a, b) => a + b, 0) < remainingDue
+                                                            ? `₹${(remainingDue - Object.values(splitAmounts).reduce((a, b) => a + b, 0)).toFixed(0)}`
                                                             : `₹${Object.values(splitAmounts).reduce((a, b) => a + b, 0).toFixed(0)}`
                                                         }
                                                     </div>
@@ -2128,7 +2468,7 @@ export const POS: React.FC = () => {
                                         ) : (
                                             <div className="w-full flex gap-3 items-end">
                                                 <div className="flex-1 flex flex-col gap-1">
-                                                    <label className="text-[10px] uppercase font-bold text-primary-500 pl-1">Amount Paid ({paymentMethod})</label>
+                                                    <label className="text-[10px] uppercase font-bold text-primary-600 dark:text-primary-400 pl-0.5">Amount Paid ({paymentMethod})</label>
                                                     <Input
                                                         ref={paidAmountInputRef}
                                                         type="number"
@@ -2139,10 +2479,9 @@ export const POS: React.FC = () => {
                                                     />
                                                 </div>
                                                 <div className="flex flex-col gap-1">
-                                                    <span className="text-[10px] uppercase font-bold text-transparent select-none pl-1">·</span>
-                                                    <div className={`flex flex-col justify-center items-end h-11 min-w-[110px] px-3 rounded-lg border-2 ${change >= 0 ? 'bg-green-50 border-green-500' : 'bg-red-50 border-red-300'}`}>
-                                                        <span className="text-[9px] uppercase font-bold text-gray-500 leading-none">{change >= 0 ? 'Change Due' : 'Need'}</span>
-                                                        <span className={`text-base font-black leading-tight ${change >= 0 ? 'text-green-600' : 'text-red-500'}`}>₹{Math.abs(change).toFixed(0)}</span>
+                                                    <label className="text-[10px] uppercase font-bold text-gray-500 pl-0.5">{change >= 0 ? 'Change Due' : 'Need'}</label>
+                                                    <div className={`flex items-center justify-center h-11 min-w-[110px] px-3 rounded-lg border-2 ${change >= 0 ? 'bg-green-50 border-green-500 text-green-700 dark:bg-green-950/30' : 'bg-red-50 border-red-300 text-red-600 dark:bg-red-950/30'}`}>
+                                                        <span className="text-lg font-black leading-none">₹{Math.abs(change).toFixed(0)}</span>
                                                     </div>
                                                 </div>
                                             </div>
@@ -2151,8 +2490,7 @@ export const POS: React.FC = () => {
 
                                     {/* Right: Actions */}
                                     <div className="flex flex-col gap-1">
-                                        {/* invisible label spacer — matches height of labeled sections above */}
-                                        <span className="text-[10px] uppercase font-bold text-transparent select-none pl-1">Actions</span>
+                                        <label className="text-[10px] uppercase font-bold text-transparent select-none pl-0.5">Actions</label>
                                         <div className="flex gap-2 items-center">
                                             <Button
                                                 variant="outline"
@@ -2188,6 +2526,41 @@ export const POS: React.FC = () => {
                                                     {processing ? 'Processing...' : (currentSaleId ? 'Update & Print' : 'Save & Print')}
                                                 </span>
                                             </Button>
+
+                                            {currentSaleId && Boolean((customerPhone || originalSaleData?.customerPhone || '').trim()) && (
+                                                <Button
+                                                    variant="outline"
+                                                    className="h-11 px-3.5 flex items-center gap-1.5 font-bold border-2 border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 rounded-lg transition-all whitespace-nowrap"
+                                                    onClick={async () => {
+                                                        const targetPhone = (customerPhone || originalSaleData?.customerPhone || '').trim();
+                                                        const credits = await fetchCustomerStoreCredits(targetPhone);
+                                                        const totalAvail = (credits || []).reduce((sum: number, c: any) => sum + (c.remainingAmount || 0), 0);
+                                                        const codes = (credits || []).map((c: any) => c.code).filter(Boolean);
+                                                        const computedGrand = originalSaleData?.grandTotal || Math.max(0, getGrandTotal() - (parseFloat(discountAmount) || 0));
+                                                        setInvoiceModalSale(originalSaleData || {
+                                                            id: currentSaleId,
+                                                            billNo,
+                                                            customerName,
+                                                            customerPhone: targetPhone,
+                                                            items,
+                                                            subtotal: roundCurrency(items.reduce((s: number, i: any) => s + (i.sellingPrice * i.quantity), 0)),
+                                                            discount: Number(discountAmount || 0),
+                                                            grandTotal: computedGrand,
+                                                            paymentMethod,
+                                                            paidAmount: Number(paidAmount || computedGrand),
+                                                            changeAmount: change,
+                                                        });
+                                                        setInvoiceModalCredits(appliedCreditNotes.map(c => ({ code: c.code, amount: c.amount })));
+                                                        setInvoiceModalActiveCredit(totalAvail);
+                                                        setInvoiceModalCreditCodes(codes);
+                                                        setIsInvoiceMessageModalOpen(true);
+                                                    }}
+                                                    title="Message invoice via WhatsApp or SMS"
+                                                >
+                                                    <MessageSquare className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                                                    <span className="text-sm uppercase">Message</span>
+                                                </Button>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
@@ -2358,6 +2731,121 @@ export const POS: React.FC = () => {
                     </div>
                 </form>
             </Modal>
+
+            {/* Credit Note Redemption Modal */}
+            {isCreditNoteModalOpen && (
+                <Modal
+                    isOpen={true}
+                    onClose={() => { setIsCreditNoteModalOpen(false); setManualCreditCode(''); }}
+                    title="Apply Store Credit / Credit Note"
+                    size="md"
+                >
+                    <div className="space-y-4">
+                        {/* Voucher Code Entry */}
+                        <div>
+                            <label className="block text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300 mb-1">
+                                Enter or Scan Credit Note Code
+                            </label>
+                            <div className="flex gap-2">
+                                <input
+                                    type="text"
+                                    autoFocus
+                                    value={manualCreditCode}
+                                    onChange={(e) => setManualCreditCode(e.target.value.toUpperCase())}
+                                    onKeyDown={(e) => e.key === 'Enter' && handleLookupAndApplyCode()}
+                                    placeholder="e.g. CN-1001"
+                                    className="flex-1 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 font-mono font-bold focus:ring-2 focus:ring-primary-500 focus:outline-none uppercase"
+                                />
+                                <Button
+                                    variant="primary"
+                                    onClick={handleLookupAndApplyCode}
+                                    disabled={isCheckingCreditCode || !manualCreditCode.trim()}
+                                >
+                                    {isCheckingCreditCode ? 'Checking...' : 'Apply Code'}
+                                </Button>
+                            </div>
+                        </div>
+
+                        {/* Customer's linked active credits */}
+                        {customerStoreCredits.length > 0 && (
+                            <div className="space-y-2 pt-2 border-t border-gray-100 dark:border-gray-800">
+                                <span className="text-xs font-bold uppercase text-gray-500 dark:text-gray-400">
+                                    Credits for {customerName} ({customerPhone}):
+                                </span>
+                                <div className="divide-y divide-gray-100 dark:divide-gray-800 border rounded-xl overflow-hidden">
+                                    {customerStoreCredits.map(cn => {
+                                        const isApplied = appliedCreditNotes.some(c => c.creditNoteId === cn.id);
+                                        return (
+                                            <div key={cn.id} className="p-3 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                                                <div>
+                                                    <div className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                                                        {cn.code}
+                                                    </div>
+                                                    <div className="text-xs text-gray-500">
+                                                        Available: <span className="font-bold text-emerald-600 dark:text-emerald-400">₹{cn.remainingAmount.toFixed(2)}</span>
+                                                        {cn.originalBillNo ? ` (Ref: #${cn.originalBillNo})` : ''}
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    {isApplied ? (
+                                                        <Button
+                                                            variant="secondary"
+                                                            onClick={() => handleRemoveCreditNote(cn.id)}
+                                                            className="text-xs text-red-600 hover:bg-red-50 border-red-200"
+                                                        >
+                                                            Remove
+                                                        </Button>
+                                                    ) : (
+                                                        <Button
+                                                            variant="primary"
+                                                            onClick={() => handleApplyCreditNote(cn)}
+                                                            className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white"
+                                                        >
+                                                            Apply
+                                                        </Button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Currently Applied Credits Summary */}
+                        {appliedCreditNotes.length > 0 && (
+                            <div className="p-3 bg-indigo-50 dark:bg-indigo-950/40 rounded-xl border border-indigo-200 dark:border-indigo-800">
+                                <div className="flex justify-between items-center text-xs font-bold text-indigo-900 dark:text-indigo-200">
+                                    <span>Total Store Credit Applied:</span>
+                                    <span className="text-base text-indigo-700 dark:text-indigo-300 font-extrabold">₹{totalAppliedCredit.toFixed(2)}</span>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="flex justify-end pt-2 border-t border-gray-100 dark:border-gray-800">
+                            <Button variant="secondary" onClick={() => setIsCreditNoteModalOpen(false)}>
+                                Done
+                            </Button>
+                        </div>
+                    </div>
+                </Modal>
+            )}
+
+            {/* Post-Sale Invoice Messaging Dialog */}
+            {isInvoiceMessageModalOpen && invoiceModalSale && (
+                <InvoiceMessageModal
+                    isOpen={isInvoiceMessageModalOpen}
+                    onClose={() => {
+                        setIsInvoiceMessageModalOpen(false);
+                        setInvoiceModalSale(null);
+                    }}
+                    sale={invoiceModalSale}
+                    shopSettings={shopSettings}
+                    appliedCredits={invoiceModalCredits}
+                    activeStoreCreditBalance={invoiceModalActiveCredit}
+                    activeStoreCreditCodes={invoiceModalCreditCodes}
+                />
+            )}
         </div >
     );
 };

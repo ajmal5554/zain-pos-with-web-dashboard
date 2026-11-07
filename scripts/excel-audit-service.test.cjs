@@ -412,18 +412,21 @@ nodeTest('optional owner workbook matches the reviewed audit export schema', {
 }, async t => {
     const f = fixture(t);
     const file = process.env.EXCEL_AUDIT_TEST_FILE;
+    const source = XLSX.readFile(file, { cellDates: false });
+    const sourceRows = XLSX.utils.sheet_to_json(source.Sheets['Stock Audit'], { defval: '' });
+    const expectedQuantity = sourceRows.reduce((sum, row) => sum + Number(row.Quantity || 0), 0);
     const preview = await f.preview({ fileName: path.basename(file), bytes: fs.readFileSync(file) });
     assert.equal(preview.status.sheetName, 'Stock Audit');
-    assert.equal(preview.status.rowCount, 110);
-    assert.equal(preview.status.totalQuantity, 498);
+    assert.equal(preview.status.rowCount, sourceRows.length);
+    assert.equal(preview.status.totalQuantity, expectedQuantity);
     assert.equal(new Set(preview.items.map(item => item.id)).size, preview.items.length);
     assert.equal(fs.existsSync(f.filePath), false);
     await f.service.commit(preview.token, OWNER);
     const restarted = f.create();
     const saved = await restarted.initialize();
-    assert.equal(saved.rowCount, 110);
-    assert.equal(saved.totalQuantity, 498);
+    assert.equal(saved.rowCount, sourceRows.length);
+    assert.equal(saved.totalQuantity, expectedQuantity);
     const rows = restarted.list({ pageSize: 200 }).items;
-    assert.equal(rows.length, 110);
-    assert.equal(new Set(rows.map(item => item.id)).size, 110);
+    assert.equal(rows.length, Math.min(sourceRows.length, 200));
+    assert.equal(new Set(rows.map(item => item.id)).size, rows.length);
 });

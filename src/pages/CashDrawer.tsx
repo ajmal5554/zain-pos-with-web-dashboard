@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { Minus, Lock, Unlock, Trash2, RefreshCw, Loader2, AlertCircle, Edit3, X, Check, ChevronLeft, ChevronRight, Calendar } from 'lucide-react';
 import type { RegisterSummary, CashDrawerTx, TxCategory } from '../types/cashRegister';
 import { TX_CATEGORY_LABELS, CASH_OUT_CATEGORIES } from '../types/cashRegister';
@@ -323,11 +324,14 @@ export const CashDrawerPage: React.FC = () => {
                         </thead>
                         <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
                             {loading ? (
-                                <tr>
-                                    <td colSpan={4} className="text-center py-10">
-                                        <Loader2 className="w-6 h-6 animate-spin text-indigo-500 mx-auto" />
-                                    </td>
-                                </tr>
+                                Array.from({ length: 4 }).map((_, i) => (
+                                    <tr key={i} className="animate-pulse">
+                                        <td className="px-5 py-3.5"><div className="h-4 w-16 bg-gray-200 dark:bg-gray-700 rounded" /></td>
+                                        <td className="px-5 py-3.5"><div className="h-4 w-20 bg-gray-200 dark:bg-gray-700 rounded-full" /></td>
+                                        <td className="px-5 py-3.5"><div className="h-4 w-44 bg-gray-200 dark:bg-gray-700 rounded" /></td>
+                                        <td className="px-5 py-3.5 text-right"><div className="h-4 w-20 bg-gray-200 dark:bg-gray-700 rounded ml-auto" /></td>
+                                    </tr>
+                                ))
                             ) : transactions.length === 0 ? (
                                 <tr>
                                     <td colSpan={4} className="text-center py-8 text-sm text-gray-400 dark:text-gray-500">
@@ -457,11 +461,17 @@ export const CashDrawerPage: React.FC = () => {
                         </thead>
                         <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
                             {historyLoading ? (
-                                <tr>
-                                    <td colSpan={7} className="text-center py-10">
-                                        <Loader2 className="w-6 h-6 animate-spin text-indigo-500 mx-auto" />
-                                    </td>
-                                </tr>
+                                Array.from({ length: 4 }).map((_, i) => (
+                                    <tr key={i} className="animate-pulse">
+                                        <td className="px-5 py-3.5"><div className="h-4 w-24 bg-gray-200 dark:bg-gray-700 rounded" /></td>
+                                        <td className="px-5 py-3.5"><div className="h-4 w-28 bg-gray-200 dark:bg-gray-700 rounded" /></td>
+                                        <td className="px-5 py-3.5 text-right"><div className="h-4 w-20 bg-gray-200 dark:bg-gray-700 rounded ml-auto" /></td>
+                                        <td className="px-5 py-3.5 text-right"><div className="h-4 w-20 bg-gray-200 dark:bg-gray-700 rounded ml-auto" /></td>
+                                        <td className="px-5 py-3.5 text-right"><div className="h-4 w-20 bg-gray-200 dark:bg-gray-700 rounded ml-auto" /></td>
+                                        <td className="px-5 py-3.5 text-right"><div className="h-4 w-20 bg-gray-200 dark:bg-gray-700 rounded ml-auto" /></td>
+                                        <td className="px-5 py-3.5 text-center"><div className="h-4 w-16 bg-gray-200 dark:bg-gray-700 rounded-full mx-auto" /></td>
+                                    </tr>
+                                ))
                             ) : filteredHistory.length === 0 ? (
                                 <tr>
                                     <td colSpan={7} className="text-center py-10 text-sm text-gray-400 dark:text-gray-500">
@@ -675,8 +685,12 @@ const CashOutModal: React.FC<{
 
     const categories = CASH_OUT_CATEGORIES.map(c => ({ value: c, label: TX_CATEGORY_LABELS[c] }));
 
-    return (
-        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+    const modalContent = (
+        <div
+            className="modal-overlay"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            onClick={e => e.target === e.currentTarget && onClose()}
+        >
             <div className="bg-white dark:bg-dark-card rounded-2xl shadow-2xl w-full max-w-sm border border-gray-200 dark:border-dark-border animate-slide-up">
                 {/* Header */}
                 <div className="flex items-center justify-between px-5 py-4 rounded-t-2xl bg-rose-600">
@@ -734,6 +748,8 @@ const CashOutModal: React.FC<{
             </div>
         </div>
     );
+
+    return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 };
 
 // ─── Adjust Float Modal ───────────────────────────────────────────────────────
@@ -762,8 +778,12 @@ const AdjustFloatModal: React.FC<{
         finally { setLoading(false); }
     };
 
-    return (
-        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+    const modalContent = (
+        <div
+            className="modal-overlay"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            onClick={e => e.target === e.currentTarget && onClose()}
+        >
             <div className="bg-white dark:bg-dark-card rounded-2xl shadow-2xl w-full max-w-xs border border-gray-200 dark:border-dark-border animate-slide-up p-6 space-y-4">
                 <h2 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2">
                     <Edit3 className="w-4 h-4 text-indigo-500" /> Adjust Opening Float
@@ -793,6 +813,8 @@ const AdjustFloatModal: React.FC<{
             </div>
         </div>
     );
+
+    return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 };
 
 // ─── Close Register Modal (inline, self-contained) ────────────────────────────
@@ -844,8 +866,12 @@ const CloseRegisterInlineModal: React.FC<{
         ? `Reconcile & Close Past Register (${fmtDate(summary?.unclosedRegisterDate || summary?.register?.date || '')})`
         : "Close Today's Register";
 
-    return (
-        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+    const modalContent = (
+        <div
+            className="modal-overlay"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            onClick={e => e.target === e.currentTarget && onClose()}
+        >
             <div className="bg-white dark:bg-dark-card rounded-2xl shadow-2xl w-full max-w-md border border-gray-200 dark:border-dark-border animate-slide-up">
                 {/* Header */}
                 <div className="flex items-center justify-between px-6 py-4 bg-indigo-600 rounded-t-2xl">
@@ -930,6 +956,8 @@ const CloseRegisterInlineModal: React.FC<{
             </div>
         </div>
     );
+
+    return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 };
 
 const SummaryLine: React.FC<{ label: string; value: string; valueClass?: string; bold?: boolean }> = ({

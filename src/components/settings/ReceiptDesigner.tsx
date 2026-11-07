@@ -561,7 +561,7 @@ export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ printerSetting
                         title="Receipt Preview"
                         srcDoc={previewHtml}
                         className="w-full h-[760px] border-0 bg-white"
-                        sandbox="allow-scripts"
+                        sandbox="allow-scripts allow-same-origin"
                     />
                 </div>
             </div>

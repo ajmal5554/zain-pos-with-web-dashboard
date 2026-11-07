@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { FileText, FileSpreadsheet, List, LayoutGrid, ArrowUpDown, Calendar, Hash, ShieldAlert } from 'lucide-react';
+import { FileText, FileSpreadsheet, List, LayoutGrid, Calendar, Hash, ShieldAlert } from 'lucide-react';
 import { formatIndianCurrency } from '../lib/format';
 import {
     format,
@@ -765,6 +765,7 @@ export const Reports: React.FC = () => {
     const [loading, setLoading] = useState(false);
     const [reportType, setReportType] = useState<'detailed' | 'summary'>('summary');
     const [sortBy, setSortBy] = useState<'date' | 'billNo'>('date');
+
     
     // Shop settings for PDF header
     const [shopSettings, setShopSettings] = useState({
@@ -874,6 +875,17 @@ export const Reports: React.FC = () => {
 
     useEffect(() => { generateReport(); }, [generateReport]);
 
+    const sortSales = useCallback((sales: SaleRow[]) => [...sales].sort((a, b) => {
+        if (sortBy === 'billNo') return compareBillNos(String(a.billNo), String(b.billNo));
+        const dateOrder = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        return dateOrder || compareBillNos(String(a.billNo), String(b.billNo));
+    }), [sortBy]);
+
+    const sortSummaries = useCallback((summaries: DailySummary[]) => [...summaries].sort((a, b) => {
+        if (sortBy === 'billNo') return compareBillNos(String(a.billFrom), String(b.billFrom));
+        return a.date.localeCompare(b.date);
+    }), [sortBy]);
+
     // ── PDF Export ────────────────────────────────────────────────────────────
 
     const exportToPDF = () => {
@@ -931,10 +943,7 @@ export const Reports: React.FC = () => {
 
             const summaryColumns = ['DATE', 'BILL FROM', 'BILL TO', 'BILLS', 'GROSS AMOUNT\n(incl. GST)', 'DISCOUNT', 'NET AMOUNT\n(incl. GST)', 'TAXABLE AMOUNT\n(excl. GST)', 'CGST', 'SGST', 'TOTAL GST', 'AMOUNT PAID', 'CASH', 'UPI', 'CARD'];
 
-            // Sort summaries based on user selection
-            const sortedSummaries = [...reportData.dailySummaries].sort((a, b) =>
-                sortBy === 'billNo' ? compareBillNos(a.billFrom, b.billFrom) : a.date.localeCompare(b.date)
-            );
+            const sortedSummaries = sortSummaries(reportData.dailySummaries);
 
             // Include Grand Total row directly in the summary table
             const a = reportData.allSalesTotals;
@@ -1034,9 +1043,7 @@ export const Reports: React.FC = () => {
             currentY += 5;
 
             // Sort all sales based on user selection
-            const sortedSales = [...reportData.allSales].sort((a, b) =>
-                sortBy === 'billNo' ? compareBillNos(String(a.billNo), String(b.billNo)) : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-            );
+            const sortedSales = sortSales(reportData.allSales);
 
             // Include Grand Total row directly in the table body
             const a = reportData.allSalesTotals;
@@ -1085,11 +1092,9 @@ export const Reports: React.FC = () => {
                 const cancelledColumns = ['Bill No', 'Date', 'Gross Amount', 'Discount', 'Amount', 'Status', 'Payment'];
                 const cancelledBody = reportData.cancelledSales
                     .slice()
-                    .sort((a, b) =>
-                        sortBy === 'billNo'
-                            ? compareBillNos(String(a.billNo), String(b.billNo))
-                            : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-                    )
+                    .sort((a, b) => sortBy === 'billNo'
+                        ? compareBillNos(String(a.billNo), String(b.billNo))
+                        : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
                     .map((sale) => {
                         const pb = getPaymentBreakdown(sale);
                         const payModes: string[] = [];
@@ -1141,28 +1146,14 @@ export const Reports: React.FC = () => {
         const a = reportData.allSalesTotals;
 
         // Sorted sales used in Detailed sheet and Items Detail sheet
-        const sortedRegularSales = [...reportData.regularSales].sort((a, b) =>
-            sortBy === 'billNo'
-                ? compareBillNos(String(a.billNo), String(b.billNo))
-                : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-        );
-        const sortedReplacementSales = [...reportData.exchangeReplacementSales].sort((a, b) =>
-            sortBy === 'billNo'
-                ? compareBillNos(String(a.billNo), String(b.billNo))
-                : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-        );
-        const sortedSales = [...reportData.allSales].sort((a, b) =>
-            sortBy === 'billNo'
-                ? compareBillNos(String(a.billNo), String(b.billNo))
-                : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-        );
+        const sortedRegularSales = sortSales(reportData.regularSales);
+        const sortedReplacementSales = sortSales(reportData.exchangeReplacementSales);
+        const sortedSales = sortSales(reportData.allSales);
 
         if (reportType === 'summary') {
             const summaryHeader = ['DATE', 'BILL FROM', 'BILL TO', 'BILLS', 'GROSS AMOUNT (incl. GST)', 'DISCOUNT', 'NET AMOUNT (incl. GST)', 'TAXABLE AMOUNT (excl. GST)', 'CGST', 'SGST', 'TOTAL GST', 'AMOUNT PAID', 'CASH', 'UPI', 'CARD'];
 
-            const sortedSummaries = [...reportData.dailySummaries].sort((a, b) =>
-                sortBy === 'billNo' ? compareBillNos(a.billFrom, b.billFrom) : a.date.localeCompare(b.date)
-            );
+            const sortedSummaries = sortSummaries(reportData.dailySummaries);
 
             const data = [
                 [shopSettings.shopName],
@@ -1356,12 +1347,8 @@ export const Reports: React.FC = () => {
     // Sorted data based on user selection
     const sortedAllSales = useMemo(() => {
         if (!reportData) return [];
-        const sales = [...reportData.allSales];
-        if (sortBy === 'billNo') {
-            return sales.sort((a, b) => compareBillNos(String(a.billNo), String(b.billNo)));
-        }
-        return sales.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-    }, [reportData, sortBy]);
+        return sortSales(reportData.allSales);
+    }, [reportData, sortSales]);
 
     const sortedRegularSales = useMemo(() => {
         return sortedAllSales.filter((s) => !isReplacementSale(s));
@@ -1370,75 +1357,72 @@ export const Reports: React.FC = () => {
 
     const sortedDailySummaries = useMemo(() => {
         if (!reportData) return [];
-        const summaries = [...reportData.dailySummaries];
-        if (sortBy === 'billNo') {
-            return summaries.sort((a, b) => compareBillNos(a.billFrom, b.billFrom));
-        }
-        return summaries.sort((a, b) => a.date.localeCompare(b.date));
-    }, [reportData, sortBy]);
+        return sortSummaries(reportData.dailySummaries);
+    }, [reportData, sortSummaries]);
 
     return (
         <div className="space-y-6">
             {/* Header */}
-            <div className="card flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
-                    <h2 className="text-2xl font-bold">GST Sales Report</h2>
-                    <p className="text-gray-600 dark:text-gray-400 text-sm">
-                        Generate GST-compliant sales reports
+                    <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
+                        GST Sales Report
+                    </h1>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                        GST-compliant sales registers & tax filing summaries
                     </p>
                 </div>
-                {/* Report Type Toggle */}
-                <div className="flex flex-wrap gap-2">
-                    <div className="flex rounded-lg border dark:border-gray-700 overflow-hidden">
-                        <button
-                            onClick={() => setReportType('summary')}
-                            className={`flex items-center gap-2 px-3 py-2 text-sm font-medium transition-colors ${
-                                reportType === 'summary'
-                                    ? 'bg-blue-500 text-white'
-                                    : 'bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700'
-                            }`}
-                        >
-                            <LayoutGrid className="w-4 h-4" />
-                            Summary
-                        </button>
-                        <button
-                            onClick={() => setReportType('detailed')}
-                            className={`flex items-center gap-2 px-3 py-2 text-sm font-medium transition-colors ${
-                                reportType === 'detailed'
-                                    ? 'bg-blue-500 text-white'
-                                    : 'bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700'
-                            }`}
-                        >
-                            <List className="w-4 h-4" />
-                            Detailed
-                        </button>
-                    </div>
-                    {/* Sort Toggle */}
-                    <div className="flex rounded-lg border dark:border-gray-700 overflow-hidden">
-                        <button
-                            onClick={() => setSortBy('date')}
-                            className={`flex items-center gap-2 px-3 py-2 text-sm font-medium transition-colors ${
-                                sortBy === 'date'
-                                    ? 'bg-green-500 text-white'
-                                    : 'bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700'
-                            }`}
-                        >
-                            <Calendar className="w-4 h-4" />
-                            By Date
-                        </button>
-                        <button
-                            onClick={() => setSortBy('billNo')}
-                            className={`flex items-center gap-2 px-3 py-2 text-sm font-medium transition-colors ${
-                                sortBy === 'billNo'
-                                    ? 'bg-green-500 text-white'
-                                    : 'bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700'
-                            }`}
-                        >
-                            <Hash className="w-4 h-4" />
-                            By Bill No
-                        </button>
-                    </div>
+                {/* Report Type Toggle: Summary | Detailed */}
+                <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-1 shadow-sm self-start sm:self-auto">
+                    <button
+                        onClick={() => setReportType('summary')}
+                        className={`flex items-center gap-2 px-3.5 py-1.5 text-sm font-medium rounded-md transition-all ${
+                            reportType === 'summary'
+                                ? 'bg-blue-600 text-white shadow-sm'
+                                : 'text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-700'
+                        }`}
+                    >
+                        <LayoutGrid className="w-4 h-4" />
+                        Summary
+                    </button>
+                    <button
+                        onClick={() => setReportType('detailed')}
+                        className={`flex items-center gap-2 px-3.5 py-1.5 text-sm font-medium rounded-md transition-all ${
+                            reportType === 'detailed'
+                                ? 'bg-blue-600 text-white shadow-sm'
+                                : 'text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-700'
+                        }`}
+                    >
+                        <List className="w-4 h-4" />
+                        Detailed
+                    </button>
                 </div>
+            </div>
+
+            {/* Sort toggle applies to the visible report and downloaded exports. */}
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/40 p-2">
+                <span className="px-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Order rows</span>
+                <div role="group" aria-label="Order report rows" className="grid grid-cols-2 rounded-lg bg-white dark:bg-gray-800 p-1 shadow-sm border border-gray-200 dark:border-gray-700 sm:w-auto">
+                    <button
+                        type="button"
+                        aria-pressed={sortBy === 'date'}
+                        onClick={() => setSortBy('date')}
+                        className={`flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${sortBy === 'date' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                    >
+                        <Calendar className="h-4 w-4" />
+                        By Date
+                    </button>
+                    <button
+                        type="button"
+                        aria-pressed={sortBy === 'billNo'}
+                        onClick={() => setSortBy('billNo')}
+                        className={`flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${sortBy === 'billNo' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                    >
+                        <Hash className="h-4 w-4" />
+                        By Bill No
+                    </button>
+                </div>
+                <span className="sr-only" aria-live="polite">Sorted by {sortBy === 'date' ? 'date and time' : 'bill number'}</span>
             </div>
 
             {/* Date Range Selection */}
@@ -1517,6 +1501,33 @@ export const Reports: React.FC = () => {
             </div>
 
             {/* Report Preview */}
+            {loading && !reportData && (
+                <div className="space-y-6 animate-pulse">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        {Array.from({ length: 4 }).map((_, i) => (
+                            <div key={i} className="card p-4 space-y-2">
+                                <div className="h-3 w-24 bg-gray-200 dark:bg-gray-700 rounded" />
+                                <div className="h-7 w-32 bg-gray-200 dark:bg-gray-700 rounded" />
+                            </div>
+                        ))}
+                    </div>
+                    <div className="card overflow-hidden !p-0">
+                        <div className="p-4 border-b border-gray-100 dark:border-dark-border">
+                            <div className="h-5 w-40 bg-gray-200 dark:bg-gray-700 rounded" />
+                        </div>
+                        <div className="p-4 space-y-3">
+                            {Array.from({ length: 5 }).map((_, i) => (
+                                <div key={i} className="flex items-center justify-between gap-4 py-2 border-b border-gray-50 dark:border-dark-border/40">
+                                    <div className="h-4 w-28 bg-gray-200 dark:bg-gray-700 rounded" />
+                                    <div className="h-4 w-20 bg-gray-200 dark:bg-gray-700 rounded" />
+                                    <div className="h-4 w-20 bg-gray-200 dark:bg-gray-700 rounded" />
+                                    <div className="h-4 w-24 bg-gray-200 dark:bg-gray-700 rounded" />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
             {reportData && a && (
                 <>
                     {reportData.exchangeReplacementTotals.count > 0 && (() => {
@@ -1651,11 +1662,9 @@ export const Reports: React.FC = () => {
                                     <tbody>
                                         {reportData.cancelledSales
                                             .slice()
-                                            .sort((a, b) =>
-                                                sortBy === 'billNo'
-                                                    ? compareBillNos(String(a.billNo), String(b.billNo))
-                                                    : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-                                            )
+                                            .sort((a, b) => sortBy === 'billNo'
+                                                ? compareBillNos(String(a.billNo), String(b.billNo))
+                                                : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
                                             .map((sale) => {
                                                 const pb = getPaymentBreakdown(sale);
                                                 const payModes: string[] = [];
@@ -1951,11 +1960,9 @@ export const Reports: React.FC = () => {
                                             <tbody>
                                                 {reportData.cancelledSales
                                                     .slice()
-                                                    .sort((a, b) =>
-                                                        sortBy === 'billNo'
-                                                            ? compareBillNos(String(a.billNo), String(b.billNo))
-                                                            : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-                                                    )
+                                                    .sort((a, b) => sortBy === 'billNo'
+                                                        ? compareBillNos(String(a.billNo), String(b.billNo))
+                                                        : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
                                                     .map((sale) => {
                                                         const pb = getPaymentBreakdown(sale);
                                                         const payModes: string[] = [];

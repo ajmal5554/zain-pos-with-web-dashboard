@@ -27,6 +27,7 @@ import {
 } from 'recharts';
 import { useAuthStore } from '../store/authStore';
 import { ForecastSeasons } from '../components/ForecastSeasons';
+import { ForecastingSkeleton } from '../components/insights/ForecastingSkeleton';
 import type { BusinessInsights } from '../types/insights';
 
 const money = (value: number | null) =>
@@ -198,15 +199,7 @@ export const Forecasting: React.FC = () => {
                     </div>
                 </div>
             ) : !data || !planning ? (
-                <div role="status" className="card p-12 text-center space-y-4 border border-gray-200 dark:border-dark-border bg-white dark:bg-dark-card rounded-2xl">
-                    <RefreshCw className="w-8 h-8 text-primary-600 animate-spin mx-auto" />
-                    <p className="text-base font-medium text-gray-700 dark:text-gray-300">
-                        Preparing sales forecasts and planning comparisons…
-                    </p>
-                    <p className="text-xs text-gray-500">
-                        Training statistical model across completed calendar months and evaluating recent product velocity.
-                    </p>
-                </div>
+                <ForecastingSkeleton horizon={horizon} />
             ) : (
                 <>
                     {/* Metadata & Audit Subtitle */}

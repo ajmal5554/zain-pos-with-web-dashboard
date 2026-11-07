@@ -43,6 +43,9 @@ export interface ReceiptData {
   isReplacementBill?: boolean;
   originalBillNo?: string | number;
   exchangeCreditAmount?: number;
+  // Store Credit fields
+  storeCreditAmount?: number;
+  creditNoteCodes?: string;
   // Refund fields
   totalRefundAmount?: number;
   refundStatus?: 'REFUNDED' | 'PARTIALLY_REFUNDED';
@@ -226,9 +229,21 @@ export function generateReceiptHtml(
       case 'totals': {
         const hasExchangeCredit = data.isReplacementBill && (data.exchangeCreditAmount || 0) > 0;
         const exchangeCredit = data.exchangeCreditAmount || 0;
-        const netPaidToday = hasExchangeCredit ? (data.grandTotal - exchangeCredit) : data.grandTotal;
-        // Determine non-exchange payments for the footer breakdown
-        const freshPayments = (data.payments || []).filter(p => p.paymentMode !== 'EXCHANGE_CREDIT');
+
+        const storeCreditPmt = (data.payments || []).find(p => p.paymentMode === 'STORE_CREDIT');
+        const storeCreditAmount = (data.storeCreditAmount !== undefined && data.storeCreditAmount > 0)
+          ? data.storeCreditAmount
+          : (storeCreditPmt ? Number(storeCreditPmt.amount || 0) : (data.paymentMethod === 'STORE_CREDIT' ? data.grandTotal : 0));
+        const hasStoreCredit = !hasExchangeCredit && storeCreditAmount > 0;
+
+        const netPaidToday = hasExchangeCredit
+          ? (data.grandTotal - exchangeCredit)
+          : (hasStoreCredit ? (data.grandTotal - storeCreditAmount) : data.grandTotal);
+
+        // Determine fresh / non-credit payments for the footer breakdown
+        const freshPayments = (data.payments || []).filter(
+          p => p.paymentMode !== 'EXCHANGE_CREDIT' && p.paymentMode !== 'STORE_CREDIT'
+        );
 
         // For exchange/replacement bills, recalculate GST on the NET amount paid
         // (mirrors processSaleForReport in Reports.tsx so receipt and report always match)
@@ -250,7 +265,7 @@ export function generateReceiptHtml(
           displaySgst = 0;
           basicAmt = 0;
         } else {
-          // Normal (non-exchange) bill — use the stored gross values
+          // Normal or Store Credit bill — use standard gross tax
           const totalTax = (data.cgst || 0) + (data.sgst || 0);
           const afterDiscount = (data.subtotal || 0) - (data.discount || 0);
           displayCgst = data.cgst || 0;
@@ -264,28 +279,55 @@ export function generateReceiptHtml(
               <tr><td align="right">Total Items:</td><td align="right" width="80">${data.items.length}</td></tr>
               <tr style="font-weight: bold;"><td align="right">Gross Subtotal (incl. GST):</td><td align="right" width="80">${(data.subtotal || 0).toFixed(2)}</td></tr>
               <tr><td align="right">Discount:</td><td align="right" width="80">${data.discount.toFixed(2)}</td></tr>
+
+              ${hasStoreCredit ? `
+              <tr style="font-weight: bold; border-top: 1px dashed #000;">
+                <td align="right" style="padding: 3px 0;">INVOICE TOTAL:</td>
+                <td align="right" width="80" style="padding: 3px 0;">₹${data.grandTotal.toFixed(2)}</td>
+              </tr>
+              <tr><td align="right" style="color: #4b5563;">Taxable Value (Excl. GST):</td><td align="right" width="80" style="color: #4b5563;">${basicAmt.toFixed(2)}</td></tr>
+              <tr><td align="right" style="color: #4b5563;">CGST @ 2.5%:</td><td align="right" width="80" style="color: #4b5563;">${displayCgst.toFixed(2)}</td></tr>
+              <tr><td align="right" style="color: #4b5563;">SGST @ 2.5%:</td><td align="right" width="80" style="color: #4b5563;">${displaySgst.toFixed(2)}</td></tr>
+              <tr style="font-weight: bold; border-top: 1px dashed #000;">
+                <td align="right" style="padding: 3px 0;">Less Store Credit${data.creditNoteCodes ? ` (${data.creditNoteCodes})` : ''}:</td>
+                <td align="right" width="80" style="padding: 3px 0;">-₹${storeCreditAmount.toFixed(2)}</td>
+              </tr>
+              <tr style="font-weight: bold; font-size: 14px; border-top: 1px dashed #000;">
+                <td align="right" style="padding: 5px 0;">NET AMOUNT TO PAY:</td>
+                <td align="right" style="padding: 5px 0;">₹${Math.max(0, netPaidToday).toFixed(2)}</td>
+              </tr>
+              ` : ''}
+
               ${hasExchangeCredit ? `
               <tr><td align="right" style="padding: 2px 0;">Less Exchange Credit:</td><td align="right" style="padding: 2px 0;">-${exchangeCredit.toFixed(2)}</td></tr>
               <tr style="font-weight: bold;"><td align="right">Net Amt (incl. GST):</td><td align="right" width="80">${Math.max(0, netPaidToday).toFixed(2)}</td></tr>
-              ` : ''}
               <tr><td align="right">Taxable Amount (Excl. GST):</td><td align="right" width="80">${basicAmt.toFixed(2)}</td></tr>
               <tr><td align="right">CGST @2.5%:</td><td align="right" width="80">${displayCgst.toFixed(2)}</td></tr>
               <tr><td align="right">SGST @2.5%:</td><td align="right" width="80">${displaySgst.toFixed(2)}</td></tr>
-              <tr style="font-weight: bold; font-size: ${hasExchangeCredit ? '14' : '13'}px; border-top: 1px dashed #000;">
-                <td align="right" style="padding: 5px 0;">${hasExchangeCredit ? 'NET AMOUNT PAID:' : 'TOTAL:'}</td>
-                <td align="right" style="padding: 5px 0;">₹${hasExchangeCredit ? Math.max(0, netPaidToday).toFixed(2) : data.grandTotal.toFixed(2)}</td>
+              <tr style="font-weight: bold; font-size: 14px; border-top: 1px dashed #000;">
+                <td align="right" style="padding: 5px 0;">NET AMOUNT PAID:</td>
+                <td align="right" style="padding: 5px 0;">₹${Math.max(0, netPaidToday).toFixed(2)}</td>
               </tr>
-              ${data.totalRefundAmount && data.totalRefundAmount > 0 ? `
-              <tr><td align="right" style="padding: 2px 0; color: #b91c1c; font-weight: bold;">Less Refunded:</td><td align="right" style="padding: 2px 0; color: #b91c1c; font-weight: bold;">-${data.totalRefundAmount.toFixed(2)}</td></tr>
-              <tr style="font-weight: bold; font-size: 13px; border-top: 1px dashed #b91c1c; color: #b91c1c;"><td align="right" style="padding: 4px 0;">NET RETAINED:</td><td align="right" style="padding: 4px 0;">₹${Math.max(0, data.grandTotal - data.totalRefundAmount).toFixed(2)}</td></tr>
               ` : ''}
-              ${!hasExchangeCredit ? `
+
+              ${!hasExchangeCredit && !hasStoreCredit ? `
+              <tr><td align="right">Taxable Amount (Excl. GST):</td><td align="right" width="80">${basicAmt.toFixed(2)}</td></tr>
+              <tr><td align="right">CGST @2.5%:</td><td align="right" width="80">${displayCgst.toFixed(2)}</td></tr>
+              <tr><td align="right">SGST @2.5%:</td><td align="right" width="80">${displaySgst.toFixed(2)}</td></tr>
+              <tr style="font-weight: bold; font-size: 13px; border-top: 1px dashed #000;">
+                <td align="right" style="padding: 5px 0;">TOTAL:</td>
+                <td align="right" style="padding: 5px 0;">₹${data.grandTotal.toFixed(2)}</td>
+              </tr>
               ${printerConfig.showPaidLine
                 ? (data.payments && data.payments.length > 1
                   ? data.payments.map(p => `<tr><td align="right">${p.paymentMode}:</td><td align="right">${p.amount.toFixed(2)}</td></tr>`).join('')
                   : `<tr><td align="right" style="padding-top: 5px;">Paid (${data.paymentMethod}):</td><td align="right" style="padding-top: 5px;">${data.paidAmount?.toFixed(2) || '0.00'}</td></tr>`)
                 : ''}
               ${printerConfig.showChangeLine ? `<tr><td align="right">Change:</td><td align="right">${data.changeAmount?.toFixed(2) || '0.00'}</td></tr>` : ''}
+              ` : ''}
+              ${data.totalRefundAmount && data.totalRefundAmount > 0 ? `
+              <tr><td align="right" style="padding: 2px 0; color: #b91c1c; font-weight: bold;">Less Refunded:</td><td align="right" style="padding: 2px 0; color: #b91c1c; font-weight: bold;">-${data.totalRefundAmount.toFixed(2)}</td></tr>
+              <tr style="font-weight: bold; font-size: 13px; border-top: 1px dashed #b91c1c; color: #b91c1c;"><td align="right" style="padding: 4px 0;">NET RETAINED:</td><td align="right" style="padding: 4px 0;">₹${Math.max(0, data.grandTotal - data.totalRefundAmount).toFixed(2)}</td></tr>
               ` : ''}
             </table>
             ${hasExchangeCredit ? `
@@ -296,6 +338,17 @@ export function generateReceiptHtml(
                 ${freshPayments.map(p => `<tr><td>${p.paymentMode}:</td><td align="right">₹${p.amount.toFixed(2)}</td></tr>`).join('')}
                 ${freshPayments.length === 0 && netPaidToday > 0 ? `<tr><td>${data.paymentMethod}:</td><td align="right">₹${netPaidToday.toFixed(2)}</td></tr>` : ''}
                 ${netPaidToday <= 0 ? `<tr><td colspan="2" style="font-size: 10px;">No additional payment required</td></tr>` : ''}
+              </table>
+            </div>
+            ` : ''}
+            ${hasStoreCredit ? `
+            <div style="border-top: 1px dashed #000; margin-top: 5px; padding-top: 5px; font-size: 11px;">
+              <div style="font-weight: bold; font-size: 10px; margin-bottom: 3px;">PAYMENT BREAKDOWN:</div>
+              <table style="width: 100%; font-size: inherit;">
+                <tr><td>Store Credit${data.creditNoteCodes ? ` (${data.creditNoteCodes})` : ''}:</td><td align="right">₹${storeCreditAmount.toFixed(2)}</td></tr>
+                ${freshPayments.map(p => `<tr><td>${p.paymentMode}:</td><td align="right">₹${p.amount.toFixed(2)}</td></tr>`).join('')}
+                ${freshPayments.length === 0 && netPaidToday > 0 ? `<tr><td>${data.paymentMethod}:</td><td align="right">₹${netPaidToday.toFixed(2)}</td></tr>` : ''}
+                ${netPaidToday <= 0 ? `<tr><td colspan="2" style="font-size: 10px; font-weight: bold;">(Fully Covered by Store Credit)</td></tr>` : ''}
               </table>
             </div>
             ` : ''}
@@ -525,5 +578,173 @@ export const printService = {
       console.error('Print label error:', error);
       throw error;
     }
+  },
+
+  async printCreditNote(cn: {
+    code: string;
+    customerName?: string | null;
+    customerPhone?: string | null;
+    originalBillNo?: string | null;
+    amount: number;
+    remainingAmount: number;
+    reason?: string | null;
+    createdAt?: string;
+  }): Promise<void> {
+    try {
+      const printerConfigResult = await window.electronAPI.settings.get({ key: 'PRINTER_CONFIG' });
+      const shopInfoResult = await window.electronAPI.settings.get({ key: 'SHOP_INFO' });
+
+      let shopInfo: any = {};
+      if (shopInfoResult?.data) {
+        try { shopInfo = JSON.parse(shopInfoResult.data as string); } catch {}
+      }
+
+      const printerConfig: ReceiptPrinterConfig = {
+        ...DEFAULT_RECEIPT_PRINTER_CONFIG,
+        ...(printerConfigResult?.data ? (() => {
+          try { return JSON.parse(printerConfigResult.data as string); } catch { return {}; }
+        })() : {})
+      };
+
+      const finalHtml = generateCreditNoteSlipHtml(cn, {
+        name: shopInfo.name || 'ZAIN GENTS PALACE',
+        address: shopInfo.address || '',
+        phone: shopInfo.phone || '',
+        gstin: shopInfo.gstin || ''
+      });
+
+      const receiptPrinterName = printerConfigResult?.data
+        ? (() => {
+            try {
+              const parsed = JSON.parse(printerConfigResult.data as string);
+              return typeof parsed?.receiptPrinter === 'string'
+                ? parsed.receiptPrinter.trim()
+                : undefined;
+            } catch {
+              return undefined;
+            }
+          })()
+        : undefined;
+
+      const result = await window.electronAPI.print.receipt({
+        html: finalHtml,
+        options: { deviceName: receiptPrinterName, pageSize: printerConfig.pageSize }
+      });
+
+      if (!result?.success) {
+        if (typeof window !== 'undefined' && typeof window.print === 'function') {
+          const printWindow = window.open('', '_blank');
+          if (printWindow) {
+            printWindow.document.write(finalHtml);
+            printWindow.document.close();
+            printWindow.focus();
+            printWindow.print();
+            printWindow.close();
+            return;
+          }
+        }
+        throw new Error(result?.error || 'Credit note print failed');
+      }
+    } catch (error) {
+      console.error('Print credit note error:', error);
+      throw error;
+    }
   }
 };
+
+export function generateCreditNoteSlipHtml(
+  cn: {
+    code: string;
+    customerName?: string | null;
+    customerPhone?: string | null;
+    originalBillNo?: string | null;
+    amount: number;
+    remainingAmount: number;
+    reason?: string | null;
+    createdAt?: string;
+  },
+  shopInfo?: {
+    name?: string;
+    address?: string;
+    phone?: string;
+    gstin?: string;
+  }
+) {
+  const shopName = shopInfo?.name || 'ZAIN GENTS PALACE';
+  const shopAddress = shopInfo?.address || 'Near Town Square, Main Road';
+  const shopPhone = shopInfo?.phone || '';
+  const dateFormatted = cn.createdAt ? new Date(cn.createdAt).toLocaleString('en-IN') : new Date().toLocaleString('en-IN');
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        body {
+          font-family: 'Courier New', monospace;
+          margin: 0;
+          padding: 8px;
+          color: #000;
+          width: 72mm;
+          font-size: 13px;
+        }
+        .text-center { text-align: center; }
+        .text-right { text-align: right; }
+        .bold { font-weight: bold; }
+        .divider { border-bottom: 1px dashed #000; margin: 8px 0; }
+        .title { font-size: 16px; font-weight: bold; margin: 4px 0; letter-spacing: 1px; }
+        .amount-box {
+          border: 2px solid #000;
+          padding: 6px;
+          text-align: center;
+          margin: 8px 0;
+          font-size: 18px;
+          font-weight: bold;
+        }
+        .code-box {
+          font-size: 18px;
+          font-weight: 900;
+          letter-spacing: 2px;
+          text-align: center;
+          margin: 6px 0;
+        }
+        .footer { font-size: 11px; text-align: center; margin-top: 10px; }
+        table { width: 100%; font-size: 12px; }
+        td { padding: 2px 0; }
+      </style>
+    </head>
+    <body>
+      <div class="text-center">
+        <div class="title">${shopName}</div>
+        ${shopAddress ? `<div>${shopAddress}</div>` : ''}
+        ${shopPhone ? `<div>Tel: ${shopPhone}</div>` : ''}
+        <div class="divider"></div>
+        <div class="bold" style="font-size: 15px; text-decoration: underline;">STORE CREDIT VOUCHER</div>
+        <div class="code-box">${cn.code}</div>
+      </div>
+      <div class="divider"></div>
+      <table>
+        <tr>
+          <td>Date:</td>
+          <td class="text-right">${dateFormatted}</td>
+        </tr>
+        ${cn.customerName ? `<tr><td>Customer:</td><td class="text-right bold">${cn.customerName}</td></tr>` : ''}
+        ${cn.customerPhone ? `<tr><td>Phone:</td><td class="text-right bold">${cn.customerPhone}</td></tr>` : ''}
+        ${cn.originalBillNo ? `<tr><td>Ref Bill:</td><td class="text-right">#${cn.originalBillNo}</td></tr>` : ''}
+      </table>
+      <div class="amount-box">
+        CREDIT AMOUNT: ₹${cn.remainingAmount.toFixed(2)}
+      </div>
+      ${cn.reason ? `<div style="font-size: 11px; margin-bottom: 6px;">Note: ${cn.reason}</div>` : ''}
+      <div class="divider"></div>
+      <div class="footer">
+        <div>Please present this voucher or quote code at checkout.</div>
+        <div style="margin-top: 4px;">* Valid for purchases at this store *</div>
+        <div style="margin-top: 2px;">* Not redeemable for cash *</div>
+        <div style="margin-top: 8px; font-weight: bold;">Thank You!</div>
+      </div>
+    </body>
+    </html>
+  `;
+}

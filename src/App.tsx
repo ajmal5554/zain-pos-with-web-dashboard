@@ -68,9 +68,7 @@ function App() {
                             <Route
                                 index
                                 element={
-                                    <PermissionRoute perm="permViewReports">
-                                        <PageBoundary><Dashboard /></PageBoundary>
-                                    </PermissionRoute>
+                                    <PageBoundary><Dashboard /></PageBoundary>
                                 }
                             />
                             <Route path="pos" element={<PageBoundary><POS /></PageBoundary>} />

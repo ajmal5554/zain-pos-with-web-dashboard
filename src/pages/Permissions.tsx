@@ -1,17 +1,28 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
     ShieldCheck, 
+    Shield,
     Search, 
     RefreshCw, 
-    Percent, 
     ShoppingCart, 
     Package, 
     BarChart3, 
     Filter,
+    Check, 
+    AlertCircle,
+    ChevronDown,
+    ChevronUp,
+    User,
+    Lock,
+    DollarSign,
+    Calendar,
+    Boxes,
+    Wallet,
+    Sliders,
     Sparkles,
-    UserCheck,
-    Check,
-    AlertCircle
+    UserCog,
+    EyeOff
 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -24,36 +35,54 @@ interface UserPermission {
     username: string;
     role: string;
     isActive: boolean;
-    // POS & Sales
+    createdAt?: string;
+
+    // 1. POS & Checkout
     permAddItem: boolean;
     permEditSales: boolean;
     permChangePayment: boolean;
     permVoidSale: boolean;
+    permBackDateSale: boolean;
     maxDiscount: number;
-    // Catalog & Inventory
+
+    // 2. Garment Catalogue & Pricing
     permManageProducts: boolean;
     permDeleteProduct: boolean;
     permPrintSticker: boolean;
-    // Analytics & Administration
+    permViewCostPrice: boolean;
+
+    // 3. Stock & Inventory
+    permManageInventory: boolean;
+
+    // 4. Cash Register & Shifts
+    permManageCashDrawer: boolean;
+
+    // 5. Reports & Administration
     permViewReports: boolean;
     permViewSales: boolean;
     permViewGstReports: boolean;
     permViewInsights: boolean;
+    permDeleteAudit: boolean;
     permEditSettings: boolean;
     permManageUsers: boolean;
 }
 
-type PermissionKey = keyof Omit<UserPermission, 'id' | 'name' | 'username' | 'role' | 'isActive' | 'maxDiscount'>;
+type PermissionKey = keyof Omit<UserPermission, 'id' | 'name' | 'username' | 'role' | 'isActive' | 'createdAt' | 'maxDiscount'>;
 
 type RoleFilter = 'ALL' | 'CASHIER' | 'ADMIN';
+type StatusFilter = 'ACTIVE' | 'ALL' | 'INACTIVE';
+type PresetRole = 'CASHIER' | 'SENIOR_CASHIER' | 'SUPERVISOR' | 'MANAGER';
 
 export const Permissions: React.FC = () => {
+    const navigate = useNavigate();
+    const { user: currentUser } = useAuthStore();
     const [users, setUsers] = useState<UserPermission[]>([]);
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
     const [roleFilter, setRoleFilter] = useState<RoleFilter>('ALL');
+    const [statusFilter, setStatusFilter] = useState<StatusFilter>('ACTIVE');
     const [savingUserId, setSavingUserId] = useState<string | null>(null);
-    const { user: currentUser } = useAuthStore();
+    const [expandedUserIds, setExpandedUserIds] = useState<string[]>([]);
 
     useEffect(() => {
         if (currentUser?.id) {
@@ -69,6 +98,11 @@ export const Permissions: React.FC = () => {
             const res = await window.electronAPI.users.list({ requestingUserId: currentUser?.id });
             if (res.success && Array.isArray(res.data)) {
                 setUsers(res.data);
+                // Expand the first non-admin cashier by default for convenience
+                const firstCashier = res.data.find((u: UserPermission) => u.role !== 'ADMIN' && u.isActive);
+                if (firstCashier) {
+                    setExpandedUserIds([firstCashier.id]);
+                }
             } else {
                 showToast(res.error || 'Failed to load staff list', 'error');
             }
@@ -80,11 +114,25 @@ export const Permissions: React.FC = () => {
         }
     };
 
+    const toggleExpand = (userId: string) => {
+        setExpandedUserIds(prev => 
+            prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]
+        );
+    };
+
+    const expandAll = () => {
+        setExpandedUserIds(users.map(u => u.id));
+    };
+
+    const collapseAll = () => {
+        setExpandedUserIds([]);
+    };
+
     const togglePermission = async (userId: string, field: PermissionKey) => {
         const target = users.find(u => u.id === userId);
         if (!target || target.role === 'ADMIN') return;
 
-        const previousValue = target[field];
+        const previousValue = Boolean(target[field]);
         const newValue = !previousValue;
 
         // Optimistic UI update
@@ -138,43 +186,111 @@ export const Permissions: React.FC = () => {
         }
     };
 
-    const applyPreset = async (userId: string, presetName: 'CASHIER' | 'SUPERVISOR') => {
+    const applyPreset = async (userId: string, preset: PresetRole) => {
         const target = users.find(u => u.id === userId);
         if (!target || target.role === 'ADMIN') return;
 
-        const presetData: Partial<UserPermission> = presetName === 'CASHIER'
-            ? {
-                permAddItem: true,
-                permPrintSticker: true,
-                permEditSales: false,
-                permChangePayment: false,
-                permVoidSale: false,
-                permManageProducts: false,
-                permDeleteProduct: false,
-                permViewReports: false,
-                permViewSales: false,
-                permViewGstReports: false,
-                permViewInsights: false,
-                permEditSettings: false,
-                permManageUsers: false,
-                maxDiscount: 0,
-            }
-            : {
-                permAddItem: true,
-                permPrintSticker: true,
-                permEditSales: true,
-                permChangePayment: true,
-                permVoidSale: true,
-                permManageProducts: true,
-                permDeleteProduct: false,
-                permViewReports: true,
-                permViewSales: true,
-                permViewGstReports: true,
-                permViewInsights: true,
-                permEditSettings: false,
-                permManageUsers: false,
-                maxDiscount: 15,
-            };
+        let presetData: Partial<UserPermission> = {};
+        let label = '';
+
+        switch (preset) {
+            case 'CASHIER':
+                label = 'Standard Cashier';
+                presetData = {
+                    permAddItem: true,
+                    permPrintSticker: true,
+                    permManageCashDrawer: true,
+                    permEditSales: false,
+                    permChangePayment: false,
+                    permVoidSale: false,
+                    permBackDateSale: false,
+                    permManageProducts: false,
+                    permDeleteProduct: false,
+                    permViewCostPrice: false,
+                    permManageInventory: false,
+                    permViewReports: false,
+                    permViewSales: false,
+                    permViewGstReports: false,
+                    permViewInsights: false,
+                    permDeleteAudit: false,
+                    permEditSettings: false,
+                    permManageUsers: false,
+                    maxDiscount: 0,
+                };
+                break;
+            case 'SENIOR_CASHIER':
+                label = 'Senior Cashier';
+                presetData = {
+                    permAddItem: true,
+                    permPrintSticker: true,
+                    permManageCashDrawer: true,
+                    permEditSales: true,
+                    permChangePayment: true,
+                    permVoidSale: false,
+                    permBackDateSale: false,
+                    permManageProducts: false,
+                    permDeleteProduct: false,
+                    permViewCostPrice: false,
+                    permManageInventory: false,
+                    permViewReports: false,
+                    permViewSales: true,
+                    permViewGstReports: false,
+                    permViewInsights: false,
+                    permDeleteAudit: false,
+                    permEditSettings: false,
+                    permManageUsers: false,
+                    maxDiscount: 10,
+                };
+                break;
+            case 'SUPERVISOR':
+                label = 'Store Supervisor';
+                presetData = {
+                    permAddItem: true,
+                    permPrintSticker: true,
+                    permManageCashDrawer: true,
+                    permEditSales: true,
+                    permChangePayment: true,
+                    permVoidSale: true,
+                    permBackDateSale: false,
+                    permManageProducts: true,
+                    permDeleteProduct: false,
+                    permViewCostPrice: false,
+                    permManageInventory: true,
+                    permViewReports: true,
+                    permViewSales: true,
+                    permViewGstReports: true,
+                    permViewInsights: true,
+                    permDeleteAudit: false,
+                    permEditSettings: false,
+                    permManageUsers: false,
+                    maxDiscount: 15,
+                };
+                break;
+            case 'MANAGER':
+                label = 'Store Manager';
+                presetData = {
+                    permAddItem: true,
+                    permPrintSticker: true,
+                    permManageCashDrawer: true,
+                    permEditSales: true,
+                    permChangePayment: true,
+                    permVoidSale: true,
+                    permBackDateSale: true,
+                    permManageProducts: true,
+                    permDeleteProduct: true,
+                    permViewCostPrice: true,
+                    permManageInventory: true,
+                    permViewReports: true,
+                    permViewSales: true,
+                    permViewGstReports: true,
+                    permViewInsights: true,
+                    permDeleteAudit: true,
+                    permEditSettings: true,
+                    permManageUsers: false,
+                    maxDiscount: 25,
+                };
+                break;
+        }
 
         // Optimistic update
         setUsers(prev => prev.map(u => u.id === userId ? { ...u, ...presetData } : u));
@@ -187,55 +303,64 @@ export const Permissions: React.FC = () => {
             });
 
             if (res.success) {
-                showToast(`Applied "${presetName === 'CASHIER' ? 'Standard Cashier' : 'Store Supervisor'}" preset`, 'success');
+                showToast(`Applied "${label}" template successfully`, 'success');
             } else {
-                showToast(res.error || 'Failed to apply preset', 'error');
-                loadUsers(); // reload actual
+                showToast(res.error || 'Failed to apply template', 'error');
+                loadUsers();
             }
         } catch (error: any) {
-            showToast('Failed to apply preset: ' + error.message, 'error');
+            showToast('Failed to apply template: ' + error.message, 'error');
             loadUsers();
         } finally {
             setSavingUserId(null);
         }
     };
 
-    const filteredUsers = users.filter(u => {
-        const matchesQuery = 
-            u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            u.username.toLowerCase().includes(searchQuery.toLowerCase());
-        const matchesRole = roleFilter === 'ALL' || u.role === roleFilter;
-        return matchesQuery && matchesRole;
-    });
+    const filteredUsers = useMemo(() => {
+        return users.filter(u => {
+            const matchesQuery = 
+                u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                u.username.toLowerCase().includes(searchQuery.toLowerCase());
+            const matchesRole = roleFilter === 'ALL' || u.role === roleFilter;
+            const matchesStatus = 
+                statusFilter === 'ALL' 
+                    ? true 
+                    : statusFilter === 'ACTIVE' 
+                    ? u.isActive !== false 
+                    : u.isActive === false;
 
-    const renderToggle = (user: UserPermission, field: PermissionKey, tooltip: string) => {
+            return matchesQuery && matchesRole && matchesStatus;
+        });
+    }, [users, searchQuery, roleFilter, statusFilter]);
+
+    const renderToggleSwitch = (user: UserPermission, field: PermissionKey, title: string, subtitle?: string) => {
         const hasPerm = Boolean(user[field]);
-        const isAdmin = user.role === 'ADMIN';
-
-        if (isAdmin) {
-            return (
-                <div className="flex justify-center" title="Administrators have full access to all features">
-                    <ShieldCheck className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-                </div>
-            );
-        }
-
         const isBusy = savingUserId === user.id;
 
         return (
-            <div className="flex justify-center" title={tooltip}>
+            <div className="flex items-start justify-between gap-3 p-2.5 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800/60 transition-colors">
+                <div className="flex-1 min-w-0 pr-1">
+                    <div className="text-xs font-semibold text-gray-800 dark:text-gray-200">
+                        {title}
+                    </div>
+                    {subtitle && (
+                        <div className="text-[11px] text-gray-400 dark:text-gray-500 leading-snug mt-0.5">
+                            {subtitle}
+                        </div>
+                    )}
+                </div>
                 <button
                     type="button"
                     onClick={() => togglePermission(user.id, field)}
                     disabled={isBusy}
-                    aria-label={tooltip}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 ${
-                        hasPerm ? 'bg-blue-600' : 'bg-gray-200 dark:bg-gray-700'
+                    aria-label={title}
+                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1 mt-0.5 ${
+                        hasPerm ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-700'
                     } ${isBusy ? 'opacity-70 cursor-wait' : 'cursor-pointer'}`}
                 >
                     <span 
-                        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${
-                            hasPerm ? 'translate-x-6' : 'translate-x-1'
+                        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                            hasPerm ? 'translate-x-4' : 'translate-x-1'
                         }`} 
                     />
                 </button>
@@ -248,291 +373,424 @@ export const Permissions: React.FC = () => {
             {/* Header */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white flex items-center gap-2">
-                        User Permissions & Allowances
+                    <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white flex items-center gap-2.5">
+                        <ShieldCheck className="w-7 h-7 text-indigo-600 dark:text-indigo-400" />
+                        User Permissions & Staff Access
                     </h1>
                     <p className="text-gray-500 dark:text-gray-400 text-sm mt-0.5">
-                        Manage granular access levels, allowed POS actions, and discount caps for store staff.
+                        Configure role boundaries, allowed operational actions, and discount limits for store employees.
                     </p>
                 </div>
-                <Button variant="secondary" onClick={loadUsers} disabled={loading} className="flex items-center gap-2">
-                    <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                    Refresh Staff
-                </Button>
+                <div className="flex items-center gap-2 self-stretch sm:self-auto">
+                    <Button 
+                        variant="secondary" 
+                        onClick={() => navigate('/users')}
+                        className="flex items-center gap-1.5 text-sm font-medium"
+                    >
+                        <UserCog className="w-4 h-4 text-gray-500" />
+                        Manage Accounts
+                    </Button>
+                    <Button 
+                        variant="secondary" 
+                        onClick={loadUsers} 
+                        disabled={loading} 
+                        className="flex items-center gap-1.5 text-sm font-medium"
+                    >
+                        <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                        Refresh
+                    </Button>
+                </div>
             </div>
 
-            {/* Controls Bar: Search & Role Filter */}
-            <div className="bg-white dark:bg-dark-card border border-gray-200 dark:border-dark-border rounded-xl shadow-sm overflow-hidden">
-                <div className="p-4 border-b border-gray-200 dark:border-dark-border bg-gray-50/70 dark:bg-gray-800/40 flex flex-col md:flex-row justify-between items-stretch md:items-center gap-3">
-                    <div className="relative max-w-sm w-full">
-                        <Search className="absolute left-3 top-3 w-4 h-4 text-gray-400" />
+            {/* Filter & Search Bar */}
+            <div className="bg-white dark:bg-dark-card border border-gray-200 dark:border-dark-border rounded-2xl p-4 shadow-xs space-y-3">
+                <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center gap-3">
+                    <div className="relative flex-1 max-w-md">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                         <Input
                             placeholder="Search staff by name or username..."
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
-                            className="pl-10 h-10 w-full"
+                            className="pl-9 h-9 text-xs w-full"
                         />
                     </div>
 
-                    <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider flex items-center gap-1">
-                            <Filter className="w-3.5 h-3.5" />
-                            Role:
-                        </span>
-                        <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700 p-0.5 bg-gray-100 dark:bg-gray-800 text-xs">
+                    <div className="flex flex-wrap items-center gap-2">
+                        {/* Role Filter */}
+                        <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700 p-0.5 bg-gray-50 dark:bg-gray-800 text-xs">
                             <button
+                                type="button"
                                 onClick={() => setRoleFilter('ALL')}
-                                className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
+                                className={`px-2.5 py-1 rounded-md font-medium transition-colors ${
                                     roleFilter === 'ALL'
-                                        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-xs'
-                                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-900'
+                                        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-2xs font-bold'
+                                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-900'
                                 }`}
                             >
-                                All ({users.length})
+                                All Roles ({users.length})
                             </button>
                             <button
+                                type="button"
                                 onClick={() => setRoleFilter('CASHIER')}
-                                className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
+                                className={`px-2.5 py-1 rounded-md font-medium transition-colors ${
                                     roleFilter === 'CASHIER'
-                                        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-xs'
-                                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-900'
+                                        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-2xs font-bold'
+                                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-900'
                                 }`}
                             >
                                 Cashiers ({users.filter(u => u.role === 'CASHIER').length})
                             </button>
                             <button
+                                type="button"
                                 onClick={() => setRoleFilter('ADMIN')}
-                                className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
+                                className={`px-2.5 py-1 rounded-md font-medium transition-colors ${
                                     roleFilter === 'ADMIN'
-                                        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-xs'
-                                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-900'
+                                        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-2xs font-bold'
+                                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-900'
                                 }`}
                             >
                                 Admins ({users.filter(u => u.role === 'ADMIN').length})
                             </button>
                         </div>
+
+                        {/* Status Filter */}
+                        <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700 p-0.5 bg-gray-50 dark:bg-gray-800 text-xs">
+                            <button
+                                type="button"
+                                onClick={() => setStatusFilter('ACTIVE')}
+                                className={`px-2.5 py-1 rounded-md font-medium transition-colors ${
+                                    statusFilter === 'ACTIVE'
+                                        ? 'bg-white dark:bg-gray-700 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
+                                        : 'text-gray-500 dark:text-gray-400'
+                                }`}
+                            >
+                                Active Staff
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setStatusFilter('ALL')}
+                                className={`px-2.5 py-1 rounded-md font-medium transition-colors ${
+                                    statusFilter === 'ALL'
+                                        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-2xs font-bold'
+                                        : 'text-gray-500 dark:text-gray-400'
+                                }`}
+                            >
+                                All Status
+                            </button>
+                        </div>
                     </div>
                 </div>
 
-                {/* Table with Grouped Categories */}
-                <div className="overflow-x-auto">
-                    <table className="w-full border-collapse">
-                        {/* Level 1: Category Header Groups */}
-                        <thead>
-                            <tr className="border-b border-gray-200 dark:border-dark-border text-xs font-semibold uppercase tracking-wider text-gray-600 dark:text-gray-300">
-                                <th rowSpan={2} className="px-5 py-3 text-left bg-gray-100/90 dark:bg-gray-800/90 min-w-[200px] border-r border-gray-200 dark:border-dark-border sticky left-0 z-10">
-                                    Staff Member
-                                </th>
-                                <th colSpan={5} className="py-2.5 text-center bg-blue-50/70 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 border-r border-blue-200 dark:border-blue-900/40">
-                                    <div className="flex items-center justify-center gap-1.5">
-                                        <ShoppingCart className="w-3.5 h-3.5" />
-                                        Point of Sale & Billing
+                <div className="flex items-center justify-between text-xs text-gray-400 border-t border-gray-100 dark:border-gray-800 pt-2 px-1">
+                    <span>Showing <strong>{filteredUsers.length}</strong> staff profiles</span>
+                    <div className="flex items-center gap-3">
+                        <button
+                            type="button"
+                            onClick={expandAll}
+                            className="text-indigo-600 dark:text-indigo-400 hover:underline font-medium"
+                        >
+                            Expand all
+                        </button>
+                        <span>•</span>
+                        <button
+                            type="button"
+                            onClick={collapseAll}
+                            className="text-gray-500 hover:underline font-medium"
+                        >
+                            Collapse all
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            {/* Staff Cards List */}
+            <div className="space-y-4">
+                {loading ? (
+                    Array.from({ length: 3 }).map((_, i) => (
+                        <div key={i} className="bg-white dark:bg-dark-card rounded-2xl border border-gray-200 dark:border-dark-border p-4 animate-pulse">
+                            <div className="flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 rounded-xl bg-gray-200 dark:bg-gray-700" />
+                                    <div className="space-y-1.5">
+                                        <div className="h-4 w-32 bg-gray-200 dark:bg-gray-700 rounded" />
+                                        <div className="h-3 w-20 bg-gray-200 dark:bg-gray-700 rounded" />
                                     </div>
-                                </th>
-                                <th colSpan={3} className="py-2.5 text-center bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border-r border-emerald-200 dark:border-emerald-900/40">
-                                    <div className="flex items-center justify-center gap-1.5">
-                                        <Package className="w-3.5 h-3.5" />
-                                        Products & Catalog
-                                    </div>
-                                </th>
-                                <th colSpan={6} className="py-2.5 text-center bg-purple-50/70 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300">
-                                    <div className="flex items-center justify-center gap-1.5">
-                                        <BarChart3 className="w-3.5 h-3.5" />
-                                        Administration & Reports
-                                    </div>
-                                </th>
-                            </tr>
+                                </div>
+                                <div className="h-6 w-24 bg-gray-200 dark:bg-gray-700 rounded-full" />
+                            </div>
+                        </div>
+                    ))
+                ) : filteredUsers.length === 0 ? (
+                    <div className="p-12 text-center bg-white dark:bg-dark-card rounded-2xl border border-gray-200 dark:border-dark-border text-gray-400 space-y-2">
+                        <User className="w-8 h-8 mx-auto opacity-30" />
+                        <div className="text-sm font-medium">No staff members match the selected filters.</div>
+                        <div className="text-xs">Try selecting a different role or search query.</div>
+                    </div>
+                ) : (
+                    filteredUsers.map((user) => {
+                        const isAdmin = user.role === 'ADMIN';
+                        const isExpanded = expandedUserIds.includes(user.id);
+                        const isBusy = savingUserId === user.id;
 
-                            {/* Level 2: Sub-columns */}
-                            <tr className="bg-gray-50/80 dark:bg-gray-800/60 text-[11px] font-bold text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-dark-border">
-                                {/* POS sub-columns */}
-                                <th className="px-3 py-2.5 text-center" title="Allow scanning or clicking products into cart">Add Items</th>
-                                <th className="px-3 py-2.5 text-center" title="Allow editing finalized sales and issuing exchanges">Edit Sales</th>
-                                <th className="px-3 py-2.5 text-center" title="Allow changing payment modes after checkout">Change Pymt</th>
-                                <th className="px-3 py-2.5 text-center" title="Allow voiding completed invoices">Void Bill</th>
-                                <th className="px-4 py-2.5 text-right border-r border-blue-200 dark:border-blue-900/40" title="Maximum bill discount % allowed (0% means NO discount allowed)">Max Disc (%)</th>
-
-                                {/* Catalog sub-columns */}
-                                <th className="px-3 py-2.5 text-center" title="Allow access to Products page to add or edit product catalog">Manage Catalog</th>
-                                <th className="px-3 py-2.5 text-center" title="Allow permanently deleting products from the store catalog">Delete Items</th>
-                                <th className="px-3 py-2.5 text-center border-r border-emerald-200 dark:border-emerald-900/40" title="Allow printing barcode stickers and labels">Print Stickers</th>
-
-                                {/* Admin sub-columns */}
-                                <th className="px-3 py-2.5 text-center" title="Allow viewing Dashboard revenue statistics">Dashboard</th>
-                                <th className="px-3 py-2.5 text-center" title="Allow viewing Sales History invoices">Sales Hist</th>
-                                <th className="px-3 py-2.5 text-center" title="Allow viewing Reports and GST tax summaries">Reports</th>
-                                <th className="px-3 py-2.5 text-center" title="Allow viewing Sales Outlook & Business Insights">Business Insights</th>
-                                <th className="px-3 py-2.5 text-center" title="Allow opening System & Store Settings">Settings</th>
-                                <th className="px-3 py-2.5 text-center" title="Allow managing staff accounts and roles">Users</th>
-                            </tr>
-                        </thead>
-
-                        <tbody className="divide-y divide-gray-200 dark:divide-dark-border">
-                            {filteredUsers.length === 0 ? (
-                                <tr>
-                                    <td colSpan={15} className="py-12 text-center text-gray-400">
-                                        No staff members match the selected search or filter criteria.
-                                    </td>
-                                </tr>
-                            ) : (
-                                filteredUsers.map((user) => {
-                                    const isAdmin = user.role === 'ADMIN';
-
-                                    return (
-                                        <tr key={user.id} className="hover:bg-gray-50/70 dark:hover:bg-gray-800/30 transition-colors">
-                                            {/* Staff details + quick presets */}
-                                            <td className="px-5 py-3.5 bg-white dark:bg-dark-card border-r border-gray-200 dark:border-dark-border sticky left-0 z-10">
-                                                <div className="flex items-center justify-between gap-2">
-                                                    <div>
-                                                        <div className="font-bold text-gray-900 dark:text-gray-100 flex items-center gap-1.5">
-                                                            {user.name}
-                                                            {isAdmin && (
-                                                                <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300">
-                                                                    Admin
-                                                                </span>
-                                                            )}
-                                                        </div>
-                                                        <div className="text-xs text-gray-400">@{user.username}</div>
-                                                    </div>
-
-                                                    {!isAdmin && (
-                                                        <div className="flex items-center gap-1" title="Quick Role Presets">
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => applyPreset(user.id, 'CASHIER')}
-                                                                disabled={savingUserId === user.id}
-                                                                className="text-[10px] px-1.5 py-1 rounded bg-gray-100 dark:bg-gray-700/60 hover:bg-blue-50 dark:hover:bg-blue-900/30 text-gray-600 dark:text-gray-300 hover:text-blue-600 transition-colors font-medium"
-                                                                title="Reset to Standard Cashier (Add items + Sticker print only, 0% discount)"
-                                                            >
-                                                                Cashier
-                                                            </button>
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => applyPreset(user.id, 'SUPERVISOR')}
-                                                                disabled={savingUserId === user.id}
-                                                                className="text-[10px] px-1.5 py-1 rounded bg-gray-100 dark:bg-gray-700/60 hover:bg-purple-50 dark:hover:bg-purple-900/30 text-gray-600 dark:text-gray-300 hover:text-purple-600 transition-colors font-medium"
-                                                                title="Set as Supervisor (POS + Products + Reports + 15% discount)"
-                                                            >
-                                                                Supervisor
-                                                            </button>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            </td>
-
-                                            {/* POS Toggles */}
-                                            <td className="px-3 py-3.5 text-center">
-                                                {renderToggle(user, 'permAddItem', 'Add Items: Allows scanning and adding items into POS cart')}
-                                            </td>
-                                            <td className="px-3 py-3.5 text-center">
-                                                {renderToggle(user, 'permEditSales', 'Edit Sales: Allows modifying finalized invoices & processing exchanges')}
-                                            </td>
-                                            <td className="px-3 py-3.5 text-center">
-                                                {renderToggle(user, 'permChangePayment', 'Change Payment: Allows updating payment methods after checkout')}
-                                            </td>
-                                            <td className="px-3 py-3.5 text-center">
-                                                {renderToggle(user, 'permVoidSale', 'Void Bill: Allows cancelling/voiding completed sales')}
-                                            </td>
-                                            <td className="px-4 py-3.5 text-right border-r border-blue-100 dark:border-blue-950">
+                        return (
+                            <div
+                                key={user.id}
+                                className={`bg-white dark:bg-dark-card rounded-2xl border transition-all shadow-xs overflow-hidden ${
+                                    !user.isActive
+                                        ? 'opacity-60 border-gray-200 dark:border-gray-800'
+                                        : isAdmin
+                                        ? 'border-purple-200 dark:border-purple-900/50 bg-gradient-to-r from-purple-50/20 to-transparent'
+                                        : 'border-gray-200 dark:border-dark-border'
+                                }`}
+                            >
+                                {/* Card Header / Summary Row */}
+                                <div className="p-4 flex flex-wrap items-center justify-between gap-3">
+                                    <div className="flex items-center gap-3 min-w-[200px]">
+                                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm shadow-xs ${
+                                            isAdmin 
+                                                ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300' 
+                                                : 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300'
+                                        }`}>
+                                            {user.name.charAt(0).toUpperCase()}
+                                        </div>
+                                        <div>
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-bold text-sm text-gray-900 dark:text-white">
+                                                    {user.name}
+                                                </span>
+                                                <span className="text-xs text-gray-400 font-mono">
+                                                    @{user.username}
+                                                </span>
                                                 {isAdmin ? (
-                                                    <span className="text-xs font-bold text-gray-400 uppercase">Unlimited</span>
+                                                    <span className="inline-flex items-center gap-1 text-[10px] uppercase font-extrabold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
+                                                        <Shield className="w-3 h-3" />
+                                                        Admin
+                                                    </span>
                                                 ) : (
-                                                    <div className="flex items-center justify-end gap-1.5">
-                                                        <div className="relative w-20">
+                                                    <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+                                                        Cashier
+                                                    </span>
+                                                )}
+                                                {!user.isActive && (
+                                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300">
+                                                        Deactivated
+                                                    </span>
+                                                )}
+                                            </div>
+
+                                            {/* Quick Summary Subline */}
+                                            <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                                                {isAdmin ? (
+                                                    <span className="text-purple-600 dark:text-purple-400 font-medium">
+                                                        Full Administrative Access (Zero Restrictions)
+                                                    </span>
+                                                ) : (
+                                                    <>
+                                                        <span>
+                                                            Max Discount: <strong className="text-gray-800 dark:text-gray-200">{user.maxDiscount || 0}%</strong>
+                                                        </span>
+                                                        <span>•</span>
+                                                        <span>
+                                                            Stock Audit: <strong className={user.permManageInventory ? 'text-emerald-600' : 'text-gray-400'}>{user.permManageInventory ? 'Allowed' : 'Locked'}</strong>
+                                                        </span>
+                                                        <span>•</span>
+                                                        <span>
+                                                            Wholesale Cost: <strong className={user.permViewCostPrice ? 'text-emerald-600' : 'text-gray-400'}>{user.permViewCostPrice ? 'Visible' : 'Hidden'}</strong>
+                                                        </span>
+                                                    </>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Action Buttons: Presets & Expand */}
+                                    <div className="flex items-center gap-2">
+                                        {!isAdmin && (
+                                            <div className="hidden lg:flex items-center gap-1.5 p-1 rounded-xl bg-gray-50 dark:bg-gray-800/60 border border-gray-100 dark:border-gray-700/60 text-xs">
+                                                <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 px-1.5">Template:</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => applyPreset(user.id, 'CASHIER')}
+                                                    disabled={isBusy}
+                                                    title="Standard Cashier (Scan items, print stickers, cash drawer, 0% discount)"
+                                                    className="px-2 py-1 rounded-md text-[11px] font-medium bg-white dark:bg-gray-700 hover:text-indigo-600 shadow-2xs transition-colors"
+                                                >
+                                                    Cashier
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => applyPreset(user.id, 'SENIOR_CASHIER')}
+                                                    disabled={isBusy}
+                                                    title="Senior Cashier (Billing, exchanges, payment changes, 10% discount cap)"
+                                                    className="px-2 py-1 rounded-md text-[11px] font-medium bg-white dark:bg-gray-700 hover:text-indigo-600 shadow-2xs transition-colors"
+                                                >
+                                                    Senior
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => applyPreset(user.id, 'SUPERVISOR')}
+                                                    disabled={isBusy}
+                                                    title="Store Supervisor (POS, products, stocktake, reports, 15% discount cap)"
+                                                    className="px-2 py-1 rounded-md text-[11px] font-medium bg-white dark:bg-gray-700 hover:text-indigo-600 shadow-2xs transition-colors"
+                                                >
+                                                    Supervisor
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => applyPreset(user.id, 'MANAGER')}
+                                                    disabled={isBusy}
+                                                    title="Store Manager (Full operations, reports, insights, wholesale costs, 25% discount)"
+                                                    className="px-2 py-1 rounded-md text-[11px] font-medium bg-white dark:bg-gray-700 hover:text-indigo-600 shadow-2xs transition-colors"
+                                                >
+                                                    Manager
+                                                </button>
+                                            </div>
+                                        )}
+
+                                        {!isAdmin && (
+                                            <Button
+                                                variant="secondary"
+                                                size="sm"
+                                                onClick={() => toggleExpand(user.id)}
+                                                className="flex items-center gap-1.5 text-xs font-semibold"
+                                            >
+                                                <Sliders className="w-3.5 h-3.5 text-indigo-600" />
+                                                <span>{isExpanded ? 'Hide Permissions' : 'Configure Permissions'}</span>
+                                                {isExpanded ? <ChevronUp className="w-3.5 h-3.5 text-gray-400" /> : <ChevronDown className="w-3.5 h-3.5 text-gray-400" />}
+                                            </Button>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Expanded Granular Controls (For Cashiers / Staff) */}
+                                {!isAdmin && isExpanded && (
+                                    <div className="border-t border-gray-100 dark:border-gray-800 bg-gray-50/40 dark:bg-gray-900/20 p-5 space-y-5 animate-in fade-in duration-200">
+                                        {/* Mobile Presets Bar (shown on smaller screens) */}
+                                        <div className="lg:hidden flex flex-wrap items-center gap-1.5 pb-3 border-b border-gray-200 dark:border-gray-800">
+                                            <span className="text-[11px] font-bold text-gray-500">Quick Templates:</span>
+                                            <button
+                                                type="button"
+                                                onClick={() => applyPreset(user.id, 'CASHIER')}
+                                                disabled={isBusy}
+                                                className="px-2 py-1 text-xs rounded bg-white dark:bg-gray-800 border"
+                                            >
+                                                Cashier
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => applyPreset(user.id, 'SENIOR_CASHIER')}
+                                                disabled={isBusy}
+                                                className="px-2 py-1 text-xs rounded bg-white dark:bg-gray-800 border"
+                                            >
+                                                Senior
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => applyPreset(user.id, 'SUPERVISOR')}
+                                                disabled={isBusy}
+                                                className="px-2 py-1 text-xs rounded bg-white dark:bg-gray-800 border"
+                                            >
+                                                Supervisor
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => applyPreset(user.id, 'MANAGER')}
+                                                disabled={isBusy}
+                                                className="px-2 py-1 text-xs rounded bg-white dark:bg-gray-800 border"
+                                            >
+                                                Manager
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                                            {/* Column 1: POS & Checkout */}
+                                            <div className="bg-white dark:bg-dark-card p-4 rounded-xl border border-blue-100 dark:border-blue-900/30 shadow-2xs space-y-1">
+                                                <div className="flex items-center gap-2 pb-2 mb-1 border-b border-blue-50 dark:border-blue-900/20 text-xs font-bold text-blue-700 dark:text-blue-300 uppercase tracking-wider">
+                                                    <ShoppingCart className="w-4 h-4" />
+                                                    <span>Point of Sale & Billing</span>
+                                                </div>
+
+                                                {renderToggleSwitch(user, 'permAddItem', 'Scan & Add Items', 'Add garments into billing cart')}
+                                                {renderToggleSwitch(user, 'permEditSales', 'Process Exchanges / Edit', 'Process garment exchanges & revise bills')}
+                                                {renderToggleSwitch(user, 'permChangePayment', 'Change Payment Mode', 'Switch payment method post-checkout')}
+                                                {renderToggleSwitch(user, 'permVoidSale', 'Void Completed Bills', 'Cancel finalized transactions with reason')}
+                                                {renderToggleSwitch(user, 'permBackDateSale', 'Back-Date Sales', 'Record bills for previous dates')}
+
+                                                {/* Discount Allowance Limit */}
+                                                <div className="pt-2 border-t border-gray-100 dark:border-gray-800">
+                                                    <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">
+                                                        Max Discount Allowance (%)
+                                                    </label>
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="relative flex-1">
                                                             <input
                                                                 type="number"
                                                                 min={0}
                                                                 max={100}
                                                                 step="any"
-                                                                value={user.maxDiscount === 0 ? '0' : (user.maxDiscount || '')}
+                                                                placeholder="0"
+                                                                value={user.maxDiscount === 0 ? '' : (user.maxDiscount || '')}
+                                                                onFocus={(e) => e.target.select()}
                                                                 onChange={(e) => updateMaxDiscountLocal(user.id, e.target.value)}
                                                                 onBlur={(e) => {
                                                                     const val = parseFloat(e.target.value) || 0;
                                                                     saveMaxDiscount(user.id, val);
                                                                 }}
-                                                                onKeyDown={(e) => {
-                                                                    if (e.key === 'Enter') {
-                                                                        const val = parseFloat((e.target as HTMLInputElement).value) || 0;
-                                                                        saveMaxDiscount(user.id, val);
-                                                                        (e.target as HTMLInputElement).blur();
-                                                                    }
-                                                                }}
-                                                                placeholder="0"
-                                                                title="Maximum discount % this cashier can apply on a bill. Setting 0 means NO discount allowed."
-                                                                className="w-full pl-2 pr-6 py-1 text-xs font-mono text-right bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded focus:ring-1 focus:ring-blue-500 outline-none"
+                                                                className="w-full pl-3 pr-8 py-1.5 text-xs font-bold font-mono rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                                                             />
-                                                            <Percent className="absolute right-1.5 top-2 w-3 h-3 text-gray-400 pointer-events-none" />
+                                                            <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-400">%</span>
                                                         </div>
+                                                        <span className="text-[11px] text-gray-400">
+                                                            {user.maxDiscount === 0 ? 'No discount' : `Cap: ${user.maxDiscount}%`}
+                                                        </span>
                                                     </div>
-                                                )}
-                                            </td>
+                                                </div>
+                                            </div>
 
-                                            {/* Catalog Toggles */}
-                                            <td className="px-3 py-3.5 text-center">
-                                                {renderToggle(user, 'permManageProducts', 'Manage Products: Access Products page to create & edit catalog')}
-                                            </td>
-                                            <td className="px-3 py-3.5 text-center">
-                                                {renderToggle(user, 'permDeleteProduct', 'Delete Products: Permanently delete product entries from database')}
-                                            </td>
-                                            <td className="px-3 py-3.5 text-center border-r border-emerald-100 dark:border-emerald-950">
-                                                {renderToggle(user, 'permPrintSticker', 'Print Stickers: Access barcode & price sticker printing in catalog')}
-                                            </td>
+                                            {/* Column 2: Products & Stock Management */}
+                                            <div className="bg-white dark:bg-dark-card p-4 rounded-xl border border-emerald-100 dark:border-emerald-900/30 shadow-2xs space-y-1">
+                                                <div className="flex items-center gap-2 pb-2 mb-1 border-b border-emerald-50 dark:border-emerald-900/20 text-xs font-bold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider">
+                                                    <Package className="w-4 h-4" />
+                                                    <span>Products & Inventory</span>
+                                                </div>
 
-                                            {/* Admin & Reports Toggles */}
-                                            <td className="px-3 py-3.5 text-center">
-                                                {renderToggle(user, 'permViewReports', 'Dashboard: Access overall dashboard analytics and charts')}
-                                            </td>
-                                            <td className="px-3 py-3.5 text-center">
-                                                {renderToggle(user, 'permViewSales', 'Sales History: Access invoice history and reprint receipts')}
-                                            </td>
-                                            <td className="px-3 py-3.5 text-center">
-                                                {renderToggle(user, 'permViewGstReports', 'Reports: Access comprehensive GST tax and financial sales reports')}
-                                            </td>
-                                            <td className="px-3 py-3.5 text-center">
-                                                {renderToggle(user, 'permViewInsights', 'Business Insights: Access recorded sales outlook and audited-stock checks')}
-                                            </td>
-                                            <td className="px-3 py-3.5 text-center">
-                                                {renderToggle(user, 'permEditSettings', 'Settings: Access store branding, printers, and system configuration')}
-                                            </td>
-                                            <td className="px-3 py-3.5 text-center">
-                                                {renderToggle(user, 'permManageUsers', 'Manage Users: Access staff user accounts and permissions')}
-                                            </td>
-                                        </tr>
-                                    );
-                                })
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+                                                {renderToggleSwitch(user, 'permManageProducts', 'Manage Product Catalogue', 'Add, edit item identity, barcodes, and MRP')}
+                                                {renderToggleSwitch(user, 'permDeleteProduct', 'Deactivate / Delete Products', 'Remove garments from the active catalogue')}
+                                                {renderToggleSwitch(user, 'permPrintSticker', 'Print Barcode Labels', 'Print thermal barcode stickers for garments')}
+                                                
+                                                {/* Gap Resolved: Stock Inventory Audits */}
+                                                {renderToggleSwitch(user, 'permManageInventory', 'Stocktake & Inventory Audits', 'Audit rack counts, view stock logs, and make adjustments')}
 
-            {/* Bottom Help Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="p-4 bg-blue-50/70 dark:bg-blue-900/15 border border-blue-200/80 dark:border-blue-800/40 rounded-xl flex items-start gap-3">
-                    <ShieldCheck className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
-                    <div className="text-xs text-blue-900 dark:text-blue-200 space-y-1">
-                        <p className="font-bold text-sm">Real-time Enforcement</p>
-                        <p>Permission changes apply immediately across all open POS windows. Staff will be blocked from restricted routes without needing to restart the application.</p>
-                    </div>
-                </div>
+                                                {/* Gap Resolved: Cost Price Visibility */}
+                                                {renderToggleSwitch(user, 'permViewCostPrice', 'View Wholesale Cost Prices', 'Display supplier purchase costs and gross margins')}
+                                            </div>
 
-                <div className="p-4 bg-amber-50/70 dark:bg-amber-900/15 border border-amber-200/80 dark:border-amber-800/40 rounded-xl flex items-start gap-3">
-                    <Percent className="w-5 h-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
-                    <div className="text-xs text-amber-900 dark:text-amber-200 space-y-1">
-                        <p className="font-bold text-sm">Strict Discount Caps</p>
-                        <p>Setting <strong>0%</strong> strictly blocks the cashier from giving any discount. Setting <strong>10%</strong> caps the maximum allowable discount on any invoice to 10%.</p>
-                    </div>
-                </div>
+                                            {/* Column 3: Cash Register & Administration */}
+                                            <div className="bg-white dark:bg-dark-card p-4 rounded-xl border border-purple-100 dark:border-purple-900/30 shadow-2xs space-y-1">
+                                                <div className="flex items-center gap-2 pb-2 mb-1 border-b border-purple-50 dark:border-purple-900/20 text-xs font-bold text-purple-700 dark:text-purple-300 uppercase tracking-wider">
+                                                    <BarChart3 className="w-4 h-4" />
+                                                    <span>Cash Register & Reports</span>
+                                                </div>
 
-                <div className="p-4 bg-purple-50/70 dark:bg-purple-900/15 border border-purple-200/80 dark:border-purple-800/40 rounded-xl flex items-start gap-3">
-                    <Sparkles className="w-5 h-5 text-purple-600 dark:text-purple-400 mt-0.5 shrink-0" />
-                    <div className="text-xs text-purple-900 dark:text-purple-200 space-y-1">
-                        <p className="font-bold text-sm">1-Click Role Presets</p>
-                        <p>Use the <strong>Cashier</strong> or <strong>Supervisor</strong> buttons next to a staff member's name to instantly apply recommended permission packages.</p>
-                    </div>
-                </div>
+                                                {/* Gap Resolved: Cash Drawer Management */}
+                                                {renderToggleSwitch(user, 'permManageCashDrawer', 'Manage Cash Counter & Drawer', 'Open/close shifts, count cash, and record expenses')}
+
+                                                {renderToggleSwitch(user, 'permViewSales', 'View Sales History', 'Access invoice history and past bills')}
+                                                {renderToggleSwitch(user, 'permViewReports', 'View Financial Reports & Profit', 'View daily revenue, gross profit, and analysis')}
+                                                {renderToggleSwitch(user, 'permViewGstReports', 'View GST Tax Reports', 'Access tax summaries and B2B/B2C filing')}
+                                                {renderToggleSwitch(user, 'permViewInsights', 'Sales Forecasting & Insights', 'View 6-month demand outlook and restocking advice')}
+                                                {renderToggleSwitch(user, 'permDeleteAudit', 'View Activity Log & Audit Trail', 'Allow viewing staff actions, price edits, and operational logs')}
+                                                {renderToggleSwitch(user, 'permEditSettings', 'Edit Store Settings', 'Configure shop headers, printers, and backups')}
+                                                {renderToggleSwitch(user, 'permManageUsers', 'Manage Staff Accounts', 'Create staff accounts and reset passwords')}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })
+                )}
             </div>
         </div>
     );
 };
-

@@ -9,6 +9,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(({
     label,
     error,
     className = '',
+    onFocus,
     ...props
 }, ref) => {
     return (
@@ -17,6 +18,12 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(({
             <input
                 ref={ref}
                 className={`input ${error ? 'input-error' : ''} ${className}`}
+                onFocus={(e) => {
+                    if (props.type === 'number') {
+                        e.target.select();
+                    }
+                    onFocus?.(e);
+                }}
                 {...props}
             />
             {error && <p className="text-red-500 text-sm mt-1">{error}</p>}

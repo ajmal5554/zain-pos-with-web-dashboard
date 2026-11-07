@@ -1,7 +1,7 @@
 import { sendReceipt } from './receipt-printer.service';
 import {getBusinessInsights} from './insights.service';
 import {getProfitReport} from './profit.service';
-import { app, BrowserWindow, ipcMain, dialog, screen, nativeImage } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, screen, nativeImage, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as XLSX from 'xlsx';
@@ -23,6 +23,16 @@ import { saveLabelTemplate } from './label-template.service';
 import { receivePurchase, payPurchase, listPurchases, purchaseDetail, purchaseItems } from './purchases.service';
 import { adjustPurchase, refundPurchase } from './purchase-adjustments.service';
 import {createExpense,actOnExpense,listExpenses,expenseDetail,exportExpenses} from './expenses.service';
+import {
+    initCreditNoteSchema,
+    issueCreditNote,
+    listCreditNotes,
+    getCreditNoteByCode,
+    getActiveCreditsForCustomer,
+    redeemCreditNotes,
+    cancelCreditNote,
+    restoreRedemptionsForSale,
+} from './credit-note.service';
 import { getReturnStockOptions, resolveReturnStockRoutes, recordReturnStockRoutes } from './return-stock.service';
 import { createExcelAuditService } from './excel-audit.service';
 import {
@@ -49,6 +59,13 @@ import {
     ensureCatalogueSchema,
     checkAnyVariantPrepared
 } from './catalogue.service';
+import {
+    sendInvoiceMessage,
+    sendStoreCreditMessage,
+    getMessageLogs,
+    updateCustomerWhatsAppStatus,
+} from './messaging.service';
+import { DEFAULT_MESSAGING_CONFIG, type MessagingConfig } from '../src/types/messaging';
 
 // Global error handling - MUST BE FIRST
 process.on('uncaughtException', (error) => {
@@ -133,6 +150,7 @@ async function getUserPermissions(userId: string): Promise<UserPermissions | nul
                 permBulkUpdate: true,
                 permBackDateSale: true,
                 permViewInsights: true,
+                permManageCashDrawer: true,
                 maxDiscount: true
             }
         });
@@ -614,6 +632,9 @@ function getDatabasePath() {
     const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
     if (isDev) {
+        if (process.env.ZAIN_POS_DEMO_MODE === '1') {
+            return path.join(process.cwd(), 'prisma', 'pos-demo.db');
+        }
         return path.join(process.cwd(), 'prisma', 'pos.db');
     }
 
@@ -1068,6 +1089,43 @@ async function ensureSchemaUpdated() {
 
         // Ensure ST-02 Catalogue schema (ProductVariantGarmentDetail & isPrepared column)
         await ensureCatalogueSchema(prisma);
+
+        // Ensure MessageLog schema and customer hasWhatsApp column
+        if (!hasTable('MessageLog')) {
+            await prisma.$executeRawUnsafe(`
+                CREATE TABLE IF NOT EXISTS "MessageLog" (
+                    "id" TEXT NOT NULL PRIMARY KEY,
+                    "saleId" TEXT,
+                    "billNo" TEXT,
+                    "customerName" TEXT,
+                    "customerPhone" TEXT NOT NULL,
+                    "channel" TEXT NOT NULL,
+                    "provider" TEXT NOT NULL,
+                    "status" TEXT NOT NULL,
+                    "fallback" BOOLEAN NOT NULL DEFAULT 0,
+                    "fallbackReason" TEXT,
+                    "messageText" TEXT NOT NULL,
+                    "error" TEXT,
+                    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            `);
+            await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "MessageLog_saleId_idx" ON "MessageLog"("saleId")`);
+            await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "MessageLog_customerPhone_idx" ON "MessageLog"("customerPhone")`);
+            await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "MessageLog_createdAt_idx" ON "MessageLog"("createdAt")`);
+            console.log('Created MessageLog table');
+        }
+
+        try {
+            const custTableInfo: any[] = await prisma.$queryRawUnsafe(`PRAGMA table_info("Customer")`);
+            if (!custTableInfo.some((c: any) => c.name === 'hasWhatsApp')) {
+                await prisma.$executeRawUnsafe(`ALTER TABLE "Customer" ADD COLUMN hasWhatsApp BOOLEAN DEFAULT 1`);
+                console.log('Added hasWhatsApp column to Customer table');
+            }
+        } catch (custColErr: any) {
+            if (!custColErr.message?.includes('no such table')) {
+                console.warn('Could not add hasWhatsApp column to Customer:', custColErr.message);
+            }
+        }
     } catch (error) {
         console.error('Migration error:', error);
     }
@@ -1116,6 +1174,7 @@ async function ensureDefaultAdmin() {
                 permBulkUpdate: true,
                 permBackDateSale: true,
                 permViewInsights: true,
+                permManageCashDrawer: true,
                 maxDiscount: 100
             }
         });
@@ -1149,6 +1208,7 @@ async function ensureDefaultAdmin() {
                 permBulkUpdate: true,
                 permBackDateSale: true,
                 permViewInsights: true,
+                permManageCashDrawer: true,
                 maxDiscount: 100
             }
         });
@@ -1348,7 +1408,7 @@ function createWindow() {
     }
 
     mainWindow = new BrowserWindow({
-        title: "ZAIN GENTS PALACE - POS System",
+        title: process.env.ZAIN_POS_DEMO_MODE === '1' ? "ZAIN GENTS PALACE - DEMO DATA" : "ZAIN GENTS PALACE - POS System",
         width: 1400,
         height: 900,
         minWidth: 1200,
@@ -1461,7 +1521,11 @@ app.whenReady().then(async () => {
         const urlSetting = await prisma.setting.findUnique({ where: { key: 'CLOUD_API_URL' } });
         if (urlSetting && urlSetting.value) {
             cloudSync.setApiUrl(urlSetting.value);
-            console.log('✅ Cloud API URL loaded:', urlSetting.value);
+            if (process.env.ZAIN_POS_DEMO_MODE === '1') {
+                console.log('Demo mode: cloud sync is disabled; sample data stays in the demo database.');
+            } else {
+                console.log('✅ Cloud API URL loaded:', urlSetting.value);
+            }
         }
 
         await loadCloudSyncSecret();
@@ -1785,9 +1849,9 @@ createSecureIpcHandler(
             'invoicePayment.findMany': PermissionMiddleware.authenticated,
             'invoicePayment.aggregate': PermissionMiddleware.viewReports,
 
-            // Audit logs (admin only)
-            'auditLog.findMany': PermissionMiddleware.adminOnly,
-            'auditLog.findUnique': PermissionMiddleware.adminOnly,
+            // Audit logs (admin or permDeleteAudit)
+            'auditLog.findMany': PermissionMiddleware.viewAuditLog,
+            'auditLog.findUnique': PermissionMiddleware.viewAuditLog,
             'auditLog.create': PermissionMiddleware.authenticated,
 
             // Settings
@@ -1927,18 +1991,26 @@ createSecureIpcHandler(
             create: { key, value },
         });
 
-        await prisma.auditLog.create({
-            data: {
-                action: 'SETTING_UPDATE',
-                details: `Setting "${key}" updated by ${user.role} user`,
-                userId
+        const effectiveUserId = user?.id || (userId && userId !== 'SYSTEM' && userId !== 'default-user' ? userId : null);
+        if (effectiveUserId) {
+            try {
+                await prisma.auditLog.create({
+                    data: {
+                        action: 'SETTING_UPDATE',
+                        details: `Setting "${key}" updated by ${user?.role || 'user'}`,
+                        userId: effectiveUserId
+                    }
+                });
+            } catch (auditErr) {
+                logger.warn('Settings', `Could not create audit log for setting "${key}":`, auditErr);
             }
-        });
+        }
 
-        logger.info('Settings', `Setting "${key}" updated by user ${userId} (${user.role})`);
+        logger.info('Settings', `Setting "${key}" updated by user ${user?.id || userId} (${user?.role || 'unknown'})`);
         return { success: true, data: setting };
     },
     {
+        trustedSession: true,
         extractUserId: (args: any) => args.userId
     }
 );
@@ -2065,6 +2137,17 @@ ipcMain.handle('sales:checkout', async (_event, saleData) => {
                 },
                 include: { items: true, payments: true }
             });
+
+            // Process Credit Note Redemptions if applied
+            if (Array.isArray(saleData.creditNoteRedemptions) && saleData.creditNoteRedemptions.length > 0) {
+                await redeemCreditNotes(
+                    tx,
+                    saleData.creditNoteRedemptions,
+                    sale.id,
+                    billNo,
+                    { id: saleData.userId }
+                );
+            }
 
             // Auto-register / sync customer to Customer directory table if not a generic walk-in
             const checkoutCustName = (saleData.customerName || '').trim();
@@ -3562,7 +3645,8 @@ createSecureIpcHandler(
                 refundPayments,
                 refundedItems: structuredRefundItems,
                 stockRoutes: [...stockRoutes.values()],
-                customerName: originalSale.customerName,
+                customerName: refundData.customerName || originalSale.customerName,
+                customerPhone: refundData.customerPhone || originalSale.customerPhone,
                 summary: refundSummary
             };
 
@@ -3576,7 +3660,57 @@ createSecureIpcHandler(
                 }
             });
 
-            return { success: true, data: refund };
+            // Check if refund was issued as Store Credit
+            let issuedCreditNote: any = null;
+            const storeCreditPayment = refundPayments.find((p: any) => p.paymentMode === 'STORE_CREDIT');
+            if (storeCreditPayment && Number(storeCreditPayment.amount) > 0) {
+                let resolvedCustomerName = sanitizeString(refundData.customerName || originalSale.customerName || '', 100);
+                const rawPhone = (refundData.customerPhone || originalSale.customerPhone || '').replace(/\D/g, '');
+                const resolvedCustomerPhone = rawPhone.length >= 10 ? rawPhone.slice(-10) : (rawPhone || null);
+
+                // Upsert customer profile if phone number is provided
+                if (resolvedCustomerPhone && tx.customer) {
+                    try {
+                        let customer = await tx.customer.findFirst({ where: { phone: resolvedCustomerPhone } });
+                        if (!customer) {
+                            customer = await tx.customer.create({
+                                data: {
+                                    id: crypto.randomUUID(),
+                                    name: resolvedCustomerName || `Customer ${resolvedCustomerPhone}`,
+                                    phone: resolvedCustomerPhone,
+                                    createdAt: now,
+                                    updatedAt: now
+                                }
+                            });
+                        } else if (resolvedCustomerName && customer.name.startsWith('Customer ') && resolvedCustomerName !== customer.name) {
+                            customer = await tx.customer.update({
+                                where: { id: customer.id },
+                                data: { name: resolvedCustomerName, updatedAt: now }
+                            });
+                        }
+                        if (customer) {
+                            resolvedCustomerName = customer.name;
+                        }
+                    } catch (custUpsertErr) {
+                        console.warn('Customer upsert inside sales:refund non-fatal:', custUpsertErr);
+                    }
+                }
+
+                issuedCreditNote = await issueCreditNote(
+                    tx,
+                    {
+                        customerName: resolvedCustomerName || originalSale.customerName || null,
+                        customerPhone: resolvedCustomerPhone,
+                        amount: Number(storeCreditPayment.amount),
+                        reason: `Refund for Bill #${originalSale.billNo}: ${sanitizedReason}`,
+                        originalInvoiceId: originalSale.id,
+                        originalBillNo: originalSale.billNo
+                    },
+                    user
+                );
+            }
+
+            return { success: true, data: { ...refund, issuedCreditNote } };
         } catch (error: any) {
             console.error('Refund failed:', error);
             throw error;
@@ -3640,6 +3774,9 @@ createSecureIpcHandler(
                     }
                 });
             }
+
+            // Restore any redeemed store credits back to the customer's credit notes
+            await restoreRedemptionsForSale(tx, saleId);
 
             const voidTag = `[VOID ${new Date().toISOString()}] ${reason || 'No reason given'}`;
             const updatedSale = await tx.sale.update({
@@ -4748,6 +4885,7 @@ ipcMain.handle('auth:login', async (event, { username, password }) => {
                 permBulkUpdate: true,
                 permBackDateSale: true,
                 permViewInsights: true,
+                permManageCashDrawer: true,
                 maxDiscount: true
             }
         });
@@ -4838,6 +4976,7 @@ createSecureIpcHandler(
                 permBulkUpdate: true,
                 permBackDateSale: true,
                 permViewInsights: true,
+                permManageCashDrawer: true,
                 maxDiscount: true
             }
         });
@@ -5906,6 +6045,58 @@ createSecureIpcHandler('sales:getCosts',PermissionMiddleware.authenticated,async
     catch(error){return {success:false,error:error instanceof Error?error.message:'Could not read sale costs.'};}
 },{trustedSession:true});
 
+// --- Credit Note Handlers ---
+createSecureIpcHandler('creditNotes:list', PermissionMiddleware.authenticated, async (_event, query: any, _user) => {
+    try {
+        const data = await listCreditNotes(prisma, query);
+        return { success: true, data };
+    } catch (error: any) {
+        console.error('creditNotes:list error:', error);
+        return { success: false, error: error.message };
+    }
+}, { trustedSession: true });
+
+createSecureIpcHandler('creditNotes:getByCode', PermissionMiddleware.authenticated, async (_event, args: { code: string }, _user) => {
+    try {
+        const data = await getCreditNoteByCode(prisma, args?.code);
+        return { success: true, data };
+    } catch (error: any) {
+        console.error('creditNotes:getByCode error:', error);
+        return { success: false, error: error.message };
+    }
+}, { trustedSession: true });
+
+createSecureIpcHandler('creditNotes:getActiveForCustomer', PermissionMiddleware.authenticated, async (_event, args: { phone: string }, _user) => {
+    try {
+        const data = await getActiveCreditsForCustomer(prisma, args?.phone);
+        return { success: true, data };
+    } catch (error: any) {
+        console.error('creditNotes:getActiveForCustomer error:', error);
+        return { success: false, error: error.message };
+    }
+}, { trustedSession: true });
+
+createSecureIpcHandler('creditNotes:issue', PermissionMiddleware.authenticated, async (_event, input: any, user) => {
+    try {
+        const data = await issueCreditNote(prisma, input, user);
+        return { success: true, data };
+    } catch (error: any) {
+        console.error('creditNotes:issue error:', error);
+        return { success: false, error: error.message };
+    }
+}, { trustedSession: true });
+
+createSecureIpcHandler('creditNotes:cancel', PermissionMiddleware.authenticated, async (_event, args: { id: string; reason: string }, user) => {
+    try {
+        const data = await cancelCreditNote(prisma, args.id, args.reason, user);
+        return { success: true, data };
+    } catch (error: any) {
+        console.error('creditNotes:cancel error:', error);
+        return { success: false, error: error.message };
+    }
+}, { trustedSession: true });
+// --- End Credit Note Handlers ---
+
 // --- Purchase Handlers: receipt costs and supplier balances ---
 for (const [channel, handler] of [
     ['purchases:receive', receivePurchase], ['purchases:pay', payPurchase],
@@ -5937,7 +6128,7 @@ createSecureIpcHandler(
 
 createSecureIpcHandler(
     'stock:getMovements',
-    PermissionMiddleware.manageInventory,
+    PermissionMiddleware.viewMovements,
     async (_event, args: any) => {
         return await getStockMovements(prisma, args);
     },
@@ -6218,6 +6409,102 @@ createSecureIpcHandler(
     },
     { trustedSession: true }
 );
+
+// External URL handler (WhatsApp Web, SMS, etc.)
+ipcMain.handle('app:openExternal', async (_event, url: string) => {
+    try {
+        if (!url || typeof url !== 'string') return { success: false, error: 'Invalid URL' };
+        if (!/^(https?|whatsapp|sms|mailto):/i.test(url)) {
+            return { success: false, error: 'Disallowed protocol' };
+        }
+        await shell.openExternal(url);
+        return { success: true };
+    } catch (err: any) {
+        return { success: false, error: err.message };
+    }
+});
+
+// Messaging IPC Handlers
+createSecureIpcHandler(
+    'messaging:sendInvoice',
+    PermissionMiddleware.authenticated,
+    async (_event, payload: any, _user) => {
+        try {
+            let config: MessagingConfig = DEFAULT_MESSAGING_CONFIG;
+            try {
+                const settingRow = await prisma.setting.findUnique({ where: { key: 'MESSAGING_CONFIG' } });
+                if (settingRow?.value) {
+                    config = { ...DEFAULT_MESSAGING_CONFIG, ...JSON.parse(settingRow.value) };
+                }
+            } catch (cfgErr) {
+                console.warn('Failed to parse MESSAGING_CONFIG setting, using defaults:', cfgErr);
+            }
+
+            const result = await sendInvoiceMessage(prisma, payload, config);
+            return { success: result.success, data: result, error: result.error };
+        } catch (error: any) {
+            console.error('messaging:sendInvoice error:', error);
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'messaging:sendStoreCredit',
+    PermissionMiddleware.authenticated,
+    async (_event, payload: any, _user) => {
+        try {
+            let config: MessagingConfig = DEFAULT_MESSAGING_CONFIG;
+            try {
+                const settingRow = await prisma.setting.findUnique({ where: { key: 'MESSAGING_CONFIG' } });
+                if (settingRow?.value) {
+                    config = { ...DEFAULT_MESSAGING_CONFIG, ...JSON.parse(settingRow.value) };
+                }
+            } catch (cfgErr) {
+                console.warn('Failed to parse MESSAGING_CONFIG setting, using defaults:', cfgErr);
+            }
+
+            const result = await sendStoreCreditMessage(prisma, payload, config);
+            return { success: result.success, data: result, error: result.error };
+        } catch (error: any) {
+            console.error('messaging:sendStoreCredit error:', error);
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'messaging:getLogs',
+    PermissionMiddleware.authenticated,
+    async (_event, query: any, _user) => {
+        try {
+            const logs = await getMessageLogs(prisma, query);
+            return { success: true, data: logs };
+        } catch (error: any) {
+            console.error('messaging:getLogs error:', error);
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'customer:updateWhatsAppStatus',
+    PermissionMiddleware.authenticated,
+    async (_event, args: { phone: string; hasWhatsApp: boolean }, _user) => {
+        try {
+            await updateCustomerWhatsAppStatus(prisma, args.phone, args.hasWhatsApp);
+            return { success: true };
+        } catch (error: any) {
+            console.error('customer:updateWhatsAppStatus error:', error);
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
 
 
 

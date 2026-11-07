@@ -19,7 +19,11 @@ import {
     RefreshCw,
     X,
     Calendar,
-    ExternalLink
+    ExternalLink,
+    CreditCard,
+    Copy,
+    Printer,
+    MessageSquare
 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -27,6 +31,10 @@ import { Modal } from '../components/ui/Modal';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { showToast } from '../components/ui/Toast';
 import { Skeleton } from '../components/ui/Skeleton';
+import { CreditNotesModal } from '../components/creditNotes/CreditNotesModal';
+import { printService } from '../services/print.service';
+import { messagingService } from '../services/messaging.service';
+import type { CreditNoteRecord } from '../types/creditNote';
 import { db } from '../lib/db';
 import { useCartStore } from '../store/cartStore';
 import { useAuthStore } from '../store/authStore';
@@ -94,8 +102,9 @@ export const Customers: React.FC = () => {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
-    const [activeFilter, setActiveFilter] = useState<'ALL' | 'REPEAT' | 'WITH_GSTIN' | 'WITH_PHONE'>('ALL');
+    const [activeFilter, setActiveFilter] = useState<'ALL' | 'REPEAT' | 'WITH_GSTIN' | 'WITH_PHONE' | 'WITH_CREDIT'>('ALL');
     const [sortBy, setSortBy] = useState<'NEWEST' | 'NAME_ASC' | 'NAME_DESC' | 'HIGHEST_SPEND' | 'MOST_ORDERS'>('NEWEST');
+    const [allCreditNotes, setAllCreditNotes] = useState<CreditNoteRecord[]>([]);
 
     // Pagination
     const [currentPage, setCurrentPage] = useState(1);
@@ -103,14 +112,17 @@ export const Customers: React.FC = () => {
 
     // Modal states
     const [showFormModal, setShowFormModal] = useState(false);
+    const [showCreditNotesModal, setShowCreditNotesModal] = useState(false);
     const [editingCustomer, setEditingCustomer] = useState<CustomerRecord | null>(null);
     const [formSaving, setFormSaving] = useState(false);
+    const [isSendingCreditMessage, setIsSendingCreditMessage] = useState(false);
     const [formData, setFormData] = useState({
         name: '',
         phone: '',
         email: '',
         address: '',
         gstin: '',
+        hasWhatsApp: true,
     });
     const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
@@ -130,8 +142,8 @@ export const Customers: React.FC = () => {
         else setLoading(true);
 
         try {
-            // Load customers and sales concurrently to compute metrics
-            const [customerData, salesData] = await Promise.all([
+            // Load customers, sales, and credit notes concurrently to compute metrics
+            const [customerData, salesData, creditNotesRes] = await Promise.all([
                 db.customers.findMany({
                     orderBy: { createdAt: 'desc' }
                 }),
@@ -148,8 +160,13 @@ export const Customers: React.FC = () => {
                         createdAt: true,
                     },
                     orderBy: { createdAt: 'desc' }
-                }).catch(() => [])
+                }).catch(() => []),
+                window.electronAPI.creditNotes.list({ status: 'ALL' }).catch(() => ({ success: false, data: [] }))
             ]);
+
+            if (creditNotesRes?.success && Array.isArray(creditNotesRes.data)) {
+                setAllCreditNotes(creditNotesRes.data);
+            }
 
             // Discover any past customers from sales who may not have been saved in db.customers
             const existingPhones = new Set((customerData || []).map((c: any) => c.phone).filter(Boolean));
@@ -269,6 +286,33 @@ export const Customers: React.FC = () => {
         };
     };
 
+    // Store credit mapping by customer phone
+    const creditMap = useMemo(() => {
+        const map: Record<string, { totalActive: number; notes: CreditNoteRecord[] }> = {};
+        allCreditNotes.forEach(cn => {
+            const cleanP = (cn.customerPhone || '').replace(/\D/g, '').slice(-10);
+            if (!cleanP) return;
+            if (!map[cleanP]) {
+                map[cleanP] = { totalActive: 0, notes: [] };
+            }
+            map[cleanP].notes.push(cn);
+            if (cn.status === 'ACTIVE' && cn.remainingAmount > 0) {
+                map[cleanP].totalActive += cn.remainingAmount;
+            }
+        });
+        return map;
+    }, [allCreditNotes]);
+
+    const totalStoreCreditAcrossStore = useMemo(() => {
+        return allCreditNotes
+            .filter(cn => cn.status === 'ACTIVE' && cn.remainingAmount > 0)
+            .reduce((sum, cn) => sum + cn.remainingAmount, 0);
+    }, [allCreditNotes]);
+
+    const customersWithCreditCount = useMemo(() => {
+        return Object.values(creditMap).filter(item => item.totalActive > 0).length;
+    }, [creditMap]);
+
     // Overall stats
     const stats = useMemo(() => {
         let totalSpentAll = 0;
@@ -311,6 +355,10 @@ export const Customers: React.FC = () => {
             if (activeFilter === 'REPEAT' && summary.totalOrders < 2) return false;
             if (activeFilter === 'WITH_GSTIN' && (!c.gstin || c.gstin.trim().length === 0)) return false;
             if (activeFilter === 'WITH_PHONE' && (!c.phone || c.phone.trim().length === 0)) return false;
+            if (activeFilter === 'WITH_CREDIT') {
+                const cleanP = (c.phone || '').replace(/\D/g, '').slice(-10);
+                if (!cleanP || (creditMap[cleanP]?.totalActive || 0) <= 0) return false;
+            }
 
             return true;
         }).sort((a, b) => {
@@ -347,7 +395,7 @@ export const Customers: React.FC = () => {
     // Modal actions
     const openAddModal = () => {
         setEditingCustomer(null);
-        setFormData({ name: '', phone: '', email: '', address: '', gstin: '' });
+        setFormData({ name: '', phone: '', email: '', address: '', gstin: '', hasWhatsApp: true });
         setFormErrors({});
         setShowFormModal(true);
     };
@@ -360,6 +408,7 @@ export const Customers: React.FC = () => {
             email: customer.email || '',
             address: customer.address || '',
             gstin: customer.gstin || '',
+            hasWhatsApp: (customer as any).hasWhatsApp !== false && (customer as any).hasWhatsApp !== 0,
         });
         setFormErrors({});
         setShowFormModal(true);
@@ -464,6 +513,10 @@ export const Customers: React.FC = () => {
                 showToast(`Customer "${cleanData.name}" added successfully`, 'success');
             }
 
+            if (cleanData.phone) {
+                void messagingService.updateCustomerWhatsAppStatus(cleanData.phone, formData.hasWhatsApp);
+            }
+
             setShowFormModal(false);
             setEditingCustomer(null);
             await loadData(true);
@@ -554,13 +607,13 @@ export const Customers: React.FC = () => {
     return (
         <div className="space-y-6">
             {/* Header */}
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white dark:bg-dark-card p-5 rounded-2xl border border-gray-200 dark:border-dark-border shadow-sm">
-                <div>
+            <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 bg-white dark:bg-dark-card p-5 rounded-2xl border border-gray-200 dark:border-dark-border shadow-sm">
+                <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2.5">
-                        <div className="p-2.5 rounded-xl bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400">
+                        <div className="p-2.5 rounded-xl bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 shrink-0">
                             <Users className="w-6 h-6" />
                         </div>
-                        <div>
+                        <div className="min-w-0">
                             <h1 className="text-xl font-bold text-gray-900 dark:text-white">Customer Directory</h1>
                             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                                 Manage customer profiles, track loyalty, view order histories, and handle GST records.
@@ -568,30 +621,38 @@ export const Customers: React.FC = () => {
                         </div>
                     </div>
                 </div>
-                <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 w-full xl:w-auto shrink-0">
                     <Button
                         variant="secondary"
                         onClick={() => loadData(true)}
                         disabled={refreshing || loading}
-                        className="flex-1 sm:flex-none"
+                        className="flex-1 sm:flex-none whitespace-nowrap"
                         title="Refresh customers"
                     >
                         <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-                        <span className="hidden sm:inline">Refresh</span>
+                        <span>Refresh</span>
                     </Button>
                     <Button
                         variant="secondary"
                         onClick={handleExportExcel}
                         disabled={filteredCustomers.length === 0}
-                        className="flex-1 sm:flex-none"
+                        className="flex-1 sm:flex-none whitespace-nowrap"
                     >
                         <Download className="w-4 h-4" />
-                        <span className="hidden sm:inline">Export</span>
+                        <span>Export</span>
+                    </Button>
+                    <Button
+                        variant="secondary"
+                        onClick={() => setShowCreditNotesModal(true)}
+                        className="flex-1 sm:flex-none border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 whitespace-nowrap"
+                    >
+                        <CreditCard className="w-4 h-4" />
+                        <span>Store Credit</span>
                     </Button>
                     <Button
                         variant="primary"
                         onClick={openAddModal}
-                        className="flex-1 sm:flex-none"
+                        className="flex-1 sm:flex-none whitespace-nowrap shadow-sm"
                     >
                         <UserPlus className="w-4 h-4" />
                         <span>Add Customer</span>
@@ -600,7 +661,7 @@ export const Customers: React.FC = () => {
             </div>
 
             {/* Quick Metrics */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
                 <div className="stat-card">
                     <div className="flex items-center justify-between mb-2">
                         <span className="stat-label">Total Customers</span>
@@ -646,6 +707,21 @@ export const Customers: React.FC = () => {
                     <div className="stat-value">{stats.gstinCount}</div>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">B2B GSTIN profiles</p>
                 </div>
+
+                <div className="stat-card border-indigo-100 dark:border-indigo-900/40 bg-indigo-50/20 dark:bg-indigo-950/20">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="stat-label text-indigo-900 dark:text-indigo-300">Active Store Credit</span>
+                        <div className="p-2 rounded-lg bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400">
+                            <CreditCard className="w-4 h-4" />
+                        </div>
+                    </div>
+                    <div className="stat-value text-indigo-700 dark:text-indigo-300">
+                        ₹{totalStoreCreditAcrossStore.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                    </div>
+                    <p className="text-xs text-indigo-600 dark:text-indigo-400 mt-1 font-medium">
+                        {customersWithCreditCount} customer{customersWithCreditCount === 1 ? '' : 's'} hold credit
+                    </p>
+                </div>
             </div>
 
             {/* Filter and Search Bar */}
@@ -682,6 +758,16 @@ export const Customers: React.FC = () => {
                             }`}
                         >
                             All ({customers.length})
+                        </button>
+                        <button
+                            onClick={() => setActiveFilter('WITH_CREDIT')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                                activeFilter === 'WITH_CREDIT'
+                                    ? 'bg-indigo-600 text-white shadow-sm'
+                                    : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 border border-indigo-200 dark:border-indigo-800'
+                            }`}
+                        >
+                            With Credit ({customersWithCreditCount})
                         </button>
                         <button
                             onClick={() => setActiveFilter('REPEAT')}
@@ -744,6 +830,7 @@ export const Customers: React.FC = () => {
                                 <th>GSTIN</th>
                                 <th>Purchases</th>
                                 <th>Total Spend</th>
+                                <th>Store Credit</th>
                                 <th>Last Order</th>
                                 <th className="text-right">Actions</th>
                             </tr>
@@ -752,14 +839,14 @@ export const Customers: React.FC = () => {
                             {loading ? (
                                 Array.from({ length: 5 }).map((_, i) => (
                                     <tr key={i}>
-                                        <td colSpan={7} className="py-4 px-4">
+                                        <td colSpan={8} className="py-4 px-4">
                                             <Skeleton className="h-8 w-full" />
                                         </td>
                                     </tr>
                                 ))
                             ) : paginatedCustomers.length === 0 ? (
                                 <tr>
-                                    <td colSpan={7} className="text-center py-12">
+                                    <td colSpan={8} className="text-center py-12">
                                         <div className="flex flex-col items-center justify-center max-w-sm mx-auto">
                                             <div className="p-3 bg-gray-100 dark:bg-gray-800 rounded-full text-gray-400 mb-3">
                                                 <Users className="w-8 h-8" />
@@ -875,6 +962,31 @@ export const Customers: React.FC = () => {
                                             {/* Total Spend */}
                                             <td className="font-semibold text-gray-900 dark:text-white">
                                                 ₹{summary.totalSpent.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                            </td>
+
+                                            {/* Store Credit */}
+                                            <td>
+                                                {(() => {
+                                                    const cleanP = (customer.phone || '').replace(/\D/g, '').slice(-10);
+                                                    const creditVal = cleanP ? (creditMap[cleanP]?.totalActive || 0) : 0;
+                                                    if (creditVal > 0) {
+                                                        return (
+                                                            <button
+                                                                type="button"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    setViewingCustomer(customer);
+                                                                }}
+                                                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-colors cursor-pointer"
+                                                                title="Click to view credit notes & voucher codes"
+                                                            >
+                                                                <CreditCard className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                                                                ₹{creditVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                            </button>
+                                                        );
+                                                    }
+                                                    return <span className="text-gray-400 text-xs">—</span>;
+                                                })()}
                                             </td>
 
                                             {/* Last Order Date */}
@@ -1040,6 +1152,33 @@ export const Customers: React.FC = () => {
                                 error={formErrors.phone}
                             />
                             <p className="text-[11px] text-gray-400 mt-1">10-digit mobile number for lookups and WhatsApp.</p>
+
+                            <div className="flex items-center justify-between p-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 mt-2.5">
+                                <div>
+                                    <div className="text-xs font-semibold text-gray-800 dark:text-gray-200">Customer has WhatsApp account</div>
+                                    <div className="text-[10px] text-gray-500">When disabled, invoices and store credits will be sent directly via SMS</div>
+                                </div>
+                                <div className="flex rounded-md p-0.5 bg-gray-200 dark:bg-gray-700">
+                                    <button
+                                        type="button"
+                                        onClick={() => setFormData({ ...formData, hasWhatsApp: true })}
+                                        className={`px-2.5 py-1 text-xs font-bold rounded ${
+                                            formData.hasWhatsApp ? 'bg-emerald-600 text-white shadow-xs' : 'text-gray-600 dark:text-gray-300'
+                                        }`}
+                                    >
+                                        Yes
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setFormData({ ...formData, hasWhatsApp: false })}
+                                        className={`px-2.5 py-1 text-xs font-bold rounded ${
+                                            !formData.hasWhatsApp ? 'bg-blue-600 text-white shadow-xs' : 'text-gray-600 dark:text-gray-300'
+                                        }`}
+                                    >
+                                        No (SMS)
+                                    </button>
+                                </div>
+                            </div>
                         </div>
 
                         <div>
@@ -1220,6 +1359,189 @@ export const Customers: React.FC = () => {
                             );
                         })()}
 
+                        {/* Store Credit & Credit Notes */}
+                        {(() => {
+                            const cleanP = (viewingCustomer.phone || '').replace(/\D/g, '').slice(-10);
+                            const custCreditData = cleanP ? creditMap[cleanP] : null;
+                            const activeBalance = custCreditData?.totalActive || 0;
+                            const notes = custCreditData?.notes || [];
+
+                            return (
+                                <div className="bg-indigo-50/70 dark:bg-indigo-950/40 p-4 rounded-2xl border border-indigo-200 dark:border-indigo-800 space-y-3">
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                        <div className="flex items-center gap-2.5">
+                                            <div className="p-2 bg-indigo-600 text-white rounded-xl shadow-sm">
+                                                <CreditCard className="w-5 h-5" />
+                                            </div>
+                                            <div>
+                                                <div className="text-[10px] font-black uppercase tracking-wider text-indigo-700 dark:text-indigo-400">
+                                                    Active Store Credit Balance
+                                                </div>
+                                                <div className="text-2xl font-black text-indigo-900 dark:text-white">
+                                                    ₹{activeBalance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            {viewingCustomer.phone && activeBalance > 0 && (
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    disabled={isSendingCreditMessage}
+                                                    onClick={async () => {
+                                                        setIsSendingCreditMessage(true);
+                                                        try {
+                                                            const payload = {
+                                                                customerName: viewingCustomer.name,
+                                                                customerPhone: viewingCustomer.phone!,
+                                                                code: notes[0]?.code || 'Store Credit',
+                                                                amount: activeBalance,
+                                                                remainingAmount: activeBalance,
+                                                                totalActiveBalance: activeBalance,
+                                                            };
+                                                            const res = await messagingService.sendStoreCredit(payload);
+                                                            if (res.success) {
+                                                                if (res.fallback) {
+                                                                    showToast(`No WhatsApp account. Store credit sent via SMS to ${viewingCustomer.phone}`, 'warning');
+                                                                } else {
+                                                                    showToast(`Store credit balance messaged via ${res.channel}!`, 'success');
+                                                                }
+                                                            } else {
+                                                                showToast(`Failed to message: ${res.error}`, 'error');
+                                                            }
+                                                        } catch (e: any) {
+                                                            showToast(e.message, 'error');
+                                                        } finally {
+                                                            setIsSendingCreditMessage(false);
+                                                        }
+                                                    }}
+                                                    className="flex items-center gap-1.5 text-xs bg-white dark:bg-dark-card border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100"
+                                                    title="Send store credit statement via WhatsApp (or SMS fallback)"
+                                                >
+                                                    <MessageSquare className="w-3.5 h-3.5 text-indigo-600" />
+                                                    <span>{isSendingCreditMessage ? 'Sending...' : 'Send Balance to Phone'}</span>
+                                                </Button>
+                                            )}
+                                            <div className="text-xs text-indigo-700 dark:text-indigo-300 max-w-sm sm:text-right">
+                                                Auto-applied at checkout with customer's mobile number. Voucher code can also be transferred to others.
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {notes.length > 0 ? (
+                                        <div className="border border-indigo-100 dark:border-indigo-900/60 rounded-xl overflow-hidden bg-white dark:bg-dark-card shadow-sm">
+                                            <table className="table text-xs">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Voucher Code</th>
+                                                        <th>Original Bill</th>
+                                                        <th>Issued Date</th>
+                                                        <th>Original</th>
+                                                        <th>Remaining</th>
+                                                        <th>Status</th>
+                                                        <th className="text-right">Action</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {notes.map(cn => (
+                                                        <tr key={cn.id}>
+                                                            <td>
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">{cn.code}</span>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => {
+                                                                            navigator.clipboard?.writeText(cn.code);
+                                                                            showToast(`Copied voucher code ${cn.code}`, 'success');
+                                                                        }}
+                                                                        title="Copy voucher code"
+                                                                        className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-gray-400 hover:text-gray-600 transition-colors"
+                                                                    >
+                                                                        <Copy className="w-3 h-3" />
+                                                                    </button>
+                                                                </div>
+                                                            </td>
+                                                            <td className="font-mono text-gray-600 dark:text-gray-400">{cn.originalBillNo || '—'}</td>
+                                                            <td className="text-gray-500">
+                                                                {new Date(cn.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                                            </td>
+                                                            <td>₹{cn.amount.toFixed(2)}</td>
+                                                            <td className="font-bold text-gray-900 dark:text-white">₹{cn.remainingAmount.toFixed(2)}</td>
+                                                            <td>
+                                                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                                                    cn.status === 'ACTIVE'
+                                                                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                                                        : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
+                                                                }`}>
+                                                                    {cn.status}
+                                                                </span>
+                                                            </td>
+                                                            <td className="text-right">
+                                                                <div className="flex items-center justify-end gap-1">
+                                                                    <Button
+                                                                        variant="secondary"
+                                                                        size="sm"
+                                                                        onClick={async () => {
+                                                                            try {
+                                                                                await printService.printCreditNote(cn);
+                                                                                showToast(`Voucher ${cn.code} printed`, 'success');
+                                                                            } catch (err: any) {
+                                                                                showToast('Print failed. Check printer.', 'error');
+                                                                            }
+                                                                        }}
+                                                                        title="Print voucher slip"
+                                                                        className="p-1.5 h-7 text-xs"
+                                                                    >
+                                                                        <Printer className="w-3.5 h-3.5" />
+                                                                    </Button>
+                                                                    {viewingCustomer.phone && (
+                                                                        <Button
+                                                                            variant="secondary"
+                                                                            size="sm"
+                                                                            onClick={async () => {
+                                                                                try {
+                                                                                    const payload = {
+                                                                                        customerName: viewingCustomer.name,
+                                                                                        customerPhone: viewingCustomer.phone!,
+                                                                                        code: cn.code,
+                                                                                        amount: cn.amount,
+                                                                                        remainingAmount: cn.remainingAmount,
+                                                                                        totalActiveBalance: activeBalance,
+                                                                                    };
+                                                                                    const res = await messagingService.sendStoreCredit(payload);
+                                                                                    if (res.success) {
+                                                                                        if (res.fallback) {
+                                                                                            showToast(`No WhatsApp account. Voucher sent via SMS to ${viewingCustomer.phone}`, 'warning');
+                                                                                        } else {
+                                                                                            showToast(`Voucher ${cn.code} messaged via ${res.channel}!`, 'success');
+                                                                                        }
+                                                                                    } else {
+                                                                                        showToast(`Failed: ${res.error}`, 'error');
+                                                                                    }
+                                                                                } catch (err: any) {
+                                                                                    showToast(err.message, 'error');
+                                                                                }
+                                                                            }}
+                                                                            title="Message voucher to phone"
+                                                                            className="p-1.5 h-7 text-xs hover:text-emerald-600"
+                                                                        >
+                                                                            <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
+                                                                        </Button>
+                                                                    )}
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    ) : (
+                                        <p className="text-xs text-gray-500 dark:text-gray-400 italic">No credit notes recorded for this customer.</p>
+                                    )}
+                                </div>
+                            );
+                        })()}
+
                         {/* Recent Invoices Table */}
                         <div>
                             <div className="flex items-center justify-between mb-2">
@@ -1328,6 +1650,12 @@ export const Customers: React.FC = () => {
                 confirmText={deleting ? 'Deleting...' : 'Delete Customer'}
                 variant="danger"
                 loading={deleting}
+            />
+
+            {/* Modal 4: Store Credit / Credit Notes Overview */}
+            <CreditNotesModal
+                isOpen={showCreditNotesModal}
+                onClose={() => setShowCreditNotesModal(false)}
             />
         </div>
     );

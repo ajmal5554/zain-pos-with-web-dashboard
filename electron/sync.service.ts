@@ -20,7 +20,8 @@ class CloudSyncService {
     private bulkSyncProgress: { total: number; synced: number; percentage: number } | null = null;
 
     setApiUrl(url: string) {
-        this.apiUrl = url;
+        // Demo-mode databases are cloned from a shop/dev database and must stay local.
+        this.apiUrl = process.env.ZAIN_POS_DEMO_MODE === '1' ? '' : url;
     }
 
     setSyncSecret(secret: string) {

@@ -62,6 +62,15 @@ const api = {
             ipcRenderer.invoke('sales:voidSale', data),
     },
 
+    // Credit Notes / Store Credit
+    creditNotes: {
+        list: (query?: any) => ipcRenderer.invoke('creditNotes:list', query),
+        getByCode: (code: string) => ipcRenderer.invoke('creditNotes:getByCode', { code }),
+        getActiveForCustomer: (phone: string) => ipcRenderer.invoke('creditNotes:getActiveForCustomer', { phone }),
+        issue: (data: any) => ipcRenderer.invoke('creditNotes:issue', data),
+        cancel: (data: { id: string; reason: string; userId?: string }) => ipcRenderer.invoke('creditNotes:cancel', data),
+    },
+
     // Printing
     print: {
         listPrinters: () => ipcRenderer.invoke('print:listPrinters'),
@@ -226,6 +235,19 @@ const api = {
         list: (input: ExcelAuditListInput = {}) => ipcRenderer.invoke('excelAudit:list', input),
         preview: (input: ExcelAuditUploadInput) => ipcRenderer.invoke('excelAudit:preview', input),
         commit: (input: { token: string }) => ipcRenderer.invoke('excelAudit:commit', input),
+    },
+
+    // Messaging & Customer Notification (WhatsApp, SMS fallback, Store Credit)
+    messaging: {
+        sendInvoice: (payload: any) => ipcRenderer.invoke('messaging:sendInvoice', payload),
+        sendStoreCredit: (payload: any) => ipcRenderer.invoke('messaging:sendStoreCredit', payload),
+        getLogs: (query?: any) => ipcRenderer.invoke('messaging:getLogs', query),
+        updateCustomerWhatsAppStatus: (phone: string, hasWhatsApp: boolean) =>
+            ipcRenderer.invoke('customer:updateWhatsAppStatus', { phone, hasWhatsApp }),
+    },
+
+    shell: {
+        openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url),
     },
 };
 

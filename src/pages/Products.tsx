@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Edit, Trash2, Printer, Search, ArrowUp, ArrowDown, Tag, AlertCircle, RefreshCw } from 'lucide-react';
+import { Plus, Edit, Trash2, Printer, Search, ArrowUp, ArrowDown, Tag, AlertCircle, RefreshCw, History, AlertTriangle } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
@@ -10,6 +10,7 @@ import { StickerPrintModal } from '../components/ui/StickerPrintModal';
 import { Skeleton } from '../components/ui/Skeleton';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { showToast } from '../components/ui/Toast';
+import { MovementHistoryModal } from '../components/stock/MovementHistoryModal';
 import {
     formatVariantDescription,
     normalizeText,
@@ -73,6 +74,8 @@ export const Products: React.FC = () => {
     const [products, setProducts] = useState<any[]>([]);
     const [categories, setCategories] = useState<any[]>([]);
     const [searchQuery, setSearchQuery] = useState('');
+    const [stockFilter, setStockFilter] = useState<'ALL' | 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK'>('ALL');
+    const [historyVariantId, setHistoryVariantId] = useState<string | null>(null);
     const [sortBy, setSortBy] = useState<'itemNumber' | 'alphabetical' | 'updatedAt'>('updatedAt');
     const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
     const [showModal, setShowModal] = useState(false);
@@ -112,9 +115,9 @@ export const Products: React.FC = () => {
         pocket: '',
         styleRef: '',
         isPrepared: true, // New preparation variants default to conversion pending
-        mrp: 0,
-        sellingPrice: 0,
-        costPrice: 0,
+        mrp: '',
+        sellingPrice: '',
+        costPrice: '',
         stock: 0,
         minStock: 5,
         isActive: true,
@@ -528,8 +531,56 @@ export const Products: React.FC = () => {
         }
     };
 
+    const stockStats = useMemo(() => {
+        let inStock = 0;
+        let lowStock = 0;
+        let outOfStock = 0;
+
+        for (const p of products) {
+            const stock = Number.isFinite(Number(p.totalStock))
+                ? Number(p.totalStock)
+                : (p.variants || []).reduce((sum: number, v: any) => sum + (v.stock || 0), 0);
+            const min = p.variants?.[0]?.minStock || 3;
+            if (stock <= 0) {
+                outOfStock++;
+            } else if (stock <= min) {
+                lowStock++;
+            } else {
+                inStock++;
+            }
+        }
+
+        return { total: products.length, inStock, lowStock, outOfStock };
+    }, [products]);
+
     const filteredProducts = useMemo(() => {
-        const list = [...products];
+        let list = [...products];
+
+        if (stockFilter === 'IN_STOCK') {
+            list = list.filter(p => {
+                const stock = Number.isFinite(Number(p.totalStock))
+                    ? Number(p.totalStock)
+                    : (p.variants || []).reduce((sum: number, v: any) => sum + (v.stock || 0), 0);
+                const min = p.variants?.[0]?.minStock || 3;
+                return stock > min;
+            });
+        } else if (stockFilter === 'LOW_STOCK') {
+            list = list.filter(p => {
+                const stock = Number.isFinite(Number(p.totalStock))
+                    ? Number(p.totalStock)
+                    : (p.variants || []).reduce((sum: number, v: any) => sum + (v.stock || 0), 0);
+                const min = p.variants?.[0]?.minStock || 3;
+                return stock > 0 && stock <= min;
+            });
+        } else if (stockFilter === 'OUT_OF_STOCK') {
+            list = list.filter(p => {
+                const stock = Number.isFinite(Number(p.totalStock))
+                    ? Number(p.totalStock)
+                    : (p.variants || []).reduce((sum: number, v: any) => sum + (v.stock || 0), 0);
+                return stock <= 0;
+            });
+        }
+
         const dir = sortDirection === 'asc' ? 1 : -1;
 
         list.sort((a: any, b: any) => {
@@ -549,7 +600,7 @@ export const Products: React.FC = () => {
         });
 
         return list;
-    }, [products, sortBy, sortDirection]);
+    }, [products, sortBy, sortDirection, stockFilter]);
 
 
     if (!user) return <div className="p-8 text-center text-gray-500">Authenticating...</div>;
@@ -617,6 +668,78 @@ export const Products: React.FC = () => {
                             Add Product
                         </Button>
                     )}
+                </div>
+            </div>
+
+            {/* Stock Health Quick Filters */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+                    <button
+                        type="button"
+                        onClick={() => setStockFilter('ALL')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                            stockFilter === 'ALL'
+                                ? 'bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900 shadow-xs'
+                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'
+                        }`}
+                    >
+                        <span>All Garments</span>
+                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${stockFilter === 'ALL' ? 'bg-white/20' : 'bg-gray-200 dark:bg-gray-700'}`}>
+                            {stockStats.total}
+                        </span>
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={() => setStockFilter('IN_STOCK')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                            stockFilter === 'IN_STOCK'
+                                ? 'bg-emerald-600 text-white shadow-xs'
+                                : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-900/50'
+                        }`}
+                    >
+                        <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                        <span>In Stock</span>
+                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${stockFilter === 'IN_STOCK' ? 'bg-white/20' : 'bg-emerald-100 dark:bg-emerald-900/60'}`}>
+                            {stockStats.inStock}
+                        </span>
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={() => setStockFilter('LOW_STOCK')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                            stockFilter === 'LOW_STOCK'
+                                ? 'bg-amber-600 text-white shadow-xs'
+                                : 'bg-amber-50 text-amber-700 hover:bg-amber-100 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/50'
+                        }`}
+                    >
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                        <span>Low Stock</span>
+                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${stockFilter === 'LOW_STOCK' ? 'bg-white/20' : 'bg-amber-100 dark:bg-amber-900/60'}`}>
+                            {stockStats.lowStock}
+                        </span>
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={() => setStockFilter('OUT_OF_STOCK')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                            stockFilter === 'OUT_OF_STOCK'
+                                ? 'bg-red-600 text-white shadow-xs'
+                                : 'bg-red-50 text-red-700 hover:bg-red-100 dark:bg-red-950/40 dark:text-red-300 dark:hover:bg-red-900/50'
+                        }`}
+                    >
+                        <span className="w-2 h-2 rounded-full bg-red-500" />
+                        <span>Out of Stock</span>
+                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${stockFilter === 'OUT_OF_STOCK' ? 'bg-white/20' : 'bg-red-100 dark:bg-red-900/60'}`}>
+                            {stockStats.outOfStock}
+                        </span>
+                    </button>
+                </div>
+
+                <div className="text-xs text-gray-500 dark:text-gray-400">
+                    Showing <span className="font-bold text-gray-800 dark:text-gray-200">{filteredProducts.length}</span> of {products.length} products
                 </div>
             </div>
 
@@ -714,19 +837,55 @@ export const Products: React.FC = () => {
                                                 </div>
                                             </td>
                                             <td className="px-3 py-3 text-center whitespace-nowrap">
-                                                <span className={`inline-block min-w-[28px] text-xs font-bold font-mono px-2 py-0.5 rounded ${
-                                                    totalStock > 0
-                                                        ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'
-                                                        : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
-                                                }`}>
-                                                    {totalStock}
-                                                </span>
+                                                {primaryVariant ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setHistoryVariantId(primaryVariant.id)}
+                                                        title="Click to view Stock Movement History (Sales, Purchases, Returns)"
+                                                        className={`group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold font-mono transition-all transform hover:scale-105 shadow-2xs cursor-pointer ${
+                                                            totalStock <= 0
+                                                                ? 'bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 dark:bg-red-950/40 dark:text-red-300 dark:border-red-900/50'
+                                                                : totalStock <= (primaryVariant.minStock || 3)
+                                                                ? 'bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-900/50'
+                                                                : 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-900/50'
+                                                        }`}
+                                                    >
+                                                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                                            totalStock <= 0
+                                                                ? 'bg-red-500'
+                                                                : totalStock <= (primaryVariant.minStock || 3)
+                                                                ? 'bg-amber-500 animate-pulse'
+                                                                : 'bg-emerald-500'
+                                                        }`} />
+                                                        <span>
+                                                            {totalStock <= 0
+                                                                ? '0 Out'
+                                                                : totalStock <= (primaryVariant.minStock || 3)
+                                                                ? `${totalStock} Low`
+                                                                : totalStock}
+                                                        </span>
+                                                        <History className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity text-gray-500 dark:text-gray-400 shrink-0" />
+                                                    </button>
+                                                ) : (
+                                                    <span className="text-xs text-gray-400 font-mono">-</span>
+                                                )}
                                             </td>
                                             <td className="px-3 py-3 text-center text-xs font-medium text-gray-500 whitespace-nowrap">
                                                 {product.taxRate}%
                                             </td>
                                             <td className="pr-4 pl-2 py-3 text-right whitespace-nowrap">
                                                 <div className="flex items-center justify-end gap-1.5">
+                                                    {primaryVariant && (
+                                                        <Button
+                                                            variant="secondary"
+                                                            size="sm"
+                                                            onClick={() => setHistoryVariantId(primaryVariant.id)}
+                                                            title="View Stock Movement History"
+                                                            className="p-1.5 text-gray-600 hover:text-indigo-600 dark:text-gray-400 dark:hover:text-indigo-400"
+                                                        >
+                                                            <History className="w-4 h-4" />
+                                                        </Button>
+                                                    )}
                                                     {canPrintLabels && (
                                                         <Button
                                                             variant="secondary"
@@ -979,7 +1138,8 @@ export const Products: React.FC = () => {
                                     <Input
                                         label="MRP (₹)"
                                         type="number"
-                                        value={variant.mrp}
+                                        value={variant.mrp === 0 ? '' : variant.mrp}
+                                        placeholder="0.00"
                                         onChange={(e) => updateVariantField(variant.id, 'mrp', parseNumberInput(e.target.value))}
                                         step="0.01"
                                         required
@@ -987,7 +1147,8 @@ export const Products: React.FC = () => {
                                     <Input
                                         label="Selling Price (₹)"
                                         type="number"
-                                        value={variant.sellingPrice}
+                                        value={variant.sellingPrice === 0 ? '' : variant.sellingPrice}
+                                        placeholder="0.00"
                                         onChange={(e) => updateVariantField(variant.id, 'sellingPrice', parseNumberInput(e.target.value))}
                                         step="0.01"
                                         required
@@ -996,7 +1157,8 @@ export const Products: React.FC = () => {
                                         <Input
                                             label="Cost Price (₹)"
                                             type="number"
-                                            value={variant.costPrice}
+                                            value={variant.costPrice === 0 ? '' : variant.costPrice}
+                                            placeholder="0.00"
                                             onChange={(e) => updateVariantField(variant.id, 'costPrice', parseNumberInput(e.target.value))}
                                             step="0.01"
                                         />
@@ -1075,6 +1237,14 @@ export const Products: React.FC = () => {
                     await executeSaveProduct();
                 }}
             />
+
+            {/* Direct Stock Movement History Modal */}
+            {historyVariantId && (
+                <MovementHistoryModal
+                    variantId={historyVariantId}
+                    onClose={() => setHistoryVariantId(null)}
+                />
+            )}
         </div>
     );
 };

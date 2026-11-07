@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Printer, Search, Trash2, Filter, Calendar as CalendarIcon, ChevronDown, ChevronUp, Tag, Banknote, CreditCard, QrCode, X, Globe, AlertCircle, ArrowLeftRight, ArrowDownRight, ArrowUpRight, History, Minus, Plus, Undo2 } from 'lucide-react';
+import { Printer, Search, Trash2, Filter, Calendar as CalendarIcon, ChevronDown, ChevronUp, Tag, Banknote, CreditCard, QrCode, X, Globe, AlertCircle, ArrowLeftRight, ArrowDownRight, ArrowUpRight, History, Minus, Plus, Undo2, Phone, User, UserPlus, CheckCircle2, MessageSquare } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { SaleCostSummary } from '../components/sales/SaleCostSummary';
 import { ReplacementProductPicker } from '../components/sales/ReplacementProductPicker';
 import { Skeleton } from '../components/ui/Skeleton';
 import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
+import { InvoiceMessageModal } from '../components/pos/InvoiceMessageModal';
 import { db } from '../lib/db';
 import { printService } from '../services/print.service';
 import { format, isSameDay, isSameWeek, isSameMonth, isSameYear, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, startOfYear, endOfYear, addDays, addWeeks, addMonths, addYears } from 'date-fns';
@@ -15,9 +16,12 @@ import { useCartStore } from '../store/cartStore';
 import { useNavigate } from 'react-router-dom';
 import { showToast } from '../components/ui/Toast';
 import { getReturnableItems, quoteRefund } from '../lib/refund';
+import { getStoredPaymentMethods, saveStoredPaymentMethods } from '../lib/paymentMethods';
 import { formatVariantDescription } from '../lib/catalogueDescription';
 import { ReturnStockSelector, validReturnStockChoice } from '../components/stock/ReturnStockSelector';
 import type { ReturnStockChoice } from '../types/returnStock';
+import { CreditNotesModal } from '../components/creditNotes/CreditNotesModal';
+import type { CreditNoteRecord } from '../types/creditNote';
 
 type TimePeriod = 'day' | 'week' | 'month' | 'year' | 'all';
 export type TransactionTypeFilter = 'all' | 'regular' | 'exchange' | 'refund' | 'voided';
@@ -123,10 +127,138 @@ export const Sales: React.FC = () => {
     const [refundReason, setRefundReason] = useState('');
     const [refundDiscount, setRefundDiscount] = useState('');
     const [returnStockChoices, setReturnStockChoices] = useState<Record<string, ReturnStockChoice>>({});
-    const [refundPaymentMode, setRefundPaymentMode] = useState<'CASH' | 'UPI' | 'CARD'>('CASH');
+    const [refundPaymentMode, setRefundPaymentMode] = useState<'CASH' | 'UPI' | 'CARD' | 'STORE_CREDIT'>('CASH');
     const [isRefunding, setIsRefunding] = useState(false);
+    const [showCreditNotesModal, setShowCreditNotesModal] = useState(false);
+    const [issuedCreditNoteForPrint, setIssuedCreditNoteForPrint] = useState<CreditNoteRecord | null>(null);
+    const [selectedRefundCustomer, setSelectedRefundCustomer] = useState<{ id?: string; name: string; phone: string } | null>(null);
+    const [isNewCustomerMode, setIsNewCustomerMode] = useState(false);
+    const [newCustomerName, setNewCustomerName] = useState('');
+    const [newCustomerPhone, setNewCustomerPhone] = useState('');
+    const [refundCustomerSearch, setRefundCustomerSearch] = useState('');
+    const [showRefundCustomerDropdown, setShowRefundCustomerDropdown] = useState(false);
+    const [customerList, setCustomerList] = useState<any[]>([]);
+    const [customerCreditsMap, setCustomerCreditsMap] = useState<Record<string, number>>({});
+    const refundCustomerDropdownRef = React.useRef<HTMLDivElement>(null);
     const refundInFlight = React.useRef(false);
     const refundRequestId = React.useRef('');
+
+    // Invoice Messaging State (WhatsApp / SMS Fallback & Store Credit)
+    const [messageModalSale, setMessageModalSale] = useState<any>(null);
+    const [isMessageModalOpen, setIsMessageModalOpen] = useState(false);
+    const [messageModalCredits, setMessageModalCredits] = useState<Array<{ code: string; amount: number }>>([]);
+    const [messageModalActiveCredit, setMessageModalActiveCredit] = useState(0);
+    const [messageModalCreditCodes, setMessageModalCreditCodes] = useState<string[]>([]);
+
+    const handleOpenMessageModal = async (sale: any) => {
+        let activeCredit = 0;
+        let creditCodes: string[] = [];
+
+        if (sale.customerPhone && window.electronAPI?.creditNotes?.getActiveForCustomer) {
+            try {
+                const res = await window.electronAPI.creditNotes.getActiveForCustomer(sale.customerPhone);
+                if (res.success && res.data) {
+                    activeCredit = res.data.totalAvailable || 0;
+                    creditCodes = (res.data.creditNotes || []).map((c: any) => c.code).filter(Boolean);
+                }
+            } catch (e) {
+                console.warn('Could not fetch customer store credits for message modal:', e);
+            }
+        }
+
+        const cnMatch = (sale.remarks || '').match(/Redeemed Store Credit:\s*([A-Za-z0-9-,\s]+)/);
+        const storeCreditPmt = (sale.payments || []).find((p: any) => p.paymentMode === 'STORE_CREDIT');
+        const applied = storeCreditPmt ? [{ code: cnMatch?.[1] || 'Store Credit', amount: Number(storeCreditPmt.amount || 0) }] : [];
+
+        setMessageModalSale(sale);
+        setMessageModalCredits(applied);
+        setMessageModalActiveCredit(activeCredit);
+        setMessageModalCreditCodes(creditCodes);
+        setIsMessageModalOpen(true);
+    };
+
+    // Dismiss refund customer dropdown on click or touch outside (capture phase so inner modal stopPropagation does not block)
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent | TouchEvent | PointerEvent) => {
+            if (
+                refundCustomerDropdownRef.current &&
+                !refundCustomerDropdownRef.current.contains(e.target as Node)
+            ) {
+                setShowRefundCustomerDropdown(false);
+            }
+        };
+
+        if (showRefundCustomerDropdown) {
+            window.addEventListener('mousedown', handleClickOutside, true);
+            window.addEventListener('touchstart', handleClickOutside, true);
+            window.addEventListener('pointerdown', handleClickOutside, true);
+        }
+
+        return () => {
+            window.removeEventListener('mousedown', handleClickOutside, true);
+            window.removeEventListener('touchstart', handleClickOutside, true);
+            window.removeEventListener('pointerdown', handleClickOutside, true);
+        };
+    }, [showRefundCustomerDropdown]);
+
+    const loadCustomersForRefund = async () => {
+        try {
+            const [custs, creditRes] = await Promise.all([
+                db.customers.findMany({ take: 200, orderBy: { createdAt: 'desc' } }).catch(() => []),
+                window.electronAPI.creditNotes.list({ status: 'ACTIVE' }).catch(() => ({ success: false, data: [] }))
+            ]);
+            if (Array.isArray(custs)) {
+                setCustomerList(custs);
+            }
+            if (creditRes?.success && Array.isArray(creditRes.data)) {
+                const map: Record<string, number> = {};
+                creditRes.data.forEach((cn: any) => {
+                    const phone = (cn.customerPhone || '').replace(/\D/g, '').slice(-10);
+                    if (phone) {
+                        map[phone] = (map[phone] || 0) + (cn.remainingAmount || 0);
+                    }
+                });
+                setCustomerCreditsMap(map);
+            }
+        } catch (err) {
+            console.error('Failed to load customers for refund:', err);
+        }
+    };
+
+    const filteredRefundCustomers = useMemo(() => {
+        const query = refundCustomerSearch.toLowerCase().trim();
+        if (!query) {
+            return [...customerList].sort((a, b) => {
+                const credA = customerCreditsMap[(a.phone || '').replace(/\D/g, '').slice(-10)] || 0;
+                const credB = customerCreditsMap[(b.phone || '').replace(/\D/g, '').slice(-10)] || 0;
+                return credB - credA;
+            }).slice(0, 6);
+        }
+
+        const cleanDigits = query.replace(/\D/g, '');
+        return customerList.filter(c => {
+            const nameMatch = c.name && c.name.toLowerCase().includes(query);
+            const phoneStr = (c.phone || '').replace(/\D/g, '');
+            const phoneMatch = cleanDigits ? phoneStr.includes(cleanDigits) : false;
+            return nameMatch || phoneMatch;
+        }).sort((a, b) => {
+            const credA = customerCreditsMap[(a.phone || '').replace(/\D/g, '').slice(-10)] || 0;
+            const credB = customerCreditsMap[(b.phone || '').replace(/\D/g, '').slice(-10)] || 0;
+            return credB - credA;
+        }).slice(0, 6);
+    }, [customerList, refundCustomerSearch, customerCreditsMap]);
+
+    const handleSelectRefundCustomer = (cust: any) => {
+        const cleanP = (cust.phone || '').replace(/\D/g, '').slice(-10);
+        setSelectedRefundCustomer({
+            id: cust.id,
+            name: cust.name,
+            phone: cleanP
+        });
+        setIsNewCustomerMode(false);
+        setRefundCustomerSearch('');
+        setShowRefundCustomerDropdown(false);
+    };
     const refundPreview = useMemo(() => {
         if (!isRefundModalOpen || !selectedSaleForAction) return { quote: null, error: '' };
         try {
@@ -172,6 +304,18 @@ export const Sales: React.FC = () => {
     // New stats states for entire filtered range
     const [totalMatchedRevenue, setTotalMatchedRevenue] = useState(0);
     const [totalMatchedBills, setTotalMatchedBills] = useState(0);
+    const [enabledPaymentMethods, setEnabledPaymentMethods] = useState<Record<string, boolean>>(getStoredPaymentMethods);
+
+    useEffect(() => {
+        const handlePmUpdate = (e: any) => {
+            if (e?.detail) {
+                const merged = saveStoredPaymentMethods(e.detail);
+                setEnabledPaymentMethods(merged);
+            }
+        };
+        window.addEventListener('payment-methods-updated', handlePmUpdate);
+        return () => window.removeEventListener('payment-methods-updated', handlePmUpdate);
+    }, []);
 
     // Payment Update Modal State
     const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
@@ -208,6 +352,24 @@ export const Sales: React.FC = () => {
             }
         } catch (error) {
             console.error('Failed to load shop settings:', error);
+        }
+
+        try {
+            let pmData: string | null = null;
+            const res = await window.electronAPI?.settings?.get?.({ key: 'PAYMENT_METHODS' });
+            if (res?.success && res.data) {
+                pmData = res.data as string;
+            } else {
+                const pmResult = await db.settings.findUnique({ where: { key: 'PAYMENT_METHODS' } });
+                if (pmResult?.value) pmData = pmResult.value;
+            }
+            if (pmData) {
+                const parsed = JSON.parse(pmData);
+                const merged = saveStoredPaymentMethods(parsed);
+                setEnabledPaymentMethods(merged);
+            }
+        } catch (error) {
+            console.error('Failed to load payment methods in sales:', error);
         }
     };
 
@@ -567,6 +729,37 @@ export const Sales: React.FC = () => {
         refundRequestId.current = crypto.randomUUID();
         setRefundDiscount('');
         setRefundPaymentMode(sale.paymentMethod === 'UPI' ? 'UPI' : 'CASH');
+
+        const initialName = (sale.customerName && sale.customerName.toLowerCase() !== 'walk-in' && sale.customerName.toLowerCase() !== 'walk-in customer')
+            ? sale.customerName
+            : '';
+        const rawPhone = sale.customerPhone || '';
+        const initialPhone = rawPhone.replace(/\D/g, '').slice(-10);
+
+        if (initialPhone && initialPhone.length === 10) {
+            setSelectedRefundCustomer({
+                name: initialName || `Customer ${initialPhone}`,
+                phone: initialPhone
+            });
+            setIsNewCustomerMode(false);
+            setNewCustomerName('');
+            setNewCustomerPhone('');
+        } else if (initialName) {
+            setSelectedRefundCustomer(null);
+            setIsNewCustomerMode(true);
+            setNewCustomerName(initialName);
+            setNewCustomerPhone(initialPhone);
+        } else {
+            setSelectedRefundCustomer(null);
+            setIsNewCustomerMode(false);
+            setNewCustomerName('');
+            setNewCustomerPhone('');
+        }
+        setNewCustomerPhone('');
+        setRefundCustomerSearch('');
+        setShowRefundCustomerDropdown(false);
+        loadCustomersForRefund();
+
         setIsRefundModalOpen(true);
     };
 
@@ -674,6 +867,29 @@ export const Sales: React.FC = () => {
             showToast(refundPreview.error || 'Enter the original discount for the selected items (enter 0 if none).', 'warning');
             return;
         }
+
+        let targetCustomerName = '';
+        let targetCustomerPhone = '';
+
+        if (refundPaymentMode === 'STORE_CREDIT') {
+            if (selectedRefundCustomer) {
+                targetCustomerName = (selectedRefundCustomer.name || '').trim();
+                targetCustomerPhone = (selectedRefundCustomer.phone || '').replace(/\D/g, '').slice(-10);
+            } else if (isNewCustomerMode) {
+                targetCustomerName = newCustomerName.trim();
+                targetCustomerPhone = newCustomerPhone.replace(/\D/g, '').slice(-10);
+            }
+
+            if (!targetCustomerPhone || targetCustomerPhone.length < 10) {
+                showToast('Please select a customer or provide a valid 10-digit mobile number.', 'warning');
+                return;
+            }
+            if (!targetCustomerName) {
+                showToast('Please enter the customer name for the store credit profile.', 'warning');
+                return;
+            }
+        }
+
         refundInFlight.current = true;
         setIsRefunding(true);
         try {
@@ -685,6 +901,8 @@ export const Sales: React.FC = () => {
                 totalAmount: refundAmount,
                 reason: refundReason,
                 originalDiscount: quote.discount,
+                customerName: targetCustomerName || undefined,
+                customerPhone: targetCustomerPhone || undefined,
                 items: quote.items.map(item => ({ ...item, stockChoice: returnStockChoices[item.id] })),
                 payments: refundAmount > 0 ? [{
                     paymentMode: refundPaymentMode,
@@ -697,6 +915,9 @@ export const Sales: React.FC = () => {
                 showToast("Refund Processed!", 'success');
                 setIsRefundModalOpen(false);
                 loadSales();
+                if (result.data?.issuedCreditNote) {
+                    setIssuedCreditNoteForPrint(result.data.issuedCreditNote);
+                }
             } else {
                 throw new Error(result.error);
             }
@@ -880,6 +1101,12 @@ export const Sales: React.FC = () => {
             const origBillMatch = sale.remarks?.match(/Invoice #(\d+)/);
             const origBillNo = origBillMatch?.[1] || '';
 
+            // Extract store credit details
+            const storeCreditPmt = (sale.payments || []).find((p: any) => p.paymentMode === 'STORE_CREDIT');
+            const storeCreditAmt = storeCreditPmt ? Number(storeCreditPmt.amount || 0) : (sale.paymentMethod === 'STORE_CREDIT' ? Number(sale.grandTotal || 0) : 0);
+            const cnMatch = (sale.remarks || '').match(/Redeemed Store Credit:\s*([A-Za-z0-9-,\s]+)/);
+            const creditCodes = cnMatch ? cnMatch[1].trim() : undefined;
+
             const receiptData = {
                 billNo: sale.billNo,
                 date: receiptDate,
@@ -917,6 +1144,9 @@ export const Sales: React.FC = () => {
                 isReplacementBill: isReplBill && exchCreditAmt > 0,
                 originalBillNo: origBillNo,
                 exchangeCreditAmount: exchCreditAmt,
+                // Store Credit fields
+                storeCreditAmount: storeCreditAmt,
+                creditNoteCodes: creditCodes,
                 // Refund fields
                 totalRefundAmount: (sale.refunds || []).reduce((sum: number, r: any) => sum + Number(r.totalRefundAmount || 0), 0) > 0
                     ? (sale.refunds || []).reduce((sum: number, r: any) => sum + Number(r.totalRefundAmount || 0), 0)
@@ -1020,7 +1250,7 @@ export const Sales: React.FC = () => {
             {/* Header with Search and Filters */}
             <div className="flex flex-col gap-4">
                 <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4">
-                    <div className="flex flex-wrap items-center gap-2 flex-1 max-w-3xl">
+                    <div className="flex flex-wrap items-center gap-2 flex-1">
                         <div className="relative flex-1 min-w-[280px]">
                             <Search className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
                             <Input
@@ -1043,7 +1273,7 @@ export const Sales: React.FC = () => {
 
                         {/* Search Scope Switcher (Visible when searching) */}
                         {searchQuery.trim() ? (
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
                                 {searchScope === 'all' ? (
                                     <button
                                         onClick={() => setSearchScope('period')}
@@ -1068,7 +1298,7 @@ export const Sales: React.FC = () => {
                             </div>
                         ) : (
                             timePeriod !== 'all' && (
-                                <div className="flex items-center gap-2 bg-white dark:bg-gray-800 border-2 border-gray-100 dark:border-gray-700 rounded-lg px-3 py-1.5 shadow-sm">
+                                <div className="flex items-center gap-2 bg-white dark:bg-gray-800 border-2 border-gray-100 dark:border-gray-700 rounded-lg px-3 py-1.5 shadow-sm flex-shrink-0">
                                     <CalendarIcon className="w-5 h-5 text-primary-500" />
                                     <input
                                         type="date"
@@ -1082,17 +1312,28 @@ export const Sales: React.FC = () => {
                         )}
                     </div>
 
-                    <Button
-                        variant="secondary"
-                        onClick={() => setShowFilters(!showFilters)}
-                        className={showFilters || transactionType !== 'all' || paymentFilter !== 'all' || staffFilter !== 'all' ? 'border-primary-500 text-primary-600 dark:text-primary-400' : ''}
-                    >
-                        <Filter className="w-4 h-4" />
-                        Filters
-                        {(transactionType !== 'all' || paymentFilter !== 'all' || staffFilter !== 'all') && (
-                            <span className="w-2 h-2 rounded-full bg-primary-600 ml-1"></span>
-                        )}
-                    </Button>
+                    <div className="flex items-center gap-2.5 flex-shrink-0">
+                        <Button
+                            variant="secondary"
+                            onClick={() => setShowCreditNotesModal(true)}
+                            className="flex items-center gap-1.5 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40"
+                        >
+                            <CreditCard className="w-4 h-4" />
+                            <span>Store Credit</span>
+                        </Button>
+
+                        <Button
+                            variant="secondary"
+                            onClick={() => setShowFilters(!showFilters)}
+                            className={showFilters || transactionType !== 'all' || paymentFilter !== 'all' || staffFilter !== 'all' ? 'border-primary-500 text-primary-600 dark:text-primary-400' : ''}
+                        >
+                            <Filter className="w-4 h-4" />
+                            Filters
+                            {(transactionType !== 'all' || paymentFilter !== 'all' || staffFilter !== 'all') && (
+                                <span className="w-2 h-2 rounded-full bg-primary-600 ml-1"></span>
+                            )}
+                        </Button>
+                    </div>
                 </div>
 
                 {/* Advanced Filters */}
@@ -1119,9 +1360,11 @@ export const Sales: React.FC = () => {
                                 className="px-3 py-2 border rounded-lg bg-white dark:bg-gray-800 text-sm font-medium"
                             >
                                 <option value="all">All Methods</option>
-                                <option value="CASH">Cash</option>
-                                <option value="CARD">Card</option>
-                                <option value="UPI">UPI</option>
+                                {enabledPaymentMethods.CASH !== false && <option value="CASH">Cash</option>}
+                                {(enabledPaymentMethods.CARD !== false || sales.some((s: any) => s.paymentMethod === 'CARD' || s.payments?.some((p: any) => p.paymentMode === 'CARD'))) && (
+                                    <option value="CARD">Card</option>
+                                )}
+                                {enabledPaymentMethods.UPI !== false && <option value="UPI">UPI</option>}
                             </select>
 
                             <label className="text-sm font-medium">Staff:</label>
@@ -1472,9 +1715,21 @@ export const Sales: React.FC = () => {
                                             <td className="text-sm text-gray-500 whitespace-nowrap">{sale.user?.name || 'Staff'}</td>
                                             <td>
                                                 <div className="flex gap-2 justify-end">
-                                                    <Button variant="secondary" size="sm" onClick={() => handlePrintReceipt(sale)} className="shadow-sm">
+                                                    <Button variant="secondary" size="sm" onClick={() => handlePrintReceipt(sale)} className="shadow-sm" title="Print Receipt">
                                                         <Printer className="w-4 h-4" />
                                                     </Button>
+
+                                                    {Boolean((sale.customerPhone || '').trim()) && (
+                                                        <Button
+                                                            variant="secondary"
+                                                            size="sm"
+                                                            onClick={() => handleOpenMessageModal(sale)}
+                                                            className="shadow-sm hover:text-emerald-600 hover:border-emerald-300 dark:hover:text-emerald-400"
+                                                            title="Message Invoice (WhatsApp / SMS)"
+                                                        >
+                                                            <MessageSquare className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                                                        </Button>
+                                                    )}
 
                                                     {(user?.role === 'ADMIN' || user?.permEditSales) && sale.status !== 'VOIDED' && (
                                                         <div className="flex gap-1">
@@ -2093,10 +2348,279 @@ export const Sales: React.FC = () => {
                         <label className="block text-sm font-medium">
                             Refund through
                             <select className="mt-1 block w-full rounded-lg border p-2 bg-white dark:bg-gray-800" value={refundPaymentMode}
-                                disabled={isRefunding} onChange={e => setRefundPaymentMode(e.target.value as 'CASH' | 'UPI' | 'CARD')}>
-                                <option value="CASH">Cash</option><option value="UPI">UPI</option>
+                                disabled={isRefunding} onChange={e => setRefundPaymentMode(e.target.value as any)}>
+                                {enabledPaymentMethods.CASH !== false && <option value="CASH">Cash</option>}
+                                {enabledPaymentMethods.UPI !== false && <option value="UPI">UPI</option>}
+                                {enabledPaymentMethods.CARD !== false && <option value="CARD">Card</option>}
+                                <option value="STORE_CREDIT">Store Credit (Credit Note)</option>
                             </select>
                         </label>
+                        {refundPaymentMode === 'STORE_CREDIT' && (
+                            <div className="p-4 bg-indigo-50/70 dark:bg-indigo-950/30 rounded-2xl border-2 border-indigo-200 dark:border-indigo-800 space-y-3">
+                                <div className="flex items-start gap-2.5">
+                                    <CreditCard className="w-5 h-5 flex-shrink-0 mt-0.5 text-indigo-600 dark:text-indigo-400" />
+                                    <div>
+                                        <h4 className="text-xs font-black uppercase tracking-wider text-indigo-900 dark:text-indigo-200">
+                                            Store Credit Note (Profile Linked & Transferable)
+                                        </h4>
+                                        <p className="text-xs text-indigo-700 dark:text-indigo-300 mt-0.5">
+                                            No cash will be deducted from drawer. Credit balance will be linked to the customer's profile, and a transferable voucher code (e.g. CN-1001) will be printed.
+                                        </p>
+                                    </div>
+                                </div>
+
+                                {/* State A: Customer is Confirmed / Selected */}
+                                {selectedRefundCustomer ? (
+                                    <div className="p-3.5 bg-white dark:bg-gray-800 rounded-xl border-2 border-emerald-300 dark:border-emerald-700 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                        <div className="flex items-center gap-3 min-w-0">
+                                            <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white font-bold text-sm flex items-center justify-center shrink-0 shadow-sm">
+                                                {selectedRefundCustomer.name.slice(0, 2).toUpperCase()}
+                                            </div>
+                                            <div className="min-w-0">
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <span className="font-bold text-sm text-gray-900 dark:text-white truncate">
+                                                        {selectedRefundCustomer.name}
+                                                    </span>
+                                                    <span className="badge badge-success text-[10px]">Linked Profile</span>
+                                                </div>
+                                                <div className="text-xs text-gray-500 dark:text-gray-400 font-mono flex items-center gap-1.5 mt-0.5">
+                                                    <Phone className="w-3.5 h-3.5 text-gray-400" />
+                                                    <span>{selectedRefundCustomer.phone || 'No phone'}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-gray-100 dark:border-gray-700">
+                                            {(() => {
+                                                const cleanP = (selectedRefundCustomer.phone || '').replace(/\D/g, '').slice(-10);
+                                                const curCred = cleanP ? (customerCreditsMap[cleanP] || 0) : 0;
+                                                const refAmt = refundPreview.quote?.total || 0;
+                                                return (
+                                                    <div className="text-right">
+                                                        <div className="text-[10px] uppercase font-bold text-gray-400">Store Credit Balance</div>
+                                                        <div className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                                                            Current: ₹{curCred.toFixed(2)} → <span className="font-extrabold text-emerald-700 dark:text-emerald-300">₹{(curCred + refAmt).toFixed(2)}</span>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })()}
+                                            <Button
+                                                type="button"
+                                                variant="secondary"
+                                                size="sm"
+                                                onClick={() => {
+                                                    setSelectedRefundCustomer(null);
+                                                    setIsNewCustomerMode(false);
+                                                    setRefundCustomerSearch('');
+                                                    setShowRefundCustomerDropdown(false);
+                                                }}
+                                                className="text-xs shrink-0"
+                                            >
+                                                Change
+                                            </Button>
+                                        </div>
+                                    </div>
+                                ) : isNewCustomerMode ? (
+                                    /* State B: New Customer Registration Mode */
+                                    <div className="p-3.5 bg-white dark:bg-gray-800 rounded-xl border-2 border-indigo-200 dark:border-indigo-700 shadow-sm space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-xs font-bold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+                                                <User className="w-4 h-4 text-indigo-600" />
+                                                <span>Register New Customer Profile</span>
+                                            </span>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setIsNewCustomerMode(false);
+                                                    setRefundCustomerSearch('');
+                                                }}
+                                                className="text-xs text-gray-500 hover:text-indigo-600 underline font-medium"
+                                            >
+                                                ← Back to Search
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                            <div>
+                                                <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">
+                                                    Mobile Number <span className="text-red-500">*</span>
+                                                </label>
+                                                <div className="relative">
+                                                    <Phone className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                                                    <input
+                                                        type="tel"
+                                                        maxLength={10}
+                                                        placeholder="10-digit mobile number"
+                                                        value={newCustomerPhone}
+                                                        onChange={(e) => setNewCustomerPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                                                        className="w-full pl-9 pr-3 py-2 text-xs font-mono font-bold rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                                    />
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">
+                                                    Customer Name <span className="text-red-500">*</span>
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Full name of customer"
+                                                    value={newCustomerName}
+                                                    onChange={(e) => setNewCustomerName(e.target.value)}
+                                                    className="w-full px-3 py-2 text-xs font-bold rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        {(() => {
+                                            const cleanP = newCustomerPhone.replace(/\D/g, '').slice(-10);
+                                            const existingCust = cleanP.length === 10 ? customerList.find(c => (c.phone || '').replace(/\D/g, '').slice(-10) === cleanP) : null;
+                                            const existingCredit = cleanP.length === 10 ? (customerCreditsMap[cleanP] || 0) : 0;
+                                            const refundAmt = refundPreview.quote?.total || 0;
+
+                                            if (existingCust) {
+                                                return (
+                                                    <div className="text-[11px] text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/50 p-2.5 rounded-lg border border-amber-200 dark:border-amber-800 flex items-start gap-1.5">
+                                                        <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
+                                                        <div>
+                                                            Found existing profile for <strong>{existingCust.name}</strong> ({cleanP}).
+                                                            <br />
+                                                            Current credit: <strong>₹{existingCredit.toFixed(2)}</strong> → New balance: <strong>₹{(existingCredit + refundAmt).toFixed(2)}</strong>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            }
+
+                                            return (
+                                                <div className="text-[11px] text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/50 p-2 rounded-lg border border-indigo-100 dark:border-indigo-900">
+                                                    ★ A new profile will be created for <strong>{newCustomerName || 'this customer'}</strong> ({newCustomerPhone || 'phone number'}) with ₹{refundAmt.toFixed(2)} store credit.
+                                                </div>
+                                            );
+                                        })()}
+                                    </div>
+                                ) : (
+                                    /* State C: Search & Select Customer (Unified Search Bar) */
+                                    <div className="relative" ref={refundCustomerDropdownRef}>
+                                        <div className="flex items-center justify-between mb-1">
+                                            <label className="block text-xs font-bold text-gray-700 dark:text-gray-300">
+                                                Customer (Search Name or Mobile Number) <span className="text-red-500">*</span>
+                                            </label>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setIsNewCustomerMode(true);
+                                                    setNewCustomerName(refundCustomerSearch.replace(/\d/g, '').trim());
+                                                    setNewCustomerPhone(refundCustomerSearch.replace(/\D/g, '').slice(0, 10));
+                                                    setShowRefundCustomerDropdown(false);
+                                                }}
+                                                className="text-xs text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 font-bold hover:underline flex items-center gap-1"
+                                            >
+                                                <UserPlus className="w-3.5 h-3.5" />
+                                                <span>+ New Customer</span>
+                                            </button>
+                                        </div>
+
+                                        <div className="relative">
+                                            <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                                            <input
+                                                type="text"
+                                                placeholder="Search existing customer by name or phone..."
+                                                className="w-full pl-9 pr-8 py-2 text-xs rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                                value={refundCustomerSearch}
+                                                onFocus={() => setShowRefundCustomerDropdown(true)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Escape') {
+                                                        setShowRefundCustomerDropdown(false);
+                                                        e.stopPropagation();
+                                                    }
+                                                }}
+                                                onChange={(e) => {
+                                                    setRefundCustomerSearch(e.target.value);
+                                                    setShowRefundCustomerDropdown(true);
+                                                }}
+                                            />
+                                            {refundCustomerSearch && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setRefundCustomerSearch('');
+                                                        setShowRefundCustomerDropdown(false);
+                                                    }}
+                                                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                                                    title="Clear search"
+                                                >
+                                                    <X className="w-3.5 h-3.5" />
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        {showRefundCustomerDropdown && (
+                                            <div className="absolute z-30 left-0 right-0 mt-1 max-h-56 overflow-y-auto bg-white dark:bg-gray-800 border-2 border-indigo-200 dark:border-indigo-700 rounded-xl shadow-2xl divide-y divide-gray-100 dark:divide-gray-700">
+                                                {/* Dropdown Header */}
+                                                <div className="sticky top-0 bg-gray-50/95 dark:bg-gray-800/95 backdrop-blur-sm px-3 py-1.5 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-gray-500 border-b border-gray-100 dark:border-gray-700">
+                                                    <span>
+                                                        {refundCustomerSearch.trim()
+                                                            ? `Matching Directory Profiles (${filteredRefundCustomers.length})`
+                                                            : 'Registered Customers'}
+                                                    </span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setShowRefundCustomerDropdown(false)}
+                                                        className="p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400 hover:text-gray-600 transition-colors"
+                                                        title="Close dropdown"
+                                                    >
+                                                        <X className="w-3.5 h-3.5" />
+                                                    </button>
+                                                </div>
+
+                                                {filteredRefundCustomers.length > 0 ? (
+                                                    filteredRefundCustomers.map((cust) => {
+                                                        const cleanP = (cust.phone || '').replace(/\D/g, '').slice(-10);
+                                                        const existingCredit = cleanP ? (customerCreditsMap[cleanP] || 0) : 0;
+                                                        return (
+                                                            <button
+                                                                key={cust.id}
+                                                                type="button"
+                                                                onClick={() => handleSelectRefundCustomer(cust)}
+                                                                className="w-full text-left p-2.5 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 flex items-center justify-between text-xs transition-colors"
+                                                            >
+                                                                <div>
+                                                                    <span className="font-bold text-gray-900 dark:text-white">{cust.name}</span>
+                                                                    {cust.phone && <span className="text-gray-500 ml-2 font-mono">({cust.phone})</span>}
+                                                                </div>
+                                                                {existingCredit > 0 && (
+                                                                    <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-100 dark:bg-indigo-900/50 px-2 py-0.5 rounded-full">
+                                                                        Holds ₹{existingCredit.toFixed(2)} credit
+                                                                    </span>
+                                                                )}
+                                                            </button>
+                                                        );
+                                                    })
+                                                ) : (
+                                                    <div className="p-3 text-center text-xs text-gray-500 dark:text-gray-400">
+                                                        No customer matched "{refundCustomerSearch}".
+                                                    </div>
+                                                )}
+
+                                                {/* Register New Customer Option */}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setIsNewCustomerMode(true);
+                                                        setNewCustomerName(refundCustomerSearch.replace(/\d/g, '').trim());
+                                                        setNewCustomerPhone(refundCustomerSearch.replace(/\D/g, '').slice(0, 10));
+                                                        setShowRefundCustomerDropdown(false);
+                                                    }}
+                                                    className="w-full text-left p-2.5 bg-indigo-50/50 dark:bg-indigo-950/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-xs font-bold text-indigo-700 dark:text-indigo-300 flex items-center gap-1.5 transition-colors border-t border-indigo-100 dark:border-indigo-900"
+                                                >
+                                                    <UserPlus className="w-4 h-4 text-indigo-600" />
+                                                    <span>+ Register "{refundCustomerSearch.trim() || 'New Customer'}" in directory</span>
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
                         <Input
                             label="Reason for Refund"
                             placeholder="e.g. Size mismatch, defective product..."
@@ -2118,7 +2642,18 @@ export const Sales: React.FC = () => {
                         <Button
                             variant="danger"
                             className="px-8 font-black uppercase tracking-widest text-xs"
-                            disabled={isRefunding || !refundReason.trim() || !refundPreview.quote || refundPreview.quote.requiresDiscount || returnItems.some(item => item.refundQty > 0 && !validReturnStockChoice(returnStockChoices[item.variantId]))}
+                            disabled={Boolean(
+                                isRefunding ||
+                                !refundReason.trim() ||
+                                !refundPreview.quote ||
+                                refundPreview.quote.requiresDiscount ||
+                                returnItems.some(item => item.refundQty > 0 && !validReturnStockChoice(returnStockChoices[item.variantId])) ||
+                                (refundPaymentMode === 'STORE_CREDIT' && (
+                                    (!selectedRefundCustomer && !isNewCustomerMode) ||
+                                    (isNewCustomerMode && (newCustomerPhone.replace(/\D/g, '').length < 10 || !newCustomerName.trim())) ||
+                                    (Boolean(selectedRefundCustomer) && (!selectedRefundCustomer?.name.trim() || (selectedRefundCustomer?.phone || '').replace(/\D/g, '').length < 10))
+                                ))
+                            )}
                             onClick={submitRefund}
                         >
                             {isRefunding ? 'Processing…' : 'Confirm Refund & Restock'}
@@ -2265,9 +2800,9 @@ export const Sales: React.FC = () => {
                                 onChange={(e) => setReplacementPaymentMethod(e.target.value as 'CASH' | 'CARD' | 'UPI')}
                                 className="h-9 px-3 border-2 border-gray-200 rounded-lg text-sm font-bold bg-white dark:bg-gray-800"
                             >
-                                <option value="CASH">CASH</option>
-                                <option value="CARD">CARD</option>
-                                <option value="UPI">UPI</option>
+                                {enabledPaymentMethods.CASH !== false && <option value="CASH">CASH</option>}
+                                {enabledPaymentMethods.UPI !== false && <option value="UPI">UPI</option>}
+                                {enabledPaymentMethods.CARD !== false && <option value="CARD">CARD</option>}
                             </select>
                         </div>
                     </div>
@@ -2370,49 +2905,57 @@ export const Sales: React.FC = () => {
                     })()}
 
                     <div className="grid grid-cols-2 gap-2">
-                        {['CASH', 'UPI', 'CARD', 'SPLIT'].map((m) => (
-                            <button
-                                key={m}
-                                onClick={() => setPaymentEditData({ ...paymentEditData, method: m as any })}
-                                className={`py-3 px-4 rounded-xl border-2 font-black transition-all ${paymentEditData.method === m
-                                    ? 'border-primary-600 bg-primary-600 text-white shadow-lg shadow-primary-200'
-                                    : 'border-gray-100 bg-white text-gray-400 hover:border-gray-300'}`}
-                            >
-                                {m}
-                            </button>
-                        ))}
+                        {(['CASH', 'UPI', 'CARD', 'SPLIT'] as const)
+                            .filter((m) => enabledPaymentMethods[m] !== false)
+                            .map((m) => (
+                                <button
+                                    key={m}
+                                    onClick={() => setPaymentEditData({ ...paymentEditData, method: m as any })}
+                                    className={`py-3 px-4 rounded-xl border-2 font-black transition-all ${paymentEditData.method === m
+                                        ? 'border-primary-600 bg-primary-600 text-white shadow-lg shadow-primary-200'
+                                        : 'border-gray-100 bg-white text-gray-400 hover:border-gray-300'}`}
+                                >
+                                    {m}
+                                </button>
+                            ))}
                     </div>
 
                     {paymentEditData.method === 'SPLIT' && (
                         <div className="space-y-3 p-4 bg-gray-50 dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-inner">
                             <div className="space-y-4">
-                                <div>
-                                    <label className="text-[10px] font-black uppercase text-gray-400 ml-1">Cash Amount</label>
-                                    <Input
-                                        type="number"
-                                        value={paymentEditData.cashAmount}
-                                        onChange={(e) => setPaymentEditData({ ...paymentEditData, cashAmount: e.target.value })}
-                                        placeholder="0.00"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="text-[10px] font-black uppercase text-gray-400 ml-1">UPI Amount</label>
-                                    <Input
-                                        type="number"
-                                        value={paymentEditData.upiAmount}
-                                        onChange={(e) => setPaymentEditData({ ...paymentEditData, upiAmount: e.target.value })}
-                                        placeholder="0.00"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="text-[10px] font-black uppercase text-gray-400 ml-1">Card Amount</label>
-                                    <Input
-                                        type="number"
-                                        value={paymentEditData.cardAmount}
-                                        onChange={(e) => setPaymentEditData({ ...paymentEditData, cardAmount: e.target.value })}
-                                        placeholder="0.00"
-                                    />
-                                </div>
+                                {enabledPaymentMethods.CASH !== false && (
+                                    <div>
+                                        <label className="text-[10px] font-black uppercase text-gray-400 ml-1">Cash Amount</label>
+                                        <Input
+                                            type="number"
+                                            value={paymentEditData.cashAmount}
+                                            onChange={(e) => setPaymentEditData({ ...paymentEditData, cashAmount: e.target.value })}
+                                            placeholder="0.00"
+                                        />
+                                    </div>
+                                )}
+                                {enabledPaymentMethods.UPI !== false && (
+                                    <div>
+                                        <label className="text-[10px] font-black uppercase text-gray-400 ml-1">UPI Amount</label>
+                                        <Input
+                                            type="number"
+                                            value={paymentEditData.upiAmount}
+                                            onChange={(e) => setPaymentEditData({ ...paymentEditData, upiAmount: e.target.value })}
+                                            placeholder="0.00"
+                                        />
+                                    </div>
+                                )}
+                                {enabledPaymentMethods.CARD !== false && (
+                                    <div>
+                                        <label className="text-[10px] font-black uppercase text-gray-400 ml-1">Card Amount</label>
+                                        <Input
+                                            type="number"
+                                            value={paymentEditData.cardAmount}
+                                            onChange={(e) => setPaymentEditData({ ...paymentEditData, cardAmount: e.target.value })}
+                                            placeholder="0.00"
+                                        />
+                                    </div>
+                                )}
                             </div>
 
                             <div className={`mt-4 pt-3 border-t border-dashed flex justify-between items-center ${(() => {
@@ -2421,12 +2964,19 @@ export const Sales: React.FC = () => {
                                 const ecVal = ecAmt ? Number(ecAmt.amount || 0) : 0;
                                 const isR = isReplacementSale(saleM) && ecVal > 0;
                                 const target = isR ? (saleM.grandTotal - ecVal) : (saleM?.grandTotal || 0);
-                                return Math.abs(((parseFloat(paymentEditData.cashAmount) || 0) + (parseFloat(paymentEditData.upiAmount) || 0) + (parseFloat(paymentEditData.cardAmount) || 0)) - target) < 0.01
+                                const cardAmt = enabledPaymentMethods.CARD !== false ? (parseFloat(paymentEditData.cardAmount) || 0) : 0;
+                                const cashAmt = enabledPaymentMethods.CASH !== false ? (parseFloat(paymentEditData.cashAmount) || 0) : 0;
+                                const upiAmt = enabledPaymentMethods.UPI !== false ? (parseFloat(paymentEditData.upiAmount) || 0) : 0;
+                                return Math.abs((cashAmt + upiAmt + cardAmt) - target) < 0.01
                                     ? 'border-green-200 text-green-600' : 'border-red-200 text-red-600';
                             })()}`}>
                                 <span className="text-xs font-bold uppercase">Current Sum:</span>
                                 <span className="text-lg font-black">
-                                    {formatIndianCurrency((parseFloat(paymentEditData.cashAmount) || 0) + (parseFloat(paymentEditData.upiAmount) || 0) + (parseFloat(paymentEditData.cardAmount) || 0))}
+                                    {formatIndianCurrency(
+                                        (enabledPaymentMethods.CASH !== false ? (parseFloat(paymentEditData.cashAmount) || 0) : 0) +
+                                        (enabledPaymentMethods.UPI !== false ? (parseFloat(paymentEditData.upiAmount) || 0) : 0) +
+                                        (enabledPaymentMethods.CARD !== false ? (parseFloat(paymentEditData.cardAmount) || 0) : 0)
+                                    )}
                                 </span>
                             </div>
                         </div>
@@ -2445,7 +2995,10 @@ export const Sales: React.FC = () => {
                                 const ecVal = ecAmt ? Number(ecAmt.amount || 0) : 0;
                                 const isR = isReplacementSale(saleM) && ecVal > 0;
                                 const target = isR ? (saleM.grandTotal - ecVal) : (saleM?.grandTotal || 0);
-                                return Math.abs(((parseFloat(paymentEditData.cashAmount) || 0) + (parseFloat(paymentEditData.upiAmount) || 0) + (parseFloat(paymentEditData.cardAmount) || 0)) - target) > 0.01;
+                                const cardAmt = enabledPaymentMethods.CARD !== false ? (parseFloat(paymentEditData.cardAmount) || 0) : 0;
+                                const cashAmt = enabledPaymentMethods.CASH !== false ? (parseFloat(paymentEditData.cashAmount) || 0) : 0;
+                                const upiAmt = enabledPaymentMethods.UPI !== false ? (parseFloat(paymentEditData.upiAmount) || 0) : 0;
+                                return Math.abs((cashAmt + upiAmt + cardAmt) - target) > 0.01;
                             })()}
                             onClick={submitPaymentUpdate}
                         >
@@ -2454,6 +3007,81 @@ export const Sales: React.FC = () => {
                     </div>
                 </div>
             </Modal>
+
+            {/* Credit Notes Overview Modal */}
+            <CreditNotesModal
+                isOpen={showCreditNotesModal}
+                onClose={() => setShowCreditNotesModal(false)}
+            />
+
+            {/* Issued Credit Note Print Voucher Modal */}
+            {issuedCreditNoteForPrint && (
+                <Modal
+                    isOpen={true}
+                    onClose={() => setIssuedCreditNoteForPrint(null)}
+                    title="Store Credit Note Issued"
+                    size="sm"
+                >
+                    <div className="space-y-4 py-2">
+                        <div className="p-4 bg-emerald-50 dark:bg-emerald-950/30 rounded-xl border border-emerald-200 dark:border-emerald-800 text-center">
+                            <span className="text-xs uppercase tracking-wider font-bold text-emerald-700 dark:text-emerald-300">
+                                Credit Note Ready
+                            </span>
+                            <div className="text-2xl font-black font-mono text-emerald-900 dark:text-emerald-100 my-1">
+                                {issuedCreditNoteForPrint.code}
+                            </div>
+                            <div className="text-3xl font-extrabold text-emerald-600 dark:text-emerald-400 my-1">
+                                ₹{issuedCreditNoteForPrint.remainingAmount.toFixed(2)}
+                            </div>
+                            {issuedCreditNoteForPrint.customerName && (
+                                <div className="text-xs font-bold text-emerald-800 dark:text-emerald-200 mt-1">
+                                    Profile: {issuedCreditNoteForPrint.customerName} {issuedCreditNoteForPrint.customerPhone ? `(${issuedCreditNoteForPrint.customerPhone})` : ''}
+                                </div>
+                            )}
+                            <p className="text-xs text-gray-500 mt-2">
+                                Linked to customer profile. Customer can redeem by mobile number at POS, or share this voucher code ({issuedCreditNoteForPrint.code}) with anyone to redeem.
+                            </p>
+                        </div>
+
+                        <div className="flex gap-2 justify-end pt-2 border-t border-gray-100 dark:border-gray-800">
+                            <Button variant="secondary" onClick={() => setIssuedCreditNoteForPrint(null)}>
+                                Close
+                            </Button>
+                            <Button
+                                variant="primary"
+                                onClick={async () => {
+                                    try {
+                                        await printService.printCreditNote(issuedCreditNoteForPrint);
+                                        showToast('Voucher printed successfully', 'success');
+                                        setIssuedCreditNoteForPrint(null);
+                                    } catch (err: any) {
+                                        showToast('Print failed. Check printer.', 'error');
+                                    }
+                                }}
+                                className="flex items-center gap-1.5"
+                            >
+                                <Printer className="w-4 h-4" />
+                                <span>Print Voucher</span>
+                            </Button>
+                        </div>
+                    </div>
+                </Modal>
+            )}
+
+            {/* Invoice Messaging Dialog */}
+            {isMessageModalOpen && messageModalSale && (
+                <InvoiceMessageModal
+                    isOpen={isMessageModalOpen}
+                    onClose={() => {
+                        setIsMessageModalOpen(false);
+                        setMessageModalSale(null);
+                    }}
+                    sale={messageModalSale}
+                    appliedCredits={messageModalCredits}
+                    activeStoreCreditBalance={messageModalActiveCredit}
+                    activeStoreCreditCodes={messageModalCreditCodes}
+                />
+            )}
         </div >
     );
 };

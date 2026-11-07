@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Minus, DollarSign, Loader2 } from 'lucide-react';
 import type { TxCategory } from '../../types/cashRegister';
 import { CASH_OUT_CATEGORIES, TX_CATEGORY_LABELS } from '../../types/cashRegister';
@@ -63,9 +64,10 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({ onClose, onSuccess }
         if (e.key === 'Escape') onClose();
     };
 
-    return (
+    const modalContent = (
         <div
             className="modal-overlay"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             onClick={(e) => e.target === e.currentTarget && onClose()}
         >
             <div
@@ -176,4 +178,6 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({ onClose, onSuccess }
             </div>
         </div>
     );
+
+    return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 };

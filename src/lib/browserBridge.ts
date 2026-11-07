@@ -100,6 +100,13 @@ export function initBrowserBridge() {
             getExchangeDetails: (data: any) => callIpc('sales:getExchangeDetails', data),
             voidSale: (data: any) => callIpc('sales:voidSale', data),
         },
+        creditNotes: {
+            list: (query?: any) => callIpc('creditNotes:list', query || {}),
+            getByCode: (code: string) => callIpc('creditNotes:getByCode', { code }),
+            getActiveForCustomer: (phone: string) => callIpc('creditNotes:getActiveForCustomer', { phone }),
+            issue: (data: any) => callIpc('creditNotes:issue', data),
+            cancel: (data: any) => callIpc('creditNotes:cancel', data),
+        },
         print: {
             listPrinters: async () => ({ success: false, error: 'Printer discovery requires the desktop app.' }),
             receipt: async () => ({ success: false, error: 'Hardware printing not available in web browser' }),
@@ -183,6 +190,21 @@ export function initBrowserBridge() {
             create: (data: any) => callIpc('stockDraft:create', data),
             save: (data: any) => callIpc('stockDraft:save', data),
             cancel: (data: any) => callIpc('stockDraft:cancel', data),
+        },
+        messaging: {
+            sendInvoice: (payload: any) => callIpc('messaging:sendInvoice', payload),
+            sendStoreCredit: (payload: any) => callIpc('messaging:sendStoreCredit', payload),
+            getLogs: (query?: any) => callIpc('messaging:getLogs', query || {}),
+            updateCustomerWhatsAppStatus: (phone: string, hasWhatsApp: boolean) =>
+                callIpc('customer:updateWhatsAppStatus', { phone, hasWhatsApp }),
+        },
+        shell: {
+            openExternal: async (url: string) => {
+                if (typeof window !== 'undefined') {
+                    window.open(url, '_blank', 'noopener,noreferrer');
+                }
+                return { success: true };
+            },
         },
     } as any;
 }

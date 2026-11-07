@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { Package } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { InventoryWorkspaceView } from '../components/stock/InventoryWorkspaceView';
 import { StockEntryView } from '../components/stock/StockEntryView';
@@ -21,11 +20,94 @@ const StockWorkspace: React.FC = () => {
     const [navigationBlocked, setNavigationBlocked] = useState(false);
     const [historyId, setHistoryId] = useState<string | null>(null);
     const [adjustVariant, setAdjustVariant] = useState<InventoryVariant | null>(null);
-    return <div className="space-y-6"><div><h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2.5"><Package className="w-7 h-7 text-indigo-600 dark:text-indigo-400" />Stock</h1><p className="text-sm text-gray-500 mt-1">Audited items, size-wise quantities and individual barcodes.</p></div><div className="flex flex-wrap gap-2 border-b border-gray-200 dark:border-gray-700 pb-3">{[['INVENTORY', 'Inventory'], ['MANUAL', 'Add manually'], ['EXCEL', 'Excel upload']].map(([value, label]) => <button key={value} type="button" aria-pressed={tab === value} disabled={navigationBlocked || Boolean(adjustVariant) || Boolean(historyId)} onClick={() => { if (!navigationBlocked && !adjustVariant && !historyId) setTab(value as typeof tab); }} className={`rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed ${tab === value ? 'bg-indigo-600 text-white' : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300'}`}>{label}</button>)}</div>
-        {tab === 'INVENTORY' && <InventoryWorkspaceView key={`tracked-${revision}`} scope="TRACKED" onOpenAudit={() => setTab('EXCEL')} onViewMovements={setHistoryId} onAdjustStock={setAdjustVariant} />}
-        {tab === 'MANUAL' && <RackAuditView onBlockedChange={setNavigationBlocked} onInventoryChanged={() => setRevision(value => value + 1)} />}
-        {tab === 'EXCEL' && <StockEntryView key={tab} mode="EXCEL" onBlockedChange={setNavigationBlocked} onSaved={() => { setNavigationBlocked(false); setRevision(value => value + 1); setTab('INVENTORY'); }} />}
-        {historyId && <MovementHistoryModal key={historyId} variantId={historyId} onClose={() => setHistoryId(null)} />}
-        {adjustVariant && <TrackedStockAdjustmentModal key={adjustVariant.id} variant={adjustVariant} initialKind="RECOUNT" onClose={() => setAdjustVariant(null)} onAdjusted={() => { setAdjustVariant(null); setRevision(value => value + 1); }} />}
-    </div>;
+
+    const navButtons = (
+        <div className="flex flex-wrap items-center gap-2">
+            {[
+                ['INVENTORY', 'Inventory'],
+                ['MANUAL', 'Add manually'],
+                ['EXCEL', 'Excel upload'],
+            ].map(([value, label]) => (
+                <button
+                    key={value}
+                    type="button"
+                    aria-pressed={tab === value}
+                    disabled={navigationBlocked || Boolean(adjustVariant) || Boolean(historyId)}
+                    onClick={() => {
+                        if (!navigationBlocked && !adjustVariant && !historyId) setTab(value as typeof tab);
+                    }}
+                    className={`inline-flex items-center justify-center rounded-lg px-3.5 py-2 text-sm font-medium border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                        tab === value
+                            ? 'border-indigo-600 bg-indigo-600 text-white shadow-xs'
+                            : 'border-gray-200 dark:border-dark-border bg-gray-50 hover:bg-gray-100 dark:bg-dark-card dark:hover:bg-dark-border text-gray-700 dark:text-gray-300'
+                    }`}
+                >
+                    {label}
+                </button>
+            ))}
+        </div>
+    );
+
+    return (
+        <div className="space-y-6">
+            {tab !== 'INVENTORY' && (
+                <div className="flex flex-wrap items-start justify-between gap-3 pb-2 border-b border-gray-200 dark:border-gray-700">
+                    <div>
+                        <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+                            {tab === 'MANUAL' ? 'Add stock manually' : 'Import stock from Excel'}
+                        </h2>
+                        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                            {tab === 'MANUAL'
+                                ? 'Record counted racks or add physical garments directly.'
+                                : 'Upload audit workbooks and review counts before adding to inventory.'}
+                        </p>
+                    </div>
+                    {navButtons}
+                </div>
+            )}
+
+            {tab === 'INVENTORY' && (
+                <InventoryWorkspaceView
+                    key={`tracked-${revision}`}
+                    scope="TRACKED"
+                    onOpenAudit={() => setTab('EXCEL')}
+                    onViewMovements={setHistoryId}
+                    onAdjustStock={setAdjustVariant}
+                >
+                    {navButtons}
+                </InventoryWorkspaceView>
+            )}
+            {tab === 'MANUAL' && (
+                <RackAuditView
+                    onBlockedChange={setNavigationBlocked}
+                    onInventoryChanged={() => setRevision((value) => value + 1)}
+                />
+            )}
+            {tab === 'EXCEL' && (
+                <StockEntryView
+                    key={tab}
+                    mode="EXCEL"
+                    onBlockedChange={setNavigationBlocked}
+                    onSaved={() => {
+                        setNavigationBlocked(false);
+                        setRevision((value) => value + 1);
+                        setTab('INVENTORY');
+                    }}
+                />
+            )}
+            {historyId && <MovementHistoryModal key={historyId} variantId={historyId} onClose={() => setHistoryId(null)} />}
+            {adjustVariant && (
+                <TrackedStockAdjustmentModal
+                    key={adjustVariant.id}
+                    variant={adjustVariant}
+                    initialKind="RECOUNT"
+                    onClose={() => setAdjustVariant(null)}
+                    onAdjusted={() => {
+                        setAdjustVariant(null);
+                        setRevision((value) => value + 1);
+                    }}
+                />
+            )}
+        </div>
+    );
 };

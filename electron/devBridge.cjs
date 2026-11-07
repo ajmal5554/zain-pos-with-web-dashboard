@@ -44,7 +44,7 @@ function loadTypeScriptModule(sourcePath) {
 function getPrisma() {
     if (!prismaClientInstance) {
         const { PrismaClient } = require('../prisma/generated/client');
-        const dbPath = path.resolve(__dirname, '../prisma/pos.db');
+        const dbPath = path.resolve(__dirname, '../prisma', process.env.ZAIN_POS_DEMO_MODE === '1' ? 'pos-demo.db' : 'pos.db');
         prismaClientInstance = new PrismaClient({
             datasources: {
                 db: {
@@ -75,6 +75,22 @@ function getStockDraftService() {
         stockDraftServiceModule = loadTypeScriptModule(path.resolve(__dirname, 'stock-draft.service.ts'));
     }
     return stockDraftServiceModule;
+}
+
+let creditNoteServiceModule = null;
+function getCreditNoteService() {
+    if (!creditNoteServiceModule) {
+        creditNoteServiceModule = loadTypeScriptModule(path.resolve(__dirname, 'credit-note.service.ts'));
+    }
+    return creditNoteServiceModule;
+}
+
+let messagingServiceModule = null;
+function getMessagingService() {
+    if (!messagingServiceModule) {
+        messagingServiceModule = loadTypeScriptModule(path.resolve(__dirname, 'messaging.service.ts'));
+    }
+    return messagingServiceModule;
 }
 
 function createDevBridgeHandler(options = {}) {
@@ -205,6 +221,7 @@ function createDevBridgeHandler(options = {}) {
                                 permBulkUpdate: true,
                                 permBackDateSale: true,
                                 permViewInsights: true,
+                                permManageCashDrawer: true,
                                 maxDiscount: true,
                             },
                         });
@@ -436,6 +453,94 @@ function createDevBridgeHandler(options = {}) {
                             include: { transactions: true },
                         });
                         responseData = { success: true, data: history };
+                        break;
+                    }
+
+                    case 'creditNotes:list': {
+                        const data = await getCreditNoteService().listCreditNotes(prisma, args);
+                        responseData = { success: true, data };
+                        break;
+                    }
+
+                    case 'creditNotes:getByCode': {
+                        const data = await getCreditNoteService().getCreditNoteByCode(prisma, args?.code);
+                        responseData = { success: true, data };
+                        break;
+                    }
+
+                    case 'creditNotes:getActiveForCustomer': {
+                        const data = await getCreditNoteService().getActiveCreditsForCustomer(prisma, args?.phone);
+                        responseData = { success: true, data };
+                        break;
+                    }
+
+                    case 'creditNotes:issue': {
+                        const data = await getCreditNoteService().issueCreditNote(prisma, args, user);
+                        responseData = { success: true, data };
+                        break;
+                    }
+
+                    case 'creditNotes:cancel': {
+                        const data = await getCreditNoteService().cancelCreditNote(prisma, args?.id, args?.reason, user);
+                        responseData = { success: true, data };
+                        break;
+                    }
+
+                    case 'messaging:sendInvoice': {
+                        let config = {
+                            enabled: true,
+                            autoSend: false,
+                            defaultChannel: 'WHATSAPP_FIRST',
+                            includeStoreCredit: true,
+                            includeShopDetails: true,
+                            defaultCountryCode: '91',
+                            whatsappProvider: 'DIRECT',
+                            smsProvider: 'DIRECT',
+                        };
+                        try {
+                            const row = await prisma.setting.findUnique({ where: { key: 'MESSAGING_CONFIG' } });
+                            if (row?.value) config = { ...config, ...JSON.parse(row.value) };
+                        } catch {}
+                        const result = await getMessagingService().sendInvoiceMessage(prisma, args, config);
+                        responseData = { success: result.success, data: result, error: result.error };
+                        break;
+                    }
+
+                    case 'messaging:sendStoreCredit': {
+                        let config = {
+                            enabled: true,
+                            autoSend: false,
+                            defaultChannel: 'WHATSAPP_FIRST',
+                            includeStoreCredit: true,
+                            includeShopDetails: true,
+                            defaultCountryCode: '91',
+                            whatsappProvider: 'DIRECT',
+                            smsProvider: 'DIRECT',
+                        };
+                        try {
+                            const row = await prisma.setting.findUnique({ where: { key: 'MESSAGING_CONFIG' } });
+                            if (row?.value) config = { ...config, ...JSON.parse(row.value) };
+                        } catch {}
+                        const result = await getMessagingService().sendStoreCreditMessage(prisma, args, config);
+                        responseData = { success: result.success, data: result, error: result.error };
+                        break;
+                    }
+
+                    case 'messaging:getLogs': {
+                        const data = await getMessagingService().getMessageLogs(prisma, args);
+                        responseData = { success: true, data };
+                        break;
+                    }
+
+                    case 'customer:updateWhatsAppStatus': {
+                        await getMessagingService().updateCustomerWhatsAppStatus(prisma, args?.phone, args?.hasWhatsApp);
+                        responseData = { success: true };
+                        break;
+                    }
+
+                    case 'app:openExternal': {
+                        // In browser/dev mode, open url in window or notify
+                        responseData = { success: true };
                         break;
                     }
 

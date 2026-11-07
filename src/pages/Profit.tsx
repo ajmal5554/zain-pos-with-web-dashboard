@@ -384,8 +384,32 @@ export const Profit: React.FC = () => {
                             </div>
                         ))}
                     </div>
-                    <div className="card p-12 flex justify-center">
-                        <Loading text="Compiling purchase cost allocations and financial cohorts..." />
+
+                    {/* Financial Waterfall Flow Skeleton */}
+                    <div className="card p-5 animate-pulse space-y-4">
+                        <div className="flex items-center justify-between pb-3 border-b border-gray-100 dark:border-dark-border">
+                            <div className="h-5 bg-gray-200 dark:bg-gray-700 rounded w-48" />
+                            <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-36" />
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2.5">
+                            {[1, 2, 3, 4, 5, 6, 7].map((j) => (
+                                <div key={j} className="p-3 bg-gray-50 dark:bg-dark-bg rounded-xl border border-gray-200 dark:border-dark-border space-y-2">
+                                    <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-16 mx-auto" />
+                                    <div className="h-5 bg-gray-200 dark:bg-gray-700 rounded w-20 mx-auto" />
+                                    <div className="h-2.5 bg-gray-200 dark:bg-gray-700 rounded w-14 mx-auto" />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Cost Allocation & Breakdown Table Skeleton */}
+                    <div className="card p-5 animate-pulse space-y-4">
+                        <div className="h-5 bg-gray-200 dark:bg-gray-700 rounded w-52 mb-2" />
+                        <div className="space-y-3">
+                            {[1, 2, 3, 4].map((k) => (
+                                <div key={k} className="h-10 bg-gray-100 dark:bg-dark-bg/60 rounded-lg" />
+                            ))}
+                        </div>
                     </div>
                 </div>
             )}

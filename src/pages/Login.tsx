@@ -5,6 +5,7 @@ import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { useAuthStore } from '../store/authStore';
 import { authService } from '../services/auth.service';
+import { WindowControls } from '../components/Layout/WindowControls';
 
 export const Login: React.FC = () => {
     const [username, setUsername] = useState('');
@@ -50,7 +51,8 @@ export const Login: React.FC = () => {
         try {
             const user = await authService.login(username, password);
             login(user);
-            navigate('/');
+            const destination = '/';
+            navigate(destination);
         } catch (err: any) {
             setError(err.message || 'Login failed');
         } finally {
@@ -59,7 +61,15 @@ export const Login: React.FC = () => {
     };
 
     return (
-        <div className="min-h-full h-full relative overflow-hidden flex items-center justify-center p-4 bg-gradient-to-br from-gray-50 via-blue-50 to-indigo-100 dark:from-gray-900 dark:via-slate-900 dark:to-gray-900">
+        <div
+            className="min-h-full h-full relative overflow-hidden flex items-center justify-center p-4 bg-gradient-to-br from-gray-50 via-blue-50 to-indigo-100 dark:from-gray-900 dark:via-slate-900 dark:to-gray-900 select-none"
+            style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+        >
+            {/* Top-Right Window Controls */}
+            <div className="absolute top-2.5 right-2.5 z-50 flex items-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+                <WindowControls />
+            </div>
+
             {/* Subtle Pattern Overlay */}
             <div className="absolute inset-0 opacity-[0.03]" style={{
                 backgroundImage: `radial-gradient(circle at 2px 2px, rgba(99, 102, 241, 0.15) 1px, transparent 0)`,
@@ -70,7 +80,7 @@ export const Login: React.FC = () => {
             <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-br from-blue-400/20 to-indigo-500/20 rounded-full blur-3xl"></div>
             <div className="absolute bottom-0 left-0 w-96 h-96 bg-gradient-to-tr from-indigo-400/20 to-blue-500/20 rounded-full blur-3xl"></div>
 
-            <div className="w-full max-w-md relative z-10">
+            <div className="w-full max-w-md relative z-10" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
                 <div className="bg-white dark:bg-gray-800/95 backdrop-blur-sm rounded-2xl shadow-2xl border border-gray-200/50 dark:border-gray-700/50 p-8">
                     {/* Logo & Branding */}
                     <div className="text-center mb-8">

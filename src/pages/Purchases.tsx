@@ -117,7 +117,8 @@ export const Purchases: React.FC = () => {
     const [itemSearch, setItemSearch] = useState('');
     const [options, setOptions] = useState<PurchaseItemOption[]>([]);
     const [busy, setBusy] = useState(false);
-    const [loading, setLoading] = useState(false);
+    // Avoid showing an empty purchase history before the first request finishes.
+    const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [confirm, setConfirm] = useState<'receive' | 'discard' | null>(null);
     const [detail, setDetail] = useState<PurchaseDetail | null>(() => {
@@ -138,6 +139,11 @@ export const Purchases: React.FC = () => {
 
     const allowed = !!user && (user.role === 'ADMIN' || (user.permManageInventory && user.permViewCostPrice));
     const form = draft.form;
+    const invoiceCountLabel = loading && !history.length
+        ? 'Loading invoices…'
+        : error && !history.length
+            ? 'Invoices unavailable'
+            : `${total} ${total === 1 ? 'invoice' : 'invoices'}`;
 
     const subtotal = form.lines.reduce((sum, row) => sum + Math.round(row.unitCost * 100) * row.quantity, 0);
     const taxTotal = form.tax
@@ -338,14 +344,14 @@ export const Purchases: React.FC = () => {
 
                 <div className="flex items-center gap-3">
                     <button
-                        className="btn btn-primary btn-sm flex items-center gap-1.5 px-4 py-2 text-xs shadow-xs"
+                        className="btn btn-primary flex items-center gap-1.5 px-4 py-2 text-sm shadow-xs"
                         onClick={() => setTab(tab === 'new' ? 'history' : 'new')}
                     >
                         {tab === 'new' ? 'Purchase history' : 'New purchase'}
                     </button>
                     {tab === 'history' && (
                         <span className="badge badge-secondary text-xs px-2.5 py-1">
-                            {total} {total === 1 ? 'invoice' : 'invoices'}
+                            {invoiceCountLabel}
                         </span>
                     )}
                 </div>
@@ -368,7 +374,7 @@ export const Purchases: React.FC = () => {
                             </div>
                         </div>
                         <button
-                            className="btn btn-secondary btn-sm px-3.5 py-2 text-xs shadow-xs whitespace-nowrap"
+                            className="btn btn-secondary px-3.5 py-2 text-sm shadow-xs whitespace-nowrap"
                             onClick={refresh}
                             disabled={loading}
                         >
@@ -528,7 +534,23 @@ export const Purchases: React.FC = () => {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-100 dark:divide-dark-border">
-                                    {history.map((row) => (
+                                    {loading && !history.length ? (
+                                        Array.from({ length: 5 }).map((_, i) => (
+                                            <tr key={i} className="animate-pulse">
+                                                <td className="px-4 py-3.5"><div className="h-4 w-24 bg-gray-200 dark:bg-gray-700 rounded" /></td>
+                                                <td className="px-4 py-3.5 space-y-1.5">
+                                                    <div className="h-4 w-32 bg-gray-200 dark:bg-gray-700 rounded" />
+                                                    <div className="h-3 w-20 bg-gray-200 dark:bg-gray-700 rounded" />
+                                                </td>
+                                                <td className="px-4 py-3.5"><div className="h-4 w-24 bg-gray-200 dark:bg-gray-700 rounded" /></td>
+                                                <td className="px-4 py-3.5"><div className="h-5 w-16 bg-gray-200 dark:bg-gray-700 rounded-full" /></td>
+                                                <td className="px-4 py-3.5 text-right"><div className="h-4 w-16 bg-gray-200 dark:bg-gray-700 rounded ml-auto" /></td>
+                                                <td className="px-4 py-3.5 text-right"><div className="h-4 w-16 bg-gray-200 dark:bg-gray-700 rounded ml-auto" /></td>
+                                                <td className="px-4 py-3.5 text-right"><div className="h-4 w-16 bg-gray-200 dark:bg-gray-700 rounded ml-auto" /></td>
+                                                <td className="px-4 py-3.5 text-right"><div className="h-7 w-20 bg-gray-200 dark:bg-gray-700 rounded ml-auto" /></td>
+                                            </tr>
+                                        ))
+                                    ) : history.map((row) => (
                                         <tr key={row.id} className="hover:bg-gray-50/80 dark:hover:bg-dark-bg/40 transition-colors">
                                             <td className="px-4 py-3 font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap text-xs">
                                                 {row.invoiceDate}
@@ -587,16 +609,16 @@ export const Purchases: React.FC = () => {
                             </table>
                         </div>
 
-                        {!history.length && (
+                        {!history.length && !loading && (
                             <div className="p-8 text-center text-sm text-gray-500">
-                                {loading ? 'Loading purchases…' : 'No purchases recorded. Opening audit stock is separate.'}
+                                {error ? 'Could not load purchases. Use Retry or Refresh to try again.' : 'No purchases recorded. Opening audit stock is separate.'}
                             </div>
                         )}
 
                         {/* Pagination Bar */}
                         <div className="px-4 py-3 border-t border-gray-100 dark:border-dark-border bg-gray-50/50 dark:bg-dark-bg/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-gray-600 dark:text-gray-400">
                             <span className="font-medium">
-                                {total} {total === 1 ? 'invoice' : 'invoices'}
+                                {invoiceCountLabel}
                             </span>
                             <div className="flex items-center gap-3">
                                 <button
@@ -782,17 +804,20 @@ export const Purchases: React.FC = () => {
                                                                     min={field === 'quantity' ? 1 : 0}
                                                                     step={field === 'quantity' ? 1 : '0.01'}
                                                                     className={`${control} min-w-24 text-right font-mono`}
-                                                                    value={line[field]}
+                                                                    value={line[field] === 0 ? '' : line[field]}
+                                                                    placeholder="0"
+                                                                    onFocus={(e) => e.target.select()}
                                                                     onWheel={(e) => e.currentTarget.blur()}
-                                                                    onChange={(e) =>
+                                                                    onChange={(e) => {
+                                                                        const raw = e.target.value;
                                                                         change({
                                                                             lines: form.lines.map((r, i) =>
                                                                                 i === index
-                                                                                    ? { ...r, [field]: Number(e.target.value) }
+                                                                                    ? { ...r, [field]: raw === '' ? 0 : Number(raw) }
                                                                                     : r
                                                                             ),
-                                                                        })
-                                                                    }
+                                                                        });
+                                                                    }}
                                                                 />
                                                             </td>
                                                         )
@@ -848,9 +873,14 @@ export const Purchases: React.FC = () => {
                                             min="0"
                                             step="0.01"
                                             className={control}
-                                            value={form[field]}
+                                            value={form[field] === 0 ? '' : form[field]}
+                                            placeholder="0.00"
+                                            onFocus={(e) => e.target.select()}
                                             onWheel={(e) => e.currentTarget.blur()}
-                                            onChange={(e) => change({ [field]: Number(e.target.value) })}
+                                            onChange={(e) => {
+                                                const raw = e.target.value;
+                                                change({ [field]: raw === '' ? 0 : Number(raw) });
+                                            }}
                                         />
                                     </label>
                                 ))}
@@ -1150,9 +1180,14 @@ export const Purchases: React.FC = () => {
                                 min="0.01"
                                 step="0.01"
                                 className={control}
-                                value={payInput.amount}
+                                value={payInput.amount === 0 ? '' : payInput.amount}
+                                placeholder="0.00"
+                                onFocus={(e) => e.target.select()}
                                 onWheel={(e) => e.currentTarget.blur()}
-                                onChange={(e) => setPayInput({ ...payInput, amount: Number(e.target.value) })}
+                                onChange={(e) => {
+                                    const raw = e.target.value;
+                                    setPayInput({ ...payInput, amount: raw === '' ? 0 : Number(raw) });
+                                }}
                             />
                         </label>
                         <label className="space-y-1 block">
