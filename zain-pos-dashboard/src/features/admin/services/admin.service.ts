@@ -24,7 +24,6 @@ export interface AdminUser {
     permBulkUpdate: boolean;
     permBackDateSale: boolean;
     permViewInsights: boolean;
-    permManageCashDrawer?: boolean;
     maxDiscount: number;
 }
 

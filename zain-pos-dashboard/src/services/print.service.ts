@@ -26,9 +26,6 @@ export interface ReceiptBlock {
     showVariantInfo?: boolean;
     tableHeaderBold?: boolean;
     tableRowBold?: boolean;
-    showMRP?: boolean;
-    showRate?: boolean;
-    showRateSubline?: boolean;
   };
   visible: boolean;
 }
@@ -42,7 +39,6 @@ export interface ReceiptData {
   gstin: string;
   logo?: string;
   customerName?: string;
-  customerPhone?: string;
   items: Array<{
     name: string;
     variantInfo?: string;
@@ -69,8 +65,6 @@ export interface ReceiptData {
   isReplacementBill?: boolean;
   originalBillNo?: string | number;
   exchangeCreditAmount?: number;
-  storeCreditAmount?: number;
-  creditNoteCodes?: string;
 }
 
 export interface ReceiptPrinterConfig {

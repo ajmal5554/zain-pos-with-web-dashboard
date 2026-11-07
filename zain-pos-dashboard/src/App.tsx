@@ -15,10 +15,6 @@ import ForecastingPage from './pages/Forecasting';
 import UsersPage from './pages/Users';
 import PermissionsPage from './pages/Permissions';
 import SettingsPage from './pages/Settings';
-import ProfitPage from './pages/Profit';
-import ExpensesPage from './pages/Expenses';
-import CashDrawerPage from './pages/CashDrawer';
-import PurchasesPage from './pages/Purchases';
 import './index.css';
 import { Sparkles } from 'lucide-react';
 
@@ -75,46 +71,6 @@ function AppRoutes() {
           <PrivateRoute>
             <DashboardLayout>
               <Sales />
-            </DashboardLayout>
-          </PrivateRoute>
-        }
-      />
-      <Route
-        path="/profit"
-        element={
-          <PrivateRoute>
-            <DashboardLayout>
-              <ProfitPage />
-            </DashboardLayout>
-          </PrivateRoute>
-        }
-      />
-      <Route
-        path="/expenses"
-        element={
-          <PrivateRoute>
-            <DashboardLayout>
-              <ExpensesPage />
-            </DashboardLayout>
-          </PrivateRoute>
-        }
-      />
-      <Route
-        path="/cash-drawer"
-        element={
-          <PrivateRoute>
-            <DashboardLayout>
-              <CashDrawerPage />
-            </DashboardLayout>
-          </PrivateRoute>
-        }
-      />
-      <Route
-        path="/purchases"
-        element={
-          <PrivateRoute>
-            <DashboardLayout>
-              <PurchasesPage />
             </DashboardLayout>
           </PrivateRoute>
         }
