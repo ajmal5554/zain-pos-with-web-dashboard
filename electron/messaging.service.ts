@@ -7,6 +7,11 @@ import type {
     MessageResult,
     MessageLogRecord,
     MessagingChannel,
+    SendCampaignPayload,
+    CampaignDispatchResult,
+    WhatsAppConversation,
+    WhatsAppInboxMessage,
+    WhatsAppWebhookConfig,
 } from '../src/types/messaging';
 import {
     DEFAULT_MESSAGING_CONFIG,
@@ -42,38 +47,111 @@ async function sendViaMetaWhatsApp(
     phone: string,
     text: string,
     config: MessagingConfig,
-    templateOptions?: { templateName?: string; parameters?: string[] }
+    templateOptions?: {
+        templateName?: string;
+        parameters?: string[];
+        languageCode?: string;
+        headerImage?: { id?: string; link?: string };
+        carouselCards?: Array<{
+            cardIndex: number;
+            mediaId: string;
+            bodyParams: string[];
+            quickReplyPayload?: string;
+        }>;
+    }
 ): Promise<string> {
     if (!config.metaPhoneNumberId || !config.metaAccessToken) {
         throw new Error('Meta WhatsApp Cloud API credentials missing (PhoneNumberId or AccessToken).');
     }
 
     const { waFormat } = normalizePhoneNumber(phone, config.defaultCountryCode);
-    const url = `https://graph.facebook.com/v19.0/${config.metaPhoneNumberId}/messages`;
+    const url = `https://graph.facebook.com/v22.0/${config.metaPhoneNumberId}/messages`;
 
     const templateName = templateOptions?.templateName || config.metaTemplateName;
     const isTemplate = Boolean(templateName && templateName.toLowerCase() !== 'none');
 
     let bodyPayload: any;
+    let langCode = (templateOptions?.languageCode || config.metaLanguageCode || 'en').trim();
     if (isTemplate) {
-        let langCode = (config.metaLanguageCode || 'en').trim();
         if (/^english$/i.test(langCode)) langCode = 'en';
         else if (/^english\s*\(?us\)?$/i.test(langCode)) langCode = 'en_US';
         else if (/^english\s*\(?uk\)?$/i.test(langCode) || /^english\s*\(?gb\)?$/i.test(langCode)) langCode = 'en_GB';
+
+        const components: any[] = [];
+        const hasCarousel = Boolean(templateOptions?.carouselCards && templateOptions.carouselCards.length > 0);
+
+        // Header image support (single image / collage campaigns)
+        if (!hasCarousel && templateOptions?.headerImage) {
+            if (templateOptions.headerImage.id) {
+                components.push({
+                    type: 'header',
+                    parameters: [
+                        {
+                            type: 'image',
+                            image: { id: templateOptions.headerImage.id },
+                        },
+                    ],
+                });
+            } else if (templateOptions.headerImage.link) {
+                components.push({
+                    type: 'header',
+                    parameters: [
+                        {
+                            type: 'image',
+                            image: { link: templateOptions.headerImage.link },
+                        },
+                    ],
+                });
+            }
+        }
+
+        const params = templateOptions?.parameters;
+        if (params && params.length > 0 && templateName !== 'hello_world' && !templateName?.startsWith('3p_direct')) {
+            components.push({
+                type: 'body',
+                parameters: params.map((p) => ({ type: 'text', text: String(p) })),
+            });
+        }
+
+        // Swipeable Media Card Carousel support
+        if (hasCarousel && templateOptions?.carouselCards) {
+            components.push({
+                type: 'carousel',
+                cards: templateOptions.carouselCards.map((card) => ({
+                    card_index: card.cardIndex,
+                    components: [
+                        {
+                            type: 'header',
+                            parameters: [{ type: 'image', image: { id: card.mediaId } }],
+                        },
+                        {
+                            type: 'body',
+                            parameters: card.bodyParams.map((p) => ({ type: 'text', text: String(p) })),
+                        },
+                        {
+                            type: 'button',
+                            sub_type: 'quick_reply',
+                            index: '0',
+                            parameters: [
+                                {
+                                    type: 'payload',
+                                    payload: card.quickReplyPayload || `BOOK_COLOR_${card.cardIndex + 1}`,
+                                },
+                            ],
+                        },
+                    ],
+                })),
+            });
+        }
 
         const templateObj: any = {
             name: templateName,
             language: { code: langCode },
         };
-        const params = templateOptions?.parameters;
-        if (params && params.length > 0 && templateName !== 'hello_world') {
-            templateObj.components = [
-                {
-                    type: 'body',
-                    parameters: params.map((p) => ({ type: 'text', text: String(p) })),
-                },
-            ];
+        if (components.length > 0) {
+            templateObj.components = components;
         }
+
         bodyPayload = {
             messaging_product: 'whatsapp',
             recipient_type: 'individual',
@@ -115,6 +193,18 @@ async function sendViaMetaWhatsApp(
         // Error code 131047: Re-engagement window (outside 24 hours)
         if (code === 131047) {
             throw new Error(`Meta API: Customer has not messaged business in 24 hours. A registered Meta template (e.g. tax_invoice) must be used.`);
+        }
+
+        // Error code 132001: Template does not exist in translation / still pending approval
+        if (code === 132001) {
+            throw new Error(`Template "${templateName}" (${langCode}) is still undergoing review by Meta (Status: In Review / Pending Approval). Once Meta approves it, messages will send immediately.`);
+        }
+        if (code === 132015) {
+            throw new Error(`Template "${templateName}" is currently paused by Meta.`);
+        }
+        // Error code 131042: Payment / Wallet Out of Funds
+        if (code === 131042 || msg.includes('payment') || msg.includes('billing') || msg.includes('insufficient funds')) {
+            throw new Error(`Meta WhatsApp Prepaid Wallet Out of Funds (code ${code || 131042}). Please add funds in Meta Business Settings -> Billing to resume sending.`);
         }
 
         throw new Error(errObj.message || err.message || 'Meta WhatsApp API request failed');
@@ -954,5 +1044,402 @@ export async function getMessageLogs(db: any, query?: { saleId?: string; phone?:
     } catch (err) {
         console.warn('Failed to query MessageLog table:', err);
         return [];
+    }
+}
+
+/**
+ * Upload an image file directly to Meta WhatsApp Cloud API Media endpoint
+ */
+export async function uploadWhatsAppMedia(
+    fileBuffer: Buffer,
+    mimeType: string,
+    filename: string,
+    config: MessagingConfig
+): Promise<string> {
+    if (!config.metaPhoneNumberId || !config.metaAccessToken) {
+        throw new Error('Meta WhatsApp Cloud API credentials missing (PhoneNumberId or AccessToken).');
+    }
+
+    const FormData = require('form-data');
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('file', fileBuffer, { filename: filename || 'product.jpg', contentType: mimeType || 'image/jpeg' });
+    form.append('type', mimeType || 'image/jpeg');
+
+    const url = `https://graph.facebook.com/v22.0/${config.metaPhoneNumberId}/media`;
+    const res = await axios.post(url, form, {
+        headers: {
+            ...form.getHeaders(),
+            Authorization: `Bearer ${config.metaAccessToken}`,
+        },
+        timeout: 30000,
+    });
+
+    if (!res.data?.id) {
+        throw new Error('Meta API did not return a valid media ID');
+    }
+
+    return res.data.id;
+}
+
+/**
+ * Broadcast marketing messages to a list of recipients
+ */
+export async function sendCampaignMessages(
+    db: any,
+    payload: SendCampaignPayload,
+    config: MessagingConfig
+): Promise<CampaignDispatchResult> {
+    const result: CampaignDispatchResult = {
+        total: payload.recipients.length,
+        sent: 0,
+        failed: 0,
+        errors: [],
+    };
+
+    const templateName = payload.templateName || 'new_stock_arrival';
+
+    for (const recipient of payload.recipients) {
+        if (!recipient.phone || !recipient.phone.trim()) {
+            result.failed++;
+            result.errors.push({ recipient: recipient.name || 'Unknown', phone: '', error: 'Missing phone number' });
+            continue;
+        }
+
+        const recipientFirstName = (recipient.name || 'Valued Customer').trim().split(/\s+/)[0];
+        const isCarousel = Boolean(payload.carouselCards && payload.carouselCards.length > 0);
+
+        // Positional parameters: {{1}} is Customer Name
+        const params: string[] = isCarousel
+            ? [recipientFirstName, payload.templateParams?.[0] || 'New Collection']
+            : [recipientFirstName, ...(payload.templateParams || [])];
+
+        const headerImage = !isCarousel
+            ? payload.headerMediaId
+                ? { id: payload.headerMediaId }
+                : payload.headerMediaUrl
+                ? { link: payload.headerMediaUrl }
+                : undefined
+            : undefined;
+
+        const mappedCarouselCards = isCarousel
+            ? payload.carouselCards!.map((card, idx) => ({
+                  cardIndex: idx,
+                  mediaId: card.mediaId,
+                  bodyParams: [card.colorName || `Color ${idx + 1}`, card.sizes || 'All Sizes', card.price || '999'],
+                  quickReplyPayload: `BOOK_${(card.colorName || `COLOR_${idx + 1}`).toUpperCase().replace(/\s+/g, '_')}`,
+              }))
+            : undefined;
+
+        try {
+            await sendViaMetaWhatsApp(recipient.phone, `[Campaign: ${payload.campaignName}]`, config, {
+                templateName,
+                languageCode: payload.languageCode || config.metaLanguageCode || 'en_US',
+                parameters: params,
+                headerImage,
+                carouselCards: mappedCarouselCards,
+            });
+
+            result.sent++;
+
+            await logMessage(db, {
+                customerName: recipient.name,
+                customerPhone: recipient.phone,
+                channel: 'WHATSAPP',
+                provider: 'WhatsApp Cloud API',
+                status: 'SENT',
+                fallback: false,
+                messageText: `[Campaign: ${payload.campaignName}] Template: ${templateName}`,
+            });
+
+            // Delay between dispatches to ensure smooth pacing
+            await new Promise((resolve) => setTimeout(resolve, 150));
+        } catch (err: any) {
+            result.failed++;
+            result.errors.push({
+                recipient: recipient.name || recipient.phone,
+                phone: recipient.phone,
+                error: err.message,
+            });
+
+            await logMessage(db, {
+                customerName: recipient.name,
+                customerPhone: recipient.phone,
+                channel: 'WHATSAPP',
+                provider: 'WhatsApp Cloud API',
+                status: 'FAILED',
+                fallback: false,
+                messageText: `[Campaign: ${payload.campaignName}] Template: ${templateName}`,
+                error: err.message,
+            });
+        }
+    }
+
+    return result;
+}
+
+/**
+ * Retrieve Cloud API URL and sync secret from SQLite Setting table
+ */
+async function getCloudApiConnection(db: any): Promise<{ apiUrl: string; syncSecret: string }> {
+    const [urlRow, secretRow] = await Promise.all([
+        db.setting.findUnique({ where: { key: 'CLOUD_API_URL' } }).catch(() => null),
+        db.setting.findUnique({ where: { key: 'CLOUD_SYNC_SECRET' } }).catch(() => null),
+    ]);
+
+    const apiUrl = String(urlRow?.value || '').trim().replace(/\/+$/, '');
+    const syncSecret = String(secretRow?.value || process.env.CLOUD_SYNC_SECRET || '').trim();
+    return { apiUrl, syncSecret };
+}
+
+/**
+ * Push Meta WhatsApp credentials & auto-reply settings to the Cloud API webhook server
+ */
+export async function syncCloudWhatsAppConfig(
+    db: any,
+    config: MessagingConfig
+): Promise<{ success: boolean; webhookUrl?: string; error?: string }> {
+    const { apiUrl, syncSecret } = await getCloudApiConnection(db);
+    if (!apiUrl || !syncSecret) {
+        return { success: false, error: 'Cloud API URL or sync secret is not configured.' };
+    }
+
+    try {
+        const res = await axios.post(
+            `${apiUrl}/api/whatsapp/config`,
+            {
+                metaPhoneNumberId: config.metaPhoneNumberId || '',
+                metaAccessToken: config.metaAccessToken || '',
+                autoReplyEnabled: config.autoReplyEnabled ?? true,
+                forwardPhone: config.autoReplyForwardPhone || '919037106449',
+                autoReplyMessage: config.autoReplyMessage || DEFAULT_MESSAGING_CONFIG.autoReplyMessage,
+                verifyToken: config.webhookVerifyToken || DEFAULT_MESSAGING_CONFIG.webhookVerifyToken,
+            },
+            {
+                headers: { 'x-sync-secret': syncSecret },
+                timeout: 12000,
+            }
+        );
+
+        return {
+            success: Boolean(res.data?.success),
+            webhookUrl: `${apiUrl}/api/whatsapp/webhook`,
+        };
+    } catch (err: any) {
+        return {
+            success: false,
+            error: err.response?.data?.error || err.message || 'Failed to sync webhook config to Cloud API.',
+        };
+    }
+}
+
+/**
+ * Fetch Cloud Webhook status & configuration
+ */
+export async function getCloudWebhookStatus(
+    db: any,
+    localConfig: MessagingConfig
+): Promise<WhatsAppWebhookConfig> {
+    const { apiUrl, syncSecret } = await getCloudApiConnection(db);
+    const webhookUrl = apiUrl ? `${apiUrl}/api/whatsapp/webhook` : '';
+
+    const fallback: WhatsAppWebhookConfig = {
+        webhookUrl,
+        verifyToken: localConfig.webhookVerifyToken || DEFAULT_MESSAGING_CONFIG.webhookVerifyToken || 'zain_pos_wa_webhook_2026',
+        autoReplyEnabled: localConfig.autoReplyEnabled ?? true,
+        forwardPhone: localConfig.autoReplyForwardPhone || '9037106449',
+        autoReplyMessage: localConfig.autoReplyMessage || DEFAULT_MESSAGING_CONFIG.autoReplyMessage || '',
+        cooldownHours: 6,
+        hasAccessToken: Boolean(localConfig.metaAccessToken),
+        metaPhoneNumberId: localConfig.metaPhoneNumberId,
+        cloudReachable: false,
+    };
+
+    if (!apiUrl || !syncSecret) return fallback;
+
+    try {
+        const res = await axios.get(`${apiUrl}/api/whatsapp/config`, {
+            headers: { 'x-sync-secret': syncSecret },
+            timeout: 8000,
+        });
+
+        const cloudData = res.data?.data;
+        if (cloudData) {
+            return {
+                webhookUrl,
+                verifyToken: cloudData.verifyToken || fallback.verifyToken,
+                autoReplyEnabled: typeof cloudData.autoReplyEnabled === 'boolean' ? cloudData.autoReplyEnabled : fallback.autoReplyEnabled,
+                forwardPhone: cloudData.forwardPhone || fallback.forwardPhone,
+                autoReplyMessage: cloudData.autoReplyMessage || fallback.autoReplyMessage,
+                cooldownHours: cloudData.cooldownHours || 6,
+                hasAccessToken: Boolean(cloudData.hasAccessToken),
+                metaPhoneNumberId: cloudData.metaPhoneNumberId || fallback.metaPhoneNumberId,
+                cloudReachable: true,
+            };
+        }
+    } catch (err) {
+        console.warn('Cloud WhatsApp webhook endpoint unreachable or not deployed yet:', (err as any)?.message);
+    }
+
+    return fallback;
+}
+
+/**
+ * Fetch incoming/active WhatsApp conversations from Cloud Inbox
+ */
+export async function getCloudConversations(db: any): Promise<{ conversations: WhatsAppConversation[]; cloudReachable: boolean; error?: string }> {
+    const { apiUrl, syncSecret } = await getCloudApiConnection(db);
+    if (!apiUrl || !syncSecret) {
+        return { conversations: [], cloudReachable: false, error: 'Cloud API URL not configured.' };
+    }
+
+    try {
+        const res = await axios.get(`${apiUrl}/api/whatsapp/conversations`, {
+            headers: { 'x-sync-secret': syncSecret },
+            timeout: 10000,
+        });
+
+        const threads: WhatsAppConversation[] = Array.isArray(res.data?.data) ? res.data.data : [];
+
+        // Enrich customer names from local POS Customer table if available
+        if (threads.length > 0 && db.customer?.findMany) {
+            try {
+                const localCustomers: any[] = await db.customer.findMany({
+                    select: { name: true, phone: true },
+                });
+                const phoneToLocalName = new Map<string, string>();
+                for (const c of localCustomers) {
+                    if (!c.phone || !c.name) continue;
+                    const norm = normalizePhoneNumber(c.phone);
+                    if (norm.tenDigit) phoneToLocalName.set(norm.tenDigit, c.name);
+                }
+
+                for (const t of threads) {
+                    const norm = normalizePhoneNumber(t.phone);
+                    const localName = phoneToLocalName.get(norm.tenDigit);
+                    if (localName && (!t.name || t.name === t.phone)) {
+                        t.name = localName;
+                    }
+                }
+            } catch {
+                // Non-fatal enrichment failure
+            }
+        }
+
+        return { conversations: threads, cloudReachable: true };
+    } catch (err: any) {
+        return {
+            conversations: [],
+            cloudReachable: false,
+            error: err.response?.data?.error || err.message || 'Failed to fetch WhatsApp conversations.',
+        };
+    }
+}
+
+function normalizeWaThreadPhone(phone: string): string {
+    const digits = (phone || '').replace(/\D/g, '');
+    if (digits.length === 10) return `91${digits}`;
+    if (digits.length === 11 && digits.startsWith('0')) return `91${digits.slice(1)}`;
+    return digits;
+}
+
+/**
+ * Fetch full chat message history for one phone number from Cloud Inbox
+ */
+export async function getCloudConversationMessages(
+    db: any,
+    phone: string
+): Promise<{ messages: WhatsAppInboxMessage[]; windowOpen: boolean; optedOut: boolean; error?: string }> {
+    const { apiUrl, syncSecret } = await getCloudApiConnection(db);
+    if (!apiUrl || !syncSecret) {
+        return { messages: [], windowOpen: false, optedOut: false, error: 'Cloud API URL not configured.' };
+    }
+
+    try {
+        const target = normalizeWaThreadPhone(phone);
+        const res = await axios.get(`${apiUrl}/api/whatsapp/messages/${encodeURIComponent(target)}`, {
+            headers: { 'x-sync-secret': syncSecret },
+            timeout: 10000,
+        });
+
+        const data = res.data?.data || {};
+        return {
+            messages: Array.isArray(data.messages) ? data.messages : [],
+            windowOpen: Boolean(data.windowOpen),
+            optedOut: Boolean(data.contact?.optedOut),
+        };
+    } catch (err: any) {
+        return {
+            messages: [],
+            windowOpen: false,
+            optedOut: false,
+            error: err.response?.data?.error || err.message,
+        };
+    }
+}
+
+/**
+ * Send a free-form WhatsApp reply within the 24-hour customer service window via Cloud Inbox
+ */
+export async function sendCloudInboxReply(
+    db: any,
+    phone: string,
+    text: string
+): Promise<{ success: boolean; message?: WhatsAppInboxMessage; error?: string }> {
+    const { apiUrl, syncSecret } = await getCloudApiConnection(db);
+    if (!apiUrl || !syncSecret) {
+        return { success: false, error: 'Cloud API URL not configured.' };
+    }
+
+    try {
+        const target = normalizeWaThreadPhone(phone);
+        const norm = normalizePhoneNumber(phone);
+        const res = await axios.post(
+            `${apiUrl}/api/whatsapp/reply`,
+            { phone: target, text },
+            {
+                headers: { 'x-sync-secret': syncSecret },
+                timeout: 12000,
+            }
+        );
+
+        await logMessage(db, {
+            customerPhone: norm.tenDigit || target || phone,
+            channel: 'WHATSAPP',
+            provider: 'WhatsApp Cloud API (Inbox Reply)',
+            status: 'SENT',
+            fallback: false,
+            messageText: text,
+        });
+
+        return { success: true, message: res.data?.data };
+    } catch (err: any) {
+        return {
+            success: false,
+            error: err.response?.data?.error || err.message || 'Failed to send reply.',
+        };
+    }
+}
+
+/**
+ * Mark unread messages in a thread as read
+ */
+export async function markCloudConversationRead(db: any, phone: string): Promise<boolean> {
+    const { apiUrl, syncSecret } = await getCloudApiConnection(db);
+    if (!apiUrl || !syncSecret) return false;
+
+    try {
+        const target = normalizeWaThreadPhone(phone);
+        await axios.post(
+            `${apiUrl}/api/whatsapp/mark-read/${encodeURIComponent(target)}`,
+            {},
+            {
+                headers: { 'x-sync-secret': syncSecret },
+                timeout: 6000,
+            }
+        );
+        return true;
+    } catch {
+        return false;
     }
 }

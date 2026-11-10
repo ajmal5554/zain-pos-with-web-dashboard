@@ -14,9 +14,16 @@ export interface MessagingConfig {
     // WhatsApp
     whatsappProvider: WhatsAppProvider;
     metaPhoneNumberId?: string;
+    metaWabaId?: string;
     metaAccessToken?: string;
     metaTemplateName?: string;
     metaLanguageCode?: string;
+
+    // Auto-Reply & Cloud Webhook
+    autoReplyEnabled?: boolean;
+    autoReplyForwardPhone?: string;
+    autoReplyMessage?: string;
+    webhookVerifyToken?: string;
 
     // SMS
     smsProvider: SmsProvider;
@@ -51,6 +58,11 @@ export const DEFAULT_MESSAGING_CONFIG: MessagingConfig = {
     whatsappProvider: 'DIRECT',
     metaTemplateName: 'tax_invoice',
     metaLanguageCode: 'en_US',
+    autoReplyEnabled: true,
+    autoReplyForwardPhone: '9037106449',
+    autoReplyMessage:
+        'Thank you for messaging *Zain Gents Palace*! 🙏 We have received your message and our team can reply directly here.\n\nFor immediate stock & size inquiries on WhatsApp, message our store desk:\n👉 https://wa.me/919037106449\n\nOr call us at 📞 +91 90371 06449',
+    webhookVerifyToken: 'zain_pos_wa_webhook_2026',
     smsProvider: 'DIRECT',
 };
 
@@ -135,5 +147,76 @@ export interface MessageLogRecord {
     messageText: string;
     error?: string | null;
     createdAt: string;
+}
+
+export interface CampaignRecipient {
+    id: string;
+    name: string;
+    phone: string;
+    totalSpend?: number;
+    lastVisitDate?: string;
+}
+
+export interface CarouselCardPayload {
+    mediaId: string;
+    colorName: string;
+    sizes: string;
+    price: string;
+}
+
+export interface SendCampaignPayload {
+    campaignName: string;
+    templateName: string;
+    languageCode?: string;
+    headerMediaId?: string;
+    headerMediaUrl?: string;
+    templateParams: string[];
+    carouselCards?: CarouselCardPayload[];
+    recipients: CampaignRecipient[];
+}
+
+export interface CampaignDispatchResult {
+    total: number;
+    sent: number;
+    failed: number;
+    errors: { recipient: string; phone: string; error: string }[];
+}
+
+export interface WhatsAppConversation {
+    phone: string;
+    name: string;
+    lastMessage: string;
+    lastDirection: 'INBOUND' | 'OUTBOUND';
+    lastMessageAt: string;
+    lastInboundAt?: string | null;
+    windowOpen: boolean;
+    optedOut: boolean;
+    unreadCount: number;
+}
+
+export interface WhatsAppInboxMessage {
+    id: string;
+    waMessageId?: string | null;
+    customerPhone: string;
+    customerName?: string | null;
+    direction: 'INBOUND' | 'OUTBOUND';
+    type: string;
+    body: string;
+    isAutoReply: boolean;
+    read: boolean;
+    status: string;
+    createdAt: string;
+}
+
+export interface WhatsAppWebhookConfig {
+    webhookUrl: string;
+    verifyToken: string;
+    autoReplyEnabled: boolean;
+    forwardPhone: string;
+    autoReplyMessage: string;
+    cooldownHours: number;
+    hasAccessToken: boolean;
+    metaPhoneNumberId?: string;
+    cloudReachable: boolean;
 }
 

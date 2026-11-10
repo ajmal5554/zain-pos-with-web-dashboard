@@ -318,3 +318,32 @@ model PushSubscription {
 
   @@map("push_subscriptions")
 }
+
+model WhatsAppContact {
+  phone           String    @id
+  name            String?
+  lastInboundAt   DateTime? @map("last_inbound_at")
+  lastAutoReplyAt DateTime? @map("last_auto_reply_at")
+  optedOut        Boolean   @default(false) @map("opted_out")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@map("whatsapp_contacts")
+}
+
+model WhatsAppMessage {
+  id            String   @id @default(uuid())
+  waMessageId   String?  @unique @map("wa_message_id")
+  customerPhone String   @map("customer_phone")
+  customerName  String?  @map("customer_name")
+  direction     String   // 'INBOUND' | 'OUTBOUND'
+  type          String   @default("text") // 'text', 'image', 'button', 'interactive', 'template'
+  body          String
+  isAutoReply   Boolean  @default(false) @map("is_auto_reply")
+  read          Boolean  @default(false)
+  status        String   @default("DELIVERED") // 'SENT', 'DELIVERED', 'READ', 'FAILED'
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([customerPhone])
+  @@index([createdAt])
+  @@map("whatsapp_messages")
+}

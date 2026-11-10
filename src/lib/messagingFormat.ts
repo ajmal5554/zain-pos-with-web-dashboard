@@ -1,22 +1,12 @@
 import { format as formatDate } from 'date-fns';
+import { DEFAULT_MESSAGING_CONFIG } from '../types/messaging';
 import type {
     MessagingConfig,
     InvoiceMessagePayload,
     StoreCreditMessagePayload,
 } from '../types/messaging';
 
-export const DEFAULT_MESSAGING_CONFIG: MessagingConfig = {
-    enabled: true,
-    autoSend: false,
-    defaultChannel: 'WHATSAPP_FIRST',
-    includeStoreCredit: true,
-    includeShopDetails: true,
-    defaultCountryCode: '91',
-    whatsappProvider: 'DIRECT',
-    metaTemplateName: 'tax_invoice',
-    metaLanguageCode: 'en_US',
-    smsProvider: 'DIRECT',
-};
+export { DEFAULT_MESSAGING_CONFIG };
 
 /**
  * Normalizes phone numbers:

@@ -4,6 +4,11 @@ import type {
     StoreCreditMessagePayload,
     MessageResult,
     MessageLogRecord,
+    SendCampaignPayload,
+    CampaignDispatchResult,
+    WhatsAppConversation,
+    WhatsAppInboxMessage,
+    WhatsAppWebhookConfig,
 } from '../types/messaging';
 import { DEFAULT_MESSAGING_CONFIG } from '../types/messaging';
 import { useAuthStore } from '../store/authStore';
@@ -262,6 +267,122 @@ class MessagingFrontendService {
             whatsappText: buildStoreCreditMessageWhatsApp(payload),
             smsText: buildStoreCreditMessageSMS(payload),
         };
+    }
+
+    /**
+     * Upload an image to Meta WhatsApp Media storage
+     */
+    async uploadMedia(base64Data: string, mimeType: string, filename: string): Promise<{ success: boolean; mediaId?: string; error?: string }> {
+        try {
+            if (window.electronAPI?.messaging?.uploadMedia) {
+                const res = await window.electronAPI.messaging.uploadMedia({ base64Data, mimeType, filename });
+                if (res?.success && res.data?.mediaId) {
+                    return { success: true, mediaId: res.data.mediaId };
+                }
+                return { success: false, error: res?.error || 'Failed to upload media to WhatsApp.' };
+            }
+            return { success: false, error: 'Electron messaging API not available.' };
+        } catch (err: any) {
+            console.error('uploadMedia error:', err);
+            return { success: false, error: err.message };
+        }
+    }
+
+    /**
+     * Dispatch a marketing broadcast campaign
+     */
+    async sendCampaign(payload: SendCampaignPayload): Promise<CampaignDispatchResult> {
+        try {
+            if (window.electronAPI?.messaging?.sendCampaign) {
+                const res = await window.electronAPI.messaging.sendCampaign(payload);
+                if (res?.success && res.data) {
+                    return res.data;
+                }
+                throw new Error(res?.error || 'Failed to send campaign broadcast.');
+            }
+            throw new Error('Electron messaging API not available.');
+        } catch (err: any) {
+            console.error('sendCampaign error:', err);
+            throw err;
+        }
+    }
+
+    async getWebhookStatus(): Promise<WhatsAppWebhookConfig | null> {
+        try {
+            if (window.electronAPI?.messaging?.getWebhookStatus) {
+                const res = await window.electronAPI.messaging.getWebhookStatus();
+                if (res?.success && res.data) return res.data;
+            }
+        } catch (err) {
+            console.warn('getWebhookStatus error:', err);
+        }
+        return null;
+    }
+
+    async syncWebhookConfig(partialConfig?: Partial<MessagingConfig>): Promise<{ success: boolean; webhookUrl?: string; error?: string }> {
+        try {
+            if (window.electronAPI?.messaging?.syncWebhookConfig) {
+                const res = await window.electronAPI.messaging.syncWebhookConfig(partialConfig);
+                return {
+                    success: Boolean(res?.success),
+                    webhookUrl: res?.data?.webhookUrl,
+                    error: res?.error,
+                };
+            }
+            return { success: false, error: 'Electron messaging API not available.' };
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
+    }
+
+    async getConversations(): Promise<{ conversations: WhatsAppConversation[]; cloudReachable: boolean; error?: string }> {
+        try {
+            if (window.electronAPI?.messaging?.getConversations) {
+                const res = await window.electronAPI.messaging.getConversations();
+                if (res?.success && res.data) return res.data;
+                return { conversations: [], cloudReachable: false, error: res?.error };
+            }
+        } catch (err: any) {
+            return { conversations: [], cloudReachable: false, error: err.message };
+        }
+        return { conversations: [], cloudReachable: false };
+    }
+
+    async getConversationMessages(phone: string): Promise<{ messages: WhatsAppInboxMessage[]; windowOpen: boolean; optedOut: boolean; error?: string }> {
+        try {
+            if (window.electronAPI?.messaging?.getConversationMessages) {
+                const res = await window.electronAPI.messaging.getConversationMessages(phone);
+                if (res?.success && res.data) return res.data;
+                return { messages: [], windowOpen: false, optedOut: false, error: res?.error };
+            }
+        } catch (err: any) {
+            return { messages: [], windowOpen: false, optedOut: false, error: err.message };
+        }
+        return { messages: [], windowOpen: false, optedOut: false };
+    }
+
+    async sendInboxReply(phone: string, text: string): Promise<{ success: boolean; message?: WhatsAppInboxMessage; error?: string }> {
+        try {
+            if (window.electronAPI?.messaging?.sendInboxReply) {
+                const res = await window.electronAPI.messaging.sendInboxReply(phone, text);
+                return { success: Boolean(res?.success), message: res?.data, error: res?.error };
+            }
+            return { success: false, error: 'Electron messaging API not available.' };
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
+    }
+
+    async markConversationRead(phone: string): Promise<boolean> {
+        try {
+            if (window.electronAPI?.messaging?.markConversationRead) {
+                const res = await window.electronAPI.messaging.markConversationRead(phone);
+                return Boolean(res?.success);
+            }
+        } catch {
+            // Non-fatal
+        }
+        return false;
     }
 }
 

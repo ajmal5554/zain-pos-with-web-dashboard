@@ -21,6 +21,7 @@ import {
     Truck,
     Banknote,
     BarChart3,
+    Megaphone,
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 import { NetworkStatus } from '../NetworkStatus';
@@ -49,6 +50,7 @@ const MENU_ITEMS: MenuItem[] = [
     { path: '/purchases', icon: Truck, label: 'Purchases', adminOnly: true, requiredPerm: 'permManageInventory' },
     { path: '/stock', icon: Package, label: 'Stock', adminOnly: true, requiredPerm: 'permManageInventory' },
     { path: '/customers', icon: Users, label: 'Customers' },
+    { path: '/campaigns', icon: Megaphone, label: 'Marketing', adminOnly: true, requiredPerm: 'permEditSettings' },
     { path: '/sales', icon: Receipt, label: 'Sales History', adminOnly: true, requiredPerm: 'permViewSales' },
     { path: '/profit', icon: BarChart3, label: 'Profit & Analysis', adminOnly: true },
     { path: '/expenses', icon: Banknote, label: 'Expenses', adminOnly: true, requiredPerm: 'permManageCashDrawer' },

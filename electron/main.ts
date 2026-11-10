@@ -64,6 +64,14 @@ import {
     sendStoreCreditMessage,
     getMessageLogs,
     updateCustomerWhatsAppStatus,
+    uploadWhatsAppMedia,
+    sendCampaignMessages,
+    syncCloudWhatsAppConfig,
+    getCloudWebhookStatus,
+    getCloudConversations,
+    getCloudConversationMessages,
+    sendCloudInboxReply,
+    markCloudConversationRead,
 } from './messaging.service';
 import { DEFAULT_MESSAGING_CONFIG, type MessagingConfig } from '../src/types/messaging';
 
@@ -2007,6 +2015,16 @@ createSecureIpcHandler(
         }
 
         logger.info('Settings', `Setting "${key}" updated by user ${user?.id || userId} (${user?.role || 'unknown'})`);
+
+        if (key === 'MESSAGING_CONFIG') {
+            try {
+                const parsed = { ...DEFAULT_MESSAGING_CONFIG, ...JSON.parse(value) };
+                syncCloudWhatsAppConfig(prisma, parsed).catch(() => {});
+            } catch {
+                // Non-fatal
+            }
+        }
+
         return { success: true, data: setting };
     },
     {
@@ -6490,6 +6508,19 @@ createSecureIpcHandler(
     { trustedSession: true }
 );
 
+async function loadMessagingConfig(): Promise<MessagingConfig> {
+    let config: MessagingConfig = DEFAULT_MESSAGING_CONFIG;
+    try {
+        const settingRow = await prisma.setting.findUnique({ where: { key: 'MESSAGING_CONFIG' } });
+        if (settingRow?.value) {
+            config = { ...DEFAULT_MESSAGING_CONFIG, ...JSON.parse(settingRow.value) };
+        }
+    } catch (cfgErr) {
+        console.warn('Failed to parse MESSAGING_CONFIG setting, using defaults:', cfgErr);
+    }
+    return config;
+}
+
 createSecureIpcHandler(
     'customer:updateWhatsAppStatus',
     PermissionMiddleware.authenticated,
@@ -6499,6 +6530,131 @@ createSecureIpcHandler(
             return { success: true };
         } catch (error: any) {
             console.error('customer:updateWhatsAppStatus error:', error);
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'messaging:uploadMedia',
+    PermissionMiddleware.authenticated,
+    async (_event, args: { base64Data: string; mimeType: string; filename: string }, _user) => {
+        try {
+            const config = await loadMessagingConfig();
+            const buffer = Buffer.from(args.base64Data, 'base64');
+            const mediaId = await uploadWhatsAppMedia(buffer, args.mimeType, args.filename, config);
+            return { success: true, data: { mediaId } };
+        } catch (error: any) {
+            console.error('messaging:uploadMedia error:', error);
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'messaging:sendCampaign',
+    PermissionMiddleware.authenticated,
+    async (_event, payload: any, _user) => {
+        try {
+            const config = await loadMessagingConfig();
+            const result = await sendCampaignMessages(prisma, payload, config);
+            return { success: true, data: result };
+        } catch (error: any) {
+            console.error('messaging:sendCampaign error:', error);
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'messaging:getWebhookStatus',
+    PermissionMiddleware.authenticated,
+    async () => {
+        try {
+            const config = await loadMessagingConfig();
+            const status = await getCloudWebhookStatus(prisma, config);
+            return { success: true, data: status };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'messaging:syncWebhookConfig',
+    PermissionMiddleware.editSettings,
+    async (_event, partialConfig?: Partial<MessagingConfig>) => {
+        try {
+            const current = await loadMessagingConfig();
+            const merged: MessagingConfig = { ...current, ...(partialConfig || {}) };
+            await prisma.setting.upsert({
+                where: { key: 'MESSAGING_CONFIG' },
+                create: { key: 'MESSAGING_CONFIG', value: JSON.stringify(merged) },
+                update: { value: JSON.stringify(merged) },
+            });
+            const syncRes = await syncCloudWhatsAppConfig(prisma, merged);
+            return { success: syncRes.success, data: syncRes, error: syncRes.error };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'messaging:getConversations',
+    PermissionMiddleware.authenticated,
+    async () => {
+        try {
+            const res = await getCloudConversations(prisma);
+            return { success: true, data: res };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'messaging:getConversationMessages',
+    PermissionMiddleware.authenticated,
+    async (_event, args: { phone: string }) => {
+        try {
+            const res = await getCloudConversationMessages(prisma, args.phone);
+            return { success: true, data: res };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'messaging:sendInboxReply',
+    PermissionMiddleware.authenticated,
+    async (_event, args: { phone: string; text: string }) => {
+        try {
+            const res = await sendCloudInboxReply(prisma, args.phone, args.text);
+            return { success: res.success, data: res.message, error: res.error };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'messaging:markConversationRead',
+    PermissionMiddleware.authenticated,
+    async (_event, args: { phone: string }) => {
+        try {
+            const ok = await markCloudConversationRead(prisma, args.phone);
+            return { success: ok };
+        } catch (error: any) {
             return { success: false, error: error.message };
         }
     },

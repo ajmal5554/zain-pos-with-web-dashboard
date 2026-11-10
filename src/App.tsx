@@ -17,6 +17,7 @@ import { CashDrawerPage } from './pages/CashDrawer';
 import { Stock } from './pages/Stock';
 import { Purchases } from './pages/Purchases';
 import { Expenses } from './pages/Expenses';
+import { MarketingCampaigns } from './pages/MarketingCampaigns';
 import { MainLayout } from './components/Layout/MainLayout';
 import { WindowTitleBar } from './components/Layout/WindowTitleBar';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
@@ -113,6 +114,14 @@ function App() {
                                 element={
                                     <PermissionRoute perm="permEditSettings">
                                         <PageBoundary><Settings /></PageBoundary>
+                                    </PermissionRoute>
+                                }
+                            />
+                            <Route
+                                path="campaigns"
+                                element={
+                                    <PermissionRoute perm="permEditSettings">
+                                        <PageBoundary><MarketingCampaigns /></PageBoundary>
                                     </PermissionRoute>
                                 }
                             />

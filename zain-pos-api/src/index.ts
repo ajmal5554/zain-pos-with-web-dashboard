@@ -15,6 +15,7 @@ import activityRoutes from './routes/activity';
 import notificationRoutes from './routes/notifications';
 import adminRoutes from './routes/admin';
 import customersRoutes from './routes/customers';
+import whatsappRoutes from './routes/whatsapp';
 import { ensureLocalDefaults } from './bootstrap';
 
 dotenv.config();
@@ -54,6 +55,7 @@ app.use('/api/activity', activityRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/customers', customersRoutes);
+app.use('/api/whatsapp', whatsappRoutes);
 
 // Health check
 app.get('/health', (req, res) => {

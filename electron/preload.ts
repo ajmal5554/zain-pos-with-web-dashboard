@@ -244,6 +244,18 @@ const api = {
         getLogs: (query?: any) => ipcRenderer.invoke('messaging:getLogs', query),
         updateCustomerWhatsAppStatus: (phone: string, hasWhatsApp: boolean) =>
             ipcRenderer.invoke('customer:updateWhatsAppStatus', { phone, hasWhatsApp }),
+        uploadMedia: (args: { base64Data: string; mimeType: string; filename: string }) =>
+            ipcRenderer.invoke('messaging:uploadMedia', args),
+        sendCampaign: (payload: any) => ipcRenderer.invoke('messaging:sendCampaign', payload),
+        getWebhookStatus: () => ipcRenderer.invoke('messaging:getWebhookStatus'),
+        syncWebhookConfig: (partialConfig?: any) => ipcRenderer.invoke('messaging:syncWebhookConfig', partialConfig),
+        getConversations: () => ipcRenderer.invoke('messaging:getConversations'),
+        getConversationMessages: (phone: string) =>
+            ipcRenderer.invoke('messaging:getConversationMessages', { phone }),
+        sendInboxReply: (phone: string, text: string) =>
+            ipcRenderer.invoke('messaging:sendInboxReply', { phone, text }),
+        markConversationRead: (phone: string) =>
+            ipcRenderer.invoke('messaging:markConversationRead', { phone }),
     },
 
     shell: {
