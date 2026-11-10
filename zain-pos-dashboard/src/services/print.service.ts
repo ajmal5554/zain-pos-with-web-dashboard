@@ -26,6 +26,9 @@ export interface ReceiptBlock {
     showVariantInfo?: boolean;
     tableHeaderBold?: boolean;
     tableRowBold?: boolean;
+    showMRP?: boolean;
+    showRate?: boolean;
+    showRateSubline?: boolean;
   };
   visible: boolean;
 }
