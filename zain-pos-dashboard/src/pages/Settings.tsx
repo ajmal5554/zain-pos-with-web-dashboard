@@ -135,17 +135,17 @@ export default function SettingsPage() {
     }
 
     return (
-        <div className="flex flex-col flex-1 space-y-6 pb-12 max-w-6xl mx-auto w-full">
-            <div>
-                <h2 className="text-2xl font-bold tracking-tight">Settings</h2>
-                <p className="text-muted-foreground text-sm">
+        <div className="flex flex-col flex-1 space-y-4 sm:space-y-6 pb-6 max-w-6xl mx-auto w-full min-w-0">
+            <div className="min-w-0">
+                <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Settings</h2>
+                <p className="text-muted-foreground text-xs sm:text-sm">
                     Manage system configurations, billing, and integrations.
                 </p>
             </div>
 
-            <div className="flex flex-col md:flex-row gap-6 lg:gap-8 items-start">
-                {/* Vertical Sidebar Navigation */}
-                <aside className="w-full md:w-64 shrink-0 px-1 space-y-1">
+            <div className="flex flex-col md:flex-row gap-4 md:gap-6 lg:gap-8 items-start min-w-0">
+                {/* Horizontal Scrollable Tabs on Mobile, Vertical Sidebar on Desktop */}
+                <aside className="w-full md:w-64 shrink-0 flex md:flex-col gap-1.5 overflow-x-auto pb-1 md:pb-0">
                     {editableKeys.map((key) => {
                         const meta = settingMeta[key];
                         const Icon = meta.icon;
@@ -155,13 +155,13 @@ export default function SettingsPage() {
                                 key={key}
                                 onClick={() => setActiveTab(key)}
                                 className={cn(
-                                    "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors text-left",
+                                    "shrink-0 md:w-full flex items-center gap-2 md:gap-3 px-3 py-2 md:py-2.5 rounded-lg text-xs sm:text-sm font-medium transition-colors text-left whitespace-nowrap",
                                     isActive 
                                         ? "bg-primary/10 text-primary" 
                                         : "text-muted-foreground hover:bg-muted hover:text-foreground"
                                 )}
                             >
-                                <Icon className={cn("h-4 w-4", isActive ? "text-primary" : "text-muted-foreground")} />
+                                <Icon className={cn("h-4 w-4 shrink-0", isActive ? "text-primary" : "text-muted-foreground")} />
                                 <span>{meta.title}</span>
                             </button>
                         );
@@ -171,20 +171,20 @@ export default function SettingsPage() {
                 {/* Main Content Area */}
                 <main className="flex-1 w-full min-w-0">
                     <Card className="border-slate-200/60 shadow-sm dark:border-slate-800">
-                        <CardHeader className="bg-muted/30 border-b pb-6">
-                            <div className="flex items-center gap-3 pb-2">
-                                <div className="p-2 rounded-md bg-background border shadow-sm">
+                        <CardHeader className="bg-muted/30 border-b p-4 sm:p-6">
+                            <div className="flex items-center gap-3">
+                                <div className="p-2 rounded-md bg-background border shadow-sm shrink-0">
                                     <ActiveIcon className="h-5 w-5 text-primary" />
                                 </div>
-                                <div>
-                                    <CardTitle className="text-lg">{activeMeta.title}</CardTitle>
-                                    <CardDescription className="mt-1">{activeMeta.desc}</CardDescription>
+                                <div className="min-w-0">
+                                    <CardTitle className="text-base sm:text-lg">{activeMeta.title}</CardTitle>
+                                    <CardDescription className="mt-1 text-xs sm:text-sm">{activeMeta.desc}</CardDescription>
                                 </div>
                             </div>
                         </CardHeader>
-                        <CardContent className="p-6 md:p-8 space-y-8">
+                        <CardContent className="p-4 sm:p-6 md:p-8 space-y-6 sm:space-y-8">
                             {isJson ? (
-                                <div className="space-y-6 max-w-2xl">
+                                <div className="space-y-4 sm:space-y-6 max-w-2xl">
                                     {Object.entries(parsedObj).map(([fieldKey, fieldValue]) => {
                                         const labelName = fieldKey === fieldKey.toUpperCase() 
                                             ? fieldKey.replace(/_/g, ' ') 
@@ -192,8 +192,8 @@ export default function SettingsPage() {
 
                                         if (typeof fieldValue === 'boolean') {
                                             return (
-                                                <div key={fieldKey} className="flex items-center justify-between py-3 px-4 rounded-lg bg-muted/40 border">
-                                                    <div className="space-y-0.5">
+                                                <div key={fieldKey} className="flex items-center justify-between gap-3 py-3 px-3.5 sm:px-4 rounded-lg bg-muted/40 border">
+                                                    <div className="space-y-0.5 min-w-0">
                                                         <Label htmlFor={`${activeTab}-${fieldKey}`} className="text-sm font-medium">{labelName}</Label>
                                                         <p className="text-xs text-muted-foreground">Enable or disable {labelName.toLowerCase()} across the system.</p>
                                                     </div>
@@ -241,14 +241,14 @@ export default function SettingsPage() {
                                 </div>
                             )}
 
-                            <div className="flex items-center justify-between pt-6 border-t mt-8">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-6 border-t mt-6 sm:mt-8">
                                 <div className="text-xs text-muted-foreground">
                                     {settingsMap.get(activeTab)?.updatedAt ? `Last saved on ${new Date(settingsMap.get(activeTab)!.updatedAt).toLocaleString()}` : 'Default configuration loaded'}
                                 </div>
                                 <Button 
                                     onClick={() => void saveSetting(activeTab)} 
                                     disabled={savingKey === activeTab}
-                                    className="min-w-[140px] font-semibold tracking-wide shadow-sm"
+                                    className="w-full sm:w-auto sm:min-w-[140px] font-semibold tracking-wide shadow-sm"
                                 >
                                     {savingKey === activeTab ? (
                                         <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> Saving...</>

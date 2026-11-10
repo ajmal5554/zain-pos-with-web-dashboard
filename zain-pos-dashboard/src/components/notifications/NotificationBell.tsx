@@ -14,15 +14,26 @@ export function NotificationBell() {
     const [isOpen, setIsOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
 
-    // Close on click outside
+    // Close on click/touch outside or Escape
     useEffect(() => {
-        function handleClickOutside(event: MouseEvent) {
+        function handleClickOutside(event: MouseEvent | TouchEvent) {
             if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
                 setIsOpen(false);
             }
         }
+        function handleKeyDown(event: KeyboardEvent) {
+            if (event.key === 'Escape') {
+                setIsOpen(false);
+            }
+        }
         document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
+        document.addEventListener('touchstart', handleClickOutside);
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+            document.removeEventListener('touchstart', handleClickOutside);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
     }, []);
 
     const handleNotificationClick = async (notification: Notification) => {
@@ -48,6 +59,8 @@ export function NotificationBell() {
             <Button
                 variant="ghost"
                 size="icon"
+                aria-label="Notifications"
+                aria-expanded={isOpen}
                 className="relative text-muted-foreground"
                 onClick={() => setIsOpen(!isOpen)}
             >
@@ -66,15 +79,15 @@ export function NotificationBell() {
             </Button>
 
             {isOpen && (
-                <Card className="absolute right-0 z-50 mt-2 w-[22rem] md:w-[25rem] shadow-md border bg-popover text-popover-foreground">
-                    <CardHeader className="p-4 border-b space-y-0 flex flex-row items-center justify-between">
-                        <div>
+                <Card className="fixed inset-x-3 top-14 z-50 flex flex-col max-h-[calc(100dvh-5.5rem)] sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-[24rem] md:w-[25rem] sm:max-h-[75vh] shadow-lg border bg-popover text-popover-foreground">
+                    <CardHeader className="p-3 sm:p-4 border-b space-y-0 flex flex-row flex-wrap items-center justify-between gap-2 shrink-0">
+                        <div className="min-w-0">
                             <CardTitle className="text-sm font-semibold">Notifications</CardTitle>
                             <CardDescription className="text-xs">
                                 {unreadCount > 0 ? `${unreadCount} unread` : 'All caught up'}
                             </CardDescription>
                         </div>
-                        <div className="flex gap-2 items-center">
+                        <div className="flex flex-wrap gap-1.5 sm:gap-2 items-center shrink-0">
                             {/* Push status badge */}
                             {label.show ? (
                                 pushStatus === 'denied' ? (
@@ -86,7 +99,7 @@ export function NotificationBell() {
                                         variant="outline"
                                         size="sm"
                                         onClick={subscribePush}
-                                        className="h-7 text-xs border-primary text-primary hover:bg-primary hover:text-primary-foreground"
+                                        className="h-7 px-2.5 text-xs border-primary text-primary hover:bg-primary hover:text-primary-foreground"
                                     >
                                         🔔 Enable Push
                                     </Button>
@@ -100,7 +113,7 @@ export function NotificationBell() {
                                     variant="ghost"
                                     size="sm"
                                     onClick={markAllAsRead}
-                                    className="h-7 text-xs"
+                                    className="h-7 px-2 text-xs"
                                 >
                                     Mark all read
                                 </Button>
@@ -110,14 +123,14 @@ export function NotificationBell() {
 
                     {/* Banner if push is denied */}
                     {pushStatus === 'denied' && (
-                        <div className="px-4 py-2 bg-destructive/10 border-b border-destructive/20 text-xs text-destructive">
+                        <div className="px-3 sm:px-4 py-2 bg-destructive/10 border-b border-destructive/20 text-xs text-destructive shrink-0">
                             ⚠️ Notifications blocked. Go to browser Settings → Site permissions → Notifications → Reset for this site.
                         </div>
                     )}
 
-                    <CardContent className="p-0 max-h-[60vh] overflow-y-auto">
+                    <CardContent className="p-0 flex-1 overflow-y-auto">
                         {notifications.length === 0 ? (
-                            <div className="p-8 text-center flex flex-col items-center">
+                            <div className="p-6 sm:p-8 text-center flex flex-col items-center">
                                 <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center mb-3">
                                     <Bell className="h-5 w-5 text-muted-foreground" />
                                 </div>
@@ -130,7 +143,7 @@ export function NotificationBell() {
                                     <div
                                         key={notification.id}
                                         className={cn(
-                                            "flex items-start gap-4 p-4 hover:bg-muted/50 cursor-default transition-colors",
+                                            "flex items-start gap-3 sm:gap-4 p-3 sm:p-4 hover:bg-muted/50 cursor-default transition-colors",
                                             !notification.read && "bg-muted/30"
                                         )}
                                         onClick={() => handleNotificationClick(notification)}
@@ -139,22 +152,22 @@ export function NotificationBell() {
                                             "mt-1.5 h-2 w-2 rounded-full shrink-0",
                                             !notification.read ? "bg-primary" : "bg-transparent"
                                         )} />
-                                        <div className="flex-1 space-y-1">
-                                            <div className="flex items-center justify-between">
+                                        <div className="flex-1 min-w-0 space-y-1">
+                                            <div className="flex items-start justify-between gap-2">
                                                 <p className={cn(
-                                                    "text-sm font-medium",
+                                                    "text-sm font-medium min-w-0 break-words",
                                                     !notification.read ? "text-foreground" : "text-muted-foreground"
                                                 )}>
                                                     {notification.title}
                                                 </p>
-                                                <span className="text-xs text-muted-foreground">
+                                                <span className="text-[11px] sm:text-xs text-muted-foreground shrink-0 whitespace-nowrap">
                                                     {formatDistanceToNow(new Date(notification.createdAt), { addSuffix: true })}
                                                 </span>
                                             </div>
-                                            <p className="text-sm text-muted-foreground line-clamp-2">
+                                            <p className="text-xs sm:text-sm text-muted-foreground line-clamp-2 break-words">
                                                 {notification.message}
                                             </p>
-                                            <div className="flex items-center justify-between pt-2">
+                                            <div className="flex items-center justify-between pt-1.5 gap-2">
                                                 {notification.type === 'product_added' ? (
                                                     <Link
                                                         to="/products"
@@ -192,7 +205,8 @@ export function NotificationBell() {
                                                     <Button
                                                         variant="ghost"
                                                         size="icon"
-                                                        className="h-6 w-6 rounded-full"
+                                                        aria-label="Mark notification as read"
+                                                        className="h-6 w-6 rounded-full shrink-0"
                                                         onClick={(e) => {
                                                             e.stopPropagation();
                                                             markAsRead(notification.id);

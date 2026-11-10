@@ -286,30 +286,32 @@ export default function Sales() {
     ];
 
     return (
-        <div className="flex-1 space-y-4 pb-6 min-w-0">
-            <div className="flex items-center justify-between gap-4 w-full">
-                <div>
+        <div className="flex-1 space-y-4 pb-6 min-w-0 w-full">
+            <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-4 w-full">
+                <div className="min-w-0">
                     <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Sales</h2>
                     <p className="text-muted-foreground text-xs hidden sm:block">
                         View and manage all sales records.
                     </p>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2 shrink-0 max-w-full">
                     <DateRangePicker />
                     <Button 
                         variant="outline" 
                         onClick={() => void handleExport()} 
                         disabled={exporting} 
-                        className="h-9 px-3 hidden sm:flex"
+                        className="h-9 px-2.5 sm:px-3"
+                        aria-label="Export sales"
                     >
-                        <Download className="mr-2 h-4 w-4" />
-                        Export
+                        <Download className="h-4 w-4 sm:mr-2" />
+                        <span className="hidden sm:inline">Export</span>
                     </Button>
                 </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                 <StatCard 
+                    className="col-span-2 sm:col-span-1"
                     title="Total Sales" 
                     value={totalItems} 
                     icon={<Receipt className="h-4 w-4" />} 
@@ -363,6 +365,37 @@ export default function Sales() {
                     itemsPerPage={limit}
                     onLimitChange={setLimit}
                     emptyMessage="No sales found for this period."
+                    renderMobileCard={(inv) => (
+                        <div className="space-y-2">
+                            <div className="flex items-start justify-between gap-2">
+                                <button
+                                    onClick={() => void handleViewInvoice(inv)}
+                                    className="flex items-center gap-1.5 hover:underline text-left outline-none min-w-0"
+                                >
+                                    <Receipt className="h-4 w-4 text-muted-foreground shrink-0" />
+                                    <span className="font-semibold text-sm text-sky-600 dark:text-sky-400">#{inv.billNo}</span>
+                                </button>
+                                <span className="font-bold text-sm text-slate-900 dark:text-slate-100 shrink-0">
+                                    {formatCurrency(inv.total)}
+                                </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                                <div className="min-w-0">
+                                    <p className="font-medium text-foreground truncate">{inv.customer.name}</p>
+                                    <p className="truncate">
+                                        {new Date(inv.createdAt).toLocaleDateString('en-IN', {
+                                            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                                        })}
+                                        {' · '}
+                                        {inv.itemCount} items
+                                    </p>
+                                </div>
+                                <Button variant="outline" size="sm" className="h-8 shrink-0" onClick={() => void handleViewInvoice(inv)}>
+                                    <Eye className="h-3.5 w-3.5 mr-1" /> View
+                                </Button>
+                            </div>
+                        </div>
+                    )}
                 />
             </div>
 

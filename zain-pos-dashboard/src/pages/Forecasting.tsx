@@ -2,7 +2,7 @@ import * as React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { ValueType } from 'recharts/types/component/DefaultTooltipContent';
-import { AlertTriangle, BrainCircuit, TrendingUp, Calendar, Zap, Sparkles, Activity } from 'lucide-react';
+import { AlertTriangle, BrainCircuit, TrendingUp, Calendar, Zap, Activity } from 'lucide-react';
 import { format, addMonths } from 'date-fns';
 import { StatCard } from '@/components/shared/StatCard';
 import { 
@@ -107,7 +107,7 @@ export default function ForecastingPage() {
 
     if (loading) {
         return (
-            <div className="flex flex-col items-center justify-center p-24 text-center">
+            <div className="flex flex-col items-center justify-center p-12 sm:p-24 text-center">
                  <div className="h-14 w-14 rounded-full bg-muted flex items-center justify-center mb-6">
                      <BrainCircuit className="h-7 w-7 text-muted-foreground" />
                  </div>
@@ -117,17 +117,17 @@ export default function ForecastingPage() {
     }
 
     return (
-        <div className="flex-1 space-y-4 pb-12">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between">
-                <div>
-                    <h2 className="text-2xl font-bold tracking-tight">Forecasting</h2>
-                    <p className="text-sm text-muted-foreground">
+        <div className="flex-1 space-y-4 pb-6 min-w-0 w-full">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                    <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Forecasting</h2>
+                    <p className="text-xs sm:text-sm text-muted-foreground">
                         Revenue outlook based on past sales.
                     </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0">
                      <Badge variant="secondary" className="gap-1.5">
-                         <Sparkles className="h-3 w-3" />
+                         <BrainCircuit className="h-3 w-3" />
                          AI Forecast
                      </Badge>
                 </div>
@@ -135,24 +135,24 @@ export default function ForecastingPage() {
 
             {error && (
                 <div className="p-3 rounded-md bg-destructive/10 border border-destructive/20 text-destructive text-sm flex items-center gap-2">
-                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTriangle className="h-4 w-4 shrink-0" />
                     <span>{error}</span>
                 </div>
             )}
 
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                <StatCard title="Next Month Prediction" value={formatCurrency(nextPrediction)} icon={<BrainCircuit className="h-4 w-4" />} trend={Number(growth.toFixed(1))} trendLabel="vs historical avg" />
+                <StatCard className="col-span-2 sm:col-span-1" title="Next Month Prediction" value={formatCurrency(nextPrediction)} icon={<BrainCircuit className="h-4 w-4" />} trend={Number(growth.toFixed(1))} trendLabel="vs historical avg" />
                 <StatCard title="Expected Growth" value={`${growth.toFixed(1)}%`} icon={<Activity className="h-4 w-4" />} />
                 <StatCard title="Last Month Revenue" value={formatCurrency(lastRevenue)} icon={<Calendar className="h-4 w-4" />} />
             </div>
 
-            <Card className="overflow-hidden">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                    <div className="space-y-1">
+            <Card className="overflow-hidden min-w-0">
+                <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4 space-y-0 pb-2">
+                    <div className="space-y-1 min-w-0">
                         <CardTitle className="text-base font-semibold">Revenue Forecast Model</CardTitle>
                         <CardDescription className="text-xs">Historical data vs projected growth.</CardDescription>
                     </div>
-                    <div className="flex items-center gap-4 text-xs">
+                    <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-xs shrink-0">
                          <div className="flex items-center gap-2">
                               <div className="h-2 w-2 rounded-full bg-slate-400" />
                               <span className="text-muted-foreground">Actual Revenue</span>
@@ -163,71 +163,76 @@ export default function ForecastingPage() {
                          </div>
                     </div>
                 </CardHeader>
-                <CardContent className="pt-4">
-                    <ResponsiveContainer width="100%" height={350}>
-                        <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                            <defs>
-                                <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.15}/>
-                                    <stop offset="95%" stopColor="#94a3b8" stopOpacity={0}/>
-                                </linearGradient>
-                                <linearGradient id="colorPredicted" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.2}/>
-                                    <stop offset="95%" stopColor="var(--primary)" stopOpacity={0}/>
-                                </linearGradient>
-                            </defs>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
-                            <XAxis 
-                                dataKey="month" 
-                                axisLine={false}
-                                tickLine={false}
-                                tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }}
-                                dy={10}
-                            />
-                            <YAxis 
-                                axisLine={false}
-                                tickLine={false}
-                                tickFormatter={(value) => `\u20B9${(value / 1000).toFixed(0)}k`}
-                                tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }}
-                            />
-                            <Tooltip
-                                contentStyle={{ 
-                                    backgroundColor: 'var(--background)', 
-                                    borderRadius: '8px', 
-                                    border: '1px solid var(--border)', 
-                                    boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
-                                }}
-                                itemStyle={{ fontSize: '14px', fontWeight: 600 }}
-                                labelStyle={{ color: 'var(--muted-foreground)', fontSize: '12px', marginBottom: '8px' }}
-                                formatter={(value: ValueType) => [formatCurrency(Number(value)), 'Revenue']}
-                            />
-                            <Area 
-                                type="monotone" 
-                                dataKey="revenue" 
-                                stroke="#64748b" 
-                                strokeWidth={2}
-                                fillOpacity={1} 
-                                fill="url(#colorRevenue)" 
-                            />
-                            <Area 
-                                type="monotone" 
-                                dataKey="predicted" 
-                                stroke="var(--primary)" 
-                                strokeWidth={2}
-                                strokeDasharray="5 5"
-                                fillOpacity={1} 
-                                fill="url(#colorPredicted)" 
-                            />
-                        </AreaChart>
-                    </ResponsiveContainer>
+                <CardContent className="px-2 sm:px-6 pt-4">
+                    <div className="h-[240px] sm:h-[320px] md:h-[350px] w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                                <defs>
+                                    <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.15}/>
+                                        <stop offset="95%" stopColor="#94a3b8" stopOpacity={0}/>
+                                    </linearGradient>
+                                    <linearGradient id="colorPredicted" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.2}/>
+                                        <stop offset="95%" stopColor="var(--primary)" stopOpacity={0}/>
+                                    </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
+                                <XAxis 
+                                    dataKey="month" 
+                                    axisLine={false}
+                                    tickLine={false}
+                                    interval="preserveStartEnd"
+                                    minTickGap={24}
+                                    tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
+                                    dy={10}
+                                />
+                                <YAxis 
+                                    axisLine={false}
+                                    tickLine={false}
+                                    width={44}
+                                    tickFormatter={(value) => `\u20B9${(value / 1000).toFixed(0)}k`}
+                                    tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
+                                />
+                                <Tooltip
+                                    contentStyle={{ 
+                                        backgroundColor: 'var(--background)', 
+                                        borderRadius: '8px', 
+                                        border: '1px solid var(--border)', 
+                                        boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
+                                    }}
+                                    itemStyle={{ fontSize: '14px', fontWeight: 600 }}
+                                    labelStyle={{ color: 'var(--muted-foreground)', fontSize: '12px', marginBottom: '8px' }}
+                                    formatter={(value: ValueType) => [formatCurrency(Number(value)), 'Revenue']}
+                                />
+                                <Area 
+                                    type="monotone" 
+                                    dataKey="revenue" 
+                                    stroke="#64748b" 
+                                    strokeWidth={2}
+                                    fillOpacity={1} 
+                                    fill="url(#colorRevenue)" 
+                                />
+                                <Area 
+                                    type="monotone" 
+                                    dataKey="predicted" 
+                                    stroke="var(--primary)" 
+                                    strokeWidth={2}
+                                    strokeDasharray="5 5"
+                                    fillOpacity={1} 
+                                    fill="url(#colorPredicted)" 
+                                />
+                            </AreaChart>
+                        </ResponsiveContainer>
+                    </div>
                     
-                    <div className="mt-8 p-4 rounded-md bg-muted/50 border flex items-start gap-4">
-                         <div className="mt-0.5">
+                    <div className="mt-4 sm:mt-8 mx-2 sm:mx-0 p-3 sm:p-4 rounded-md bg-muted/50 border flex items-start gap-3 sm:gap-4">
+                         <div className="mt-0.5 shrink-0">
                              <Zap className="h-5 w-5 text-muted-foreground" />
                          </div>
-                         <div>
+                         <div className="min-w-0">
                              <p className="text-sm font-semibold">How this works</p>
-                             <p className="text-sm text-muted-foreground mt-1">This forecast uses historical sales data to predict future revenue, giving more weight to recent months to capture current trends.</p>
+                             <p className="text-xs sm:text-sm text-muted-foreground mt-1">This forecast uses historical sales data to predict future revenue, giving more weight to recent months to capture current trends.</p>
                          </div>
                     </div>
                 </CardContent>

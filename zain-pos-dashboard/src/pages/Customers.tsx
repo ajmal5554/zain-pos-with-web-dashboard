@@ -299,26 +299,27 @@ export default function CustomersPage() {
     ];
 
     return (
-        <div className="flex-1 space-y-4 p-2 sm:p-4">
+        <div className="flex-1 space-y-4 pb-6 min-w-0 w-full">
             {/* Header */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                    <h2 className="text-2xl font-bold tracking-tight">Customers</h2>
-                    <p className="text-muted-foreground text-sm">
+                <div className="min-w-0">
+                    <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Customers</h2>
+                    <p className="text-muted-foreground text-xs sm:text-sm">
                         View, search, and manage your store's customer database.
                     </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto shrink-0">
                     <Button
                         variant="outline"
                         size="sm"
+                        className="flex-1 sm:flex-none"
                         onClick={handleExportExcel}
                         disabled={data.customers.length === 0}
                     >
                         <Download className="mr-2 h-4 w-4" />
                         Export
                     </Button>
-                    <Button size="sm" onClick={openAddModal}>
+                    <Button size="sm" className="flex-1 sm:flex-none" onClick={openAddModal}>
                         <Plus className="mr-2 h-4 w-4" />
                         Add Customer
                     </Button>
@@ -356,7 +357,7 @@ export default function CustomersPage() {
             {/* Search Box */}
             <Card>
                 <CardContent className="p-3">
-                    <div className="relative max-w-sm flex-1">
+                    <div className="relative w-full sm:max-w-sm">
                         <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                         <input
                             type="text"
@@ -390,6 +391,78 @@ export default function CustomersPage() {
                         page={page}
                         onPageChange={setPage}
                         loading={loading}
+                        renderMobileCard={(customer) => (
+                            <div className="space-y-2.5">
+                                <div className="flex items-start justify-between gap-2">
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary shrink-0 border border-primary/20 font-semibold text-xs">
+                                            {customer.name.slice(0, 2).toUpperCase()}
+                                        </div>
+                                        <div className="min-w-0">
+                                            <button
+                                                onClick={() => viewCustomerDetails(customer)}
+                                                className="font-semibold text-sm hover:underline text-left block truncate max-w-full"
+                                            >
+                                                {customer.name}
+                                            </button>
+                                            <p className="text-[11px] text-muted-foreground">
+                                                ID: {customer.id.slice(0, 8).toUpperCase()} · {new Date(customer.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    {customer.gstin && (
+                                        <Badge variant="secondary" className="font-mono text-[10px] shrink-0">
+                                            {customer.gstin}
+                                        </Badge>
+                                    )}
+                                </div>
+
+                                <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t">
+                                    <div className="space-y-0.5 min-w-0 text-xs">
+                                        <div className="flex items-center gap-1.5">
+                                            <Phone className="h-3 w-3 text-muted-foreground shrink-0" />
+                                            <span className="font-mono truncate">{customer.phone || 'No Phone'}</span>
+                                        </div>
+                                        {customer.email && (
+                                            <div className="flex items-center gap-1.5 text-muted-foreground">
+                                                <Mail className="h-3 w-3 shrink-0" />
+                                                <span className="truncate">{customer.email}</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-8 px-2.5 text-xs"
+                                            onClick={() => viewCustomerDetails(customer)}
+                                            disabled={loadingDetail}
+                                        >
+                                            <Eye className="h-3.5 w-3.5 mr-1" />
+                                            View
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            aria-label={`Edit ${customer.name}`}
+                                            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                            onClick={() => openEditModal(customer)}
+                                        >
+                                            <Edit2 className="h-4 w-4" />
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            aria-label={`Delete ${customer.name}`}
+                                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                            onClick={() => setCustomerToDelete(customer)}
+                                        >
+                                            <Trash2 className="h-4 w-4" />
+                                        </Button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     />
                 </CardContent>
             </div>
@@ -481,18 +554,18 @@ export default function CustomersPage() {
             <Dialog open={Boolean(detailCustomer)} onOpenChange={(open) => !open && setDetailCustomer(null)}>
                 <DialogContent className="sm:max-w-xl">
                     <DialogHeader>
-                        <DialogTitle className="flex items-center gap-2">
-                            <User className="h-5 w-5 text-primary" />
-                            {detailCustomer?.customer.name}
+                        <DialogTitle className="flex items-center gap-2 min-w-0 break-words">
+                            <User className="h-5 w-5 text-primary shrink-0" />
+                            <span className="truncate">{detailCustomer?.customer.name}</span>
                         </DialogTitle>
-                        <DialogDescription>
+                        <DialogDescription className="break-words">
                             {detailCustomer?.customer.phone ? `Phone: ${detailCustomer.customer.phone}` : 'No phone registered'}
                             {detailCustomer?.customer.gstin ? ` • GSTIN: ${detailCustomer.customer.gstin}` : ''}
                         </DialogDescription>
                     </DialogHeader>
 
-                    <div className="space-y-4 py-2">
-                        <div className="text-xs text-muted-foreground">
+                    <div className="space-y-4 py-2 min-w-0">
+                        <div className="text-xs text-muted-foreground break-words">
                             {detailCustomer?.customer.address && (
                                 <p className="mb-2"><strong>Address:</strong> {detailCustomer.customer.address}</p>
                             )}
@@ -506,8 +579,8 @@ export default function CustomersPage() {
                             </h4>
 
                             {detailCustomer?.sales && detailCustomer.sales.length > 0 ? (
-                                <div className="border rounded-md overflow-hidden max-h-56 overflow-y-auto">
-                                    <table className="w-full text-xs">
+                                <div className="border rounded-md overflow-x-auto max-h-56 overflow-y-auto">
+                                    <table className="w-full min-w-[380px] text-xs">
                                         <thead className="bg-muted text-muted-foreground border-b">
                                             <tr>
                                                 <th className="py-2 px-3 text-left">Bill #</th>

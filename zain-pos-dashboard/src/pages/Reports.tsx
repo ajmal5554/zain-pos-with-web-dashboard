@@ -148,8 +148,8 @@ interface MonthHeaderProps {
 
 function MonthHeader({ selectedMonth, onPrevMonth, onNextMonth, onSelectMonth }: MonthHeaderProps) {
     return (
-        <div className="flex items-center justify-between gap-4 w-full">
-            <div>
+        <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-4 w-full">
+            <div className="min-w-0">
                 <h2 className="text-xl sm:text-2xl font-bold tracking-tight">GST Reports</h2>
                 <p className="text-muted-foreground text-xs hidden sm:block">
                     Generate GST-compliant sales reports.

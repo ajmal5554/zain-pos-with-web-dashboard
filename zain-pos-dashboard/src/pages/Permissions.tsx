@@ -81,17 +81,100 @@ export default function PermissionsPage() {
     }
 
     return (
-        <div className="flex-1 space-y-4">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-2xl font-bold tracking-tight">Access & Permissions</h2>
-                    <p className="text-muted-foreground text-sm">
+        <div className="flex-1 space-y-4 pb-6 min-w-0 w-full">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                    <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Access & Permissions</h2>
+                    <p className="text-muted-foreground text-xs sm:text-sm">
                         Manage what users can access in the system.
                     </p>
                 </div>
             </div>
 
-            <Card className="overflow-hidden">
+            {/* Mobile Card View */}
+            <div className="md:hidden space-y-3">
+                {loading ? (
+                    <Card>
+                        <CardContent className="p-8 text-center text-sm text-muted-foreground">
+                            Loading users...
+                        </CardContent>
+                    </Card>
+                ) : sortedUsers.length === 0 ? (
+                    <Card>
+                        <CardContent className="p-8 text-center text-sm text-muted-foreground">
+                            No users found.
+                        </CardContent>
+                    </Card>
+                ) : sortedUsers.map((user) => (
+                    <Card key={user.id} className="overflow-hidden">
+                        <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-3 border-b bg-muted/40">
+                            <div className="min-w-0">
+                                <CardTitle className="text-sm font-semibold truncate">{user.name}</CardTitle>
+                                <CardDescription className="text-xs truncate">@{user.username}</CardDescription>
+                            </div>
+                            <Badge variant={user.role === 'ADMIN' ? "default" : "secondary"} className="font-normal text-[10px] shrink-0">
+                                {user.role}
+                            </Badge>
+                        </CardHeader>
+                        <CardContent className="p-4 space-y-4">
+                            {user.role === 'ADMIN' ? (
+                                <div className="flex items-center justify-between text-xs text-muted-foreground py-1">
+                                    <span className="flex items-center gap-1.5 font-medium text-foreground">
+                                        <ShieldCheck className="h-4 w-4 text-primary" />
+                                        Full Admin Access
+                                    </span>
+                                    <span>Unlimited Discount</span>
+                                </div>
+                            ) : (
+                                <>
+                                    <div className="grid grid-cols-2 gap-2.5">
+                                        {permissionColumns.map((column) => (
+                                            <div
+                                                key={column.key}
+                                                className="flex items-center justify-between gap-2 rounded-lg border bg-muted/20 px-2.5 py-2"
+                                            >
+                                                <span className="text-xs font-medium truncate">{column.label}</span>
+                                                <button
+                                                    type="button"
+                                                    aria-label={`${column.label} for ${user.name}`}
+                                                    onClick={() => void togglePermission(user, column.key)}
+                                                    className={cn(
+                                                        "relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                                                        user[column.key] ? "bg-primary" : "bg-input"
+                                                    )}
+                                                >
+                                                    <span className={cn(
+                                                        "pointer-events-none block h-4 w-4 rounded-full bg-background shadow-lg ring-0 transition-transform",
+                                                        user[column.key] ? "translate-x-4" : "translate-x-0"
+                                                    )} />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    <div className="flex items-center justify-between gap-3 pt-2 border-t">
+                                        <span className="text-xs font-medium text-muted-foreground">Max Discount (%)</span>
+                                        <div className="relative flex items-center w-28">
+                                            <input
+                                                type="number"
+                                                defaultValue={user.maxDiscount}
+                                                onBlur={(e) => void saveDiscount(user, Number(e.target.value) || 0)}
+                                                className="w-full h-8 rounded-md border border-input bg-background pl-2 pr-6 text-sm tabular-nums text-right focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                            />
+                                            <div className="absolute right-2 text-muted-foreground pointer-events-none">
+                                                <Percent className="h-3 w-3" />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+                        </CardContent>
+                    </Card>
+                ))}
+            </div>
+
+            {/* Desktop Matrix Table */}
+            <Card className="hidden md:block overflow-hidden">
                 <CardHeader className="flex-row items-center justify-between space-y-0 pb-2 border-b bg-muted/50">
                     <div>
                         <CardTitle className="text-base font-semibold">User Permissions</CardTitle>
@@ -103,7 +186,7 @@ export default function PermissionsPage() {
                         <Table>
                             <TableHeader>
                                 <TableRow className="bg-muted/50">
-                                    <TableHead className="min-w-[180px] font-medium sticky left-0 bg-muted/50 shadow-sm z-10">User / Role</TableHead>
+                                    <TableHead className="min-w-[180px] font-medium sticky left-0 bg-muted shadow-sm z-10">User / Role</TableHead>
                                     {permissionColumns.map((col) => (
                                         <TableHead key={col.key} className="text-center font-medium min-w-[90px] text-xs px-2">
                                             {col.label}
@@ -121,7 +204,7 @@ export default function PermissionsPage() {
                                     </TableRow>
                                 ) : sortedUsers.map((user) => (
                                     <TableRow key={user.id} className="hover:bg-muted/20 transition-colors">
-                                        <TableCell className="font-medium sticky left-0 bg-background z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                                        <TableCell className="font-medium sticky left-0 bg-card z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
                                             <div className="text-sm">{user.name}</div>
                                             <Badge variant={user.role === 'ADMIN' ? "default" : "secondary"} className="mt-1 font-normal text-[10px]">
                                                 {user.role}
@@ -136,6 +219,8 @@ export default function PermissionsPage() {
                                                 ) : (
                                                     <div className="flex justify-center">
                                                         <button
+                                                            type="button"
+                                                            aria-label={`${column.label} for ${user.name}`}
                                                             onClick={() => void togglePermission(user, column.key)}
                                                             className={cn(
                                                                 "relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50",
@@ -176,9 +261,9 @@ export default function PermissionsPage() {
                 </CardContent>
             </Card>
 
-            <div className="rounded-md border bg-card p-4 flex items-start gap-4 text-sm text-muted-foreground">
+            <div className="rounded-md border bg-card p-3.5 sm:p-4 flex items-start gap-3 sm:gap-4 text-xs sm:text-sm text-muted-foreground">
                  <ShieldAlert className="h-5 w-5 mt-0.5 text-accent-foreground shrink-0" />
-                 <div>
+                 <div className="min-w-0">
                      <p className="font-semibold text-foreground">Note on Permissions</p>
                      <p className="mt-1">Permissions update in real time. Users might need to refresh the page to see changes.</p>
                  </div>

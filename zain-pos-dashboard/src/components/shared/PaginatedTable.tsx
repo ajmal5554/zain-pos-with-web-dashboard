@@ -20,6 +20,7 @@ interface PaginatedTableProps<T> {
         className?: string;
         mobileHidden?: boolean; // hide column on mobile
     }[];
+    renderMobileCard?: (item: T) => ReactNode;
     page: number;
     total?: number;
     onPageChange: (page: number) => void;
@@ -32,6 +33,7 @@ interface PaginatedTableProps<T> {
 export function PaginatedTable<T extends { id: string | number }>({
     data,
     columns,
+    renderMobileCard,
     page,
     total = 0,
     onPageChange,
@@ -61,8 +63,31 @@ export function PaginatedTable<T extends { id: string | number }>({
 
     return (
         <div className="w-full space-y-3">
+            {renderMobileCard && (
+                <div className="md:hidden divide-y">
+                    {loading ? (
+                        Array.from({ length: 4 }).map((_, idx) => (
+                            <div key={idx} className="p-3.5 space-y-2 animate-pulse">
+                                <div className="h-4 w-1/2 rounded bg-muted" />
+                                <div className="h-3 w-1/3 rounded bg-muted" />
+                            </div>
+                        ))
+                    ) : data.length > 0 ? (
+                        data.map((row) => (
+                            <div key={row.id} className="p-3.5">
+                                {renderMobileCard(row)}
+                            </div>
+                        ))
+                    ) : (
+                        <div className="py-12 px-4 text-center text-muted-foreground text-sm">
+                            {emptyMessage}
+                        </div>
+                    )}
+                </div>
+            )}
+
             {/* Scrollable table wrapper — fixes overflow on mobile */}
-            <div className="overflow-x-auto w-full">
+            <div className={cn("overflow-x-auto w-full", renderMobileCard && "hidden md:block")}>
                 <Table className="min-w-full">
                     <TableHeader>
                         <TableRow className="hover:bg-transparent">
@@ -121,7 +146,7 @@ export function PaginatedTable<T extends { id: string | number }>({
             </div>
 
             {/* Pagination */}
-            <div className="flex items-center justify-between gap-2 px-2 py-1 flex-wrap">
+            <div className="flex items-center justify-between gap-2 px-3 py-2 flex-wrap border-t">
                 <div className="flex items-center gap-2">
                     <span className="text-xs text-muted-foreground">Show</span>
                     <select

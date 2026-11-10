@@ -33,11 +33,11 @@ export default function Inventory() {
     );
 
     return (
-        <div className="flex-1 space-y-4">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-2xl font-bold tracking-tight">Stock</h2>
-                    <p className="text-muted-foreground text-sm">
+        <div className="flex-1 space-y-4 pb-6 min-w-0 w-full">
+            <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                    <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Stock</h2>
+                    <p className="text-muted-foreground text-xs sm:text-sm">
                         View stock levels and items that need reordering.
                     </p>
                 </div>
@@ -98,7 +98,7 @@ export default function Inventory() {
                         ) : filteredProducts.length > 0 ? (
                             filteredProducts.map((product) => (
                                 <TableRow key={product.id}>
-                                    <TableCell className="max-w-[150px]">
+                                    <TableCell className="max-w-[160px] sm:max-w-none">
                                         <div className="flex flex-col gap-0.5">
                                             <span className="font-medium text-sm leading-tight truncate">{product.name}</span>
                                             {/* Show status badge inline on mobile only */}

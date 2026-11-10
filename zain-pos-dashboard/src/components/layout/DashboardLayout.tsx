@@ -31,7 +31,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
     };
 
     return (
-        <div className="flex h-screen w-full flex-col bg-background overflow-hidden">
+        <div className="flex h-screen h-[100dvh] w-full flex-col bg-background overflow-hidden">
             <Sidebar isOpen={sidebarOpen} />
 
             <div className="flex flex-col sm:pl-52 flex-1 min-w-0 h-full overflow-hidden">
@@ -40,7 +40,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                     <Header title={getTitle()} />
                 </div>
 
-                <main className="grid flex-1 items-start gap-4 p-4 pb-28 sm:p-6 sm:pb-8 md:gap-8 min-w-0 w-full max-w-full overflow-y-auto overflow-x-hidden">
+                <main className="grid grid-cols-1 content-start flex-1 items-start gap-4 p-4 pb-28 sm:p-6 sm:pb-8 md:gap-8 min-w-0 w-full max-w-full overflow-y-auto overflow-x-hidden">
                     {children}
                 </main>
             </div>

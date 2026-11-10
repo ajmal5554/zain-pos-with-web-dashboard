@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useDateFilter, type DateRangeLabel, formatActiveRange } from '@/contexts/DateFilterContext';
 import { Calendar, ChevronDown, Check, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -7,6 +7,8 @@ export function DateRangePicker() {
     const { dateRange, setPreset, setDateRange, navigatePrev, navigateNext } = useDateFilter();
     const [isOpen, setIsOpen] = useState(false);
     const [showCustom, setShowCustom] = useState(false); // To toggle custom date inputs
+    const [menuLeftOffset, setMenuLeftOffset] = useState<number | null>(null);
+    const triggerWrapperRef = useRef<HTMLDivElement>(null);
 
     // Temporary state for custom date inputs
     const [customStart, setCustomStart] = useState('');
@@ -15,6 +17,33 @@ export function DateRangePicker() {
     const presets: DateRangeLabel[] = [
         'Today', 'Week', 'Month', 'Year', 'All Time'
     ];
+
+    const updateMenuPosition = () => {
+        const el = triggerWrapperRef.current;
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        const panelWidth = Math.min(256, window.innerWidth - 24);
+        const preferredLeft = rect.left + panelWidth <= window.innerWidth - 12 ? 0 : rect.width - panelWidth;
+        const minLeft = 12 - rect.left;
+        const maxLeft = window.innerWidth - 12 - panelWidth - rect.left;
+        setMenuLeftOffset(Math.max(minLeft, Math.min(preferredLeft, maxLeft)));
+    };
+
+    useLayoutEffect(() => {
+        if (!isOpen) return;
+        updateMenuPosition();
+        window.addEventListener('resize', updateMenuPosition);
+        return () => window.removeEventListener('resize', updateMenuPosition);
+    }, [isOpen]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') setIsOpen(false);
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [isOpen]);
 
     const handlePresetSelect = (label: DateRangeLabel) => {
         setPreset(label);
@@ -35,26 +64,28 @@ export function DateRangePicker() {
     };
 
     return (
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 min-w-0 max-w-full">
             {/* Prev Period Button */}
             {dateRange.label !== 'All Time' && (
                 <button
                     onClick={navigatePrev}
                     title={`Previous ${dateRange.label}`}
-                    className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 shrink-0"
+                    aria-label={`Previous ${dateRange.label}`}
+                    className="flex h-9 w-8 sm:w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 shrink-0"
                 >
                     <ChevronLeft className="w-4 h-4" />
                 </button>
             )}
 
             {/* Date Picker Trigger & Popover */}
-            <div className="relative">
+            <div className="relative min-w-0" ref={triggerWrapperRef}>
                 <button
-                    onClick={() => setIsOpen(!isOpen)}
-                    className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 select-none"
+                    onClick={() => setIsOpen((prev) => !prev)}
+                    aria-expanded={isOpen}
+                    className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 sm:px-3 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 select-none max-w-full min-w-0"
                 >
                     <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span className="truncate max-w-[100px] sm:max-w-none">
+                    <span className="truncate max-w-[115px] sm:max-w-none">
                         {formatActiveRange(dateRange)}
                     </span>
                     <ChevronDown className={cn("w-3.5 h-3.5 transition-transform text-slate-400 shrink-0", isOpen && "rotate-180")} />
@@ -63,7 +94,10 @@ export function DateRangePicker() {
                 {/* Dropdown Menu */}
                 {isOpen && (
                     <>
-                        <div className="absolute left-0 sm:right-0 sm:left-auto z-50 mt-2 w-64 rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_24px_60px_-32px_rgba(15,23,42,0.45)] animate-in fade-in zoom-in-95 duration-100 dark:border-slate-700 dark:bg-slate-900">
+                        <div
+                            style={menuLeftOffset !== null ? { left: `${menuLeftOffset}px` } : undefined}
+                            className="absolute z-50 mt-2 w-64 max-w-[calc(100vw-1.5rem)] max-h-[70dvh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_24px_60px_-32px_rgba(15,23,42,0.45)] animate-in fade-in zoom-in-95 duration-100 dark:border-slate-700 dark:bg-slate-900"
+                        >
                             <div className="space-y-1">
                                 {presets.map((preset) => (
                                     <button
@@ -103,7 +137,7 @@ export function DateRangePicker() {
                                             <label className="mb-1 block text-xs text-slate-500">Start Date</label>
                                             <input
                                                 type="date"
-                                                className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 dark:border-slate-700 dark:bg-slate-900"
+                                                className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
                                                 value={customStart}
                                                 onChange={(e) => setCustomStart(e.target.value)}
                                             />
@@ -112,7 +146,7 @@ export function DateRangePicker() {
                                             <label className="mb-1 block text-xs text-slate-500">End Date</label>
                                             <input
                                                 type="date"
-                                                className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 dark:border-slate-700 dark:bg-slate-900"
+                                                className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
                                                 value={customEnd}
                                                 onChange={(e) => setCustomEnd(e.target.value)}
                                             />
@@ -138,7 +172,8 @@ export function DateRangePicker() {
                 <button
                     onClick={navigateNext}
                     title={`Next ${dateRange.label}`}
-                    className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 shrink-0"
+                    aria-label={`Next ${dateRange.label}`}
+                    className="flex h-9 w-8 sm:w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 shrink-0"
                 >
                     <ChevronRight className="w-4 h-4" />
                 </button>

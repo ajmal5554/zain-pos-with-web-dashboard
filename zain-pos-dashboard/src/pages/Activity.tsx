@@ -753,10 +753,10 @@ export default function ActivityPage() {
     };
 
     return (
-        <div className="flex-1 space-y-4 pb-6 min-w-0">
-            {/* Header: Fixed top actions, no wrapping */}
-            <div className="flex items-center justify-between gap-4 w-full">
-                <div>
+        <div className="flex-1 space-y-4 pb-6 min-w-0 w-full">
+            {/* Header */}
+            <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-4 w-full">
+                <div className="min-w-0">
                     <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Activity Log</h2>
                     <p className="text-muted-foreground text-xs hidden sm:block">
                         Audit trail of sales overrides, discounts, inventory, and staff actions.
@@ -902,7 +902,7 @@ export default function ActivityPage() {
 
                     {/* Custom Range Picker */}
                     {datePreset === 'CUSTOM' && (
-                        <div className="flex items-center gap-3 pt-2 border-t text-xs text-muted-foreground">
+                        <div className="flex flex-wrap items-center gap-2 sm:gap-3 pt-2 border-t text-xs text-muted-foreground">
                             <span>From:</span>
                             <input
                                 type="date"
@@ -922,8 +922,134 @@ export default function ActivityPage() {
                 </CardContent>
             </Card>
 
+            {/* Mobile Activity Cards */}
+            <div className="md:hidden space-y-3">
+                {loading ? (
+                    Array.from({ length: 4 }).map((_, i) => (
+                        <Card key={i}>
+                            <CardContent className="p-4 space-y-2 animate-pulse">
+                                <div className="h-4 bg-muted rounded w-1/3" />
+                                <div className="h-3 bg-muted rounded w-3/4" />
+                            </CardContent>
+                        </Card>
+                    ))
+                ) : paginatedLogs.length > 0 ? (
+                    paginatedLogs.map((log) => {
+                        const severity = getActionSeverity(log.action);
+                        const parsed = parseLogExplanation(log);
+                        const logDate = new Date(log.createdAt);
+
+                        return (
+                            <Card key={log.id} className="border-slate-200/60 shadow-sm dark:border-slate-800">
+                                <CardContent className="p-3.5 space-y-2.5">
+                                    <div className="flex items-start justify-between gap-2">
+                                        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                                            <span className={cn(
+                                                "inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold",
+                                                severity === 'CRITICAL' && "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300",
+                                                severity === 'WARNING' && "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+                                                severity === 'FINANCIAL' && "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+                                                severity === 'INFO' && "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                                            )}>
+                                                {formatActionTitle(log.action)}
+                                            </span>
+                                            <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-mono">
+                                                {getActionCategory(log.action)}
+                                            </span>
+                                        </div>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => setSelectedLog(log)}
+                                            className="h-7 px-2 text-xs shrink-0"
+                                        >
+                                            <Eye className="h-3.5 w-3.5 mr-1" />
+                                            View
+                                        </Button>
+                                    </div>
+
+                                    <p className="text-sm text-slate-900 dark:text-slate-100 leading-relaxed break-words">
+                                        {parsed.narrative}
+                                    </p>
+
+                                    {(parsed.invoiceNo || parsed.amount || parsed.percentage || parsed.reason) && (
+                                        <div className="flex flex-wrap items-center gap-1.5">
+                                            {parsed.invoiceNo && (
+                                                <Badge variant="outline" className="text-[11px] font-normal px-2 py-0">
+                                                    Bill #{parsed.invoiceNo}
+                                                </Badge>
+                                            )}
+                                            {parsed.amount && (
+                                                <Badge variant="secondary" className="text-[11px] font-semibold px-2 py-0">
+                                                    ₹{parsed.amount}
+                                                </Badge>
+                                            )}
+                                            {parsed.percentage && (
+                                                <Badge variant="secondary" className="text-[11px] font-semibold px-2 py-0">
+                                                    {parsed.percentage}
+                                                </Badge>
+                                            )}
+                                            {parsed.reason && (
+                                                <span className="text-xs text-muted-foreground italic break-words">
+                                                    ({parsed.reason})
+                                                </span>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t text-xs text-muted-foreground">
+                                        <span className="font-medium text-foreground">
+                                            {log.user?.name || 'System'}
+                                        </span>
+                                        <span className="font-mono text-[11px]">
+                                            {!isNaN(logDate.getTime()) ? format(logDate, 'dd MMM yyyy, hh:mm a') : log.createdAt}
+                                        </span>
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        );
+                    })
+                ) : (
+                    <Card>
+                        <CardContent className="p-8 text-center text-sm text-muted-foreground">
+                            No activity records found matching active filters.
+                        </CardContent>
+                    </Card>
+                )}
+
+                {totalPages > 1 && (
+                    <Card>
+                        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 text-xs text-muted-foreground">
+                            <span>
+                                Page {currentPage} of {totalPages} ({filteredLogs.length})
+                            </span>
+                            <div className="flex items-center gap-1">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={currentPage === 1}
+                                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                                    className="h-8 px-2"
+                                >
+                                    <ChevronLeft className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={currentPage === totalPages}
+                                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                                    className="h-8 px-2"
+                                >
+                                    <ChevronRight className="h-4 w-4" />
+                                </Button>
+                            </div>
+                        </div>
+                    </Card>
+                )}
+            </div>
+
             {/* Main Activity Table */}
-            <Card className="border-slate-200/60 shadow-sm dark:border-slate-800">
+            <Card className="hidden md:block border-slate-200/60 shadow-sm dark:border-slate-800">
                 <CardContent className="p-0">
                     <Table>
                         <TableHeader>
@@ -1062,7 +1188,7 @@ export default function ActivityPage() {
 
                     {/* Table Pagination Footer */}
                     {totalPages > 1 && (
-                        <div className="flex items-center justify-between px-4 py-3 border-t text-xs text-muted-foreground">
+                        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-t text-xs text-muted-foreground">
                             <span>
                                 Showing {(currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, filteredLogs.length)} of {filteredLogs.length} records
                             </span>
@@ -1135,8 +1261,8 @@ export default function ActivityPage() {
 
                                         {/* Totals Comparison Table */}
                                         {parsed.diff.totals && (
-                                            <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 overflow-hidden text-xs">
-                                                <table className="w-full">
+                                            <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 overflow-x-auto text-xs">
+                                                <table className="w-full min-w-[320px]">
                                                     <thead className="bg-slate-100/75 dark:bg-slate-900/75 text-slate-500 text-[11px] border-b border-slate-200 dark:border-slate-800">
                                                         <tr>
                                                             <th className="text-left font-semibold py-1.5 px-3">Field</th>
@@ -1203,7 +1329,7 @@ export default function ActivityPage() {
 
                                         {/* Payment Only Diff */}
                                         {parsed.diff.payment && (
-                                            <div className="flex items-center gap-3 p-3 bg-white dark:bg-slate-950 rounded-lg border border-slate-200 dark:border-slate-800">
+                                            <div className="flex flex-wrap items-center gap-2 sm:gap-3 p-3 bg-white dark:bg-slate-950 rounded-lg border border-slate-200 dark:border-slate-800">
                                                 <span className="text-slate-500 text-xs">Payment Method:</span>
                                                 <span className="font-semibold text-slate-700 dark:text-slate-300">{parsed.diff.payment.before.method}</span>
                                                 <ArrowRight className="w-3.5 h-3.5 text-slate-400" />
@@ -1232,7 +1358,7 @@ export default function ActivityPage() {
                                                         return (
                                                             <div
                                                                 key={idx}
-                                                                className={`p-2.5 rounded-lg border flex items-center justify-between text-xs ${
+                                                                className={`p-2.5 rounded-lg border flex flex-wrap items-center justify-between gap-2 text-xs ${
                                                                     isAdded ? 'bg-emerald-50 text-emerald-900 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-300 dark:border-emerald-800' :
                                                                     isRemoved ? 'bg-rose-50 text-rose-900 border-rose-200 dark:bg-rose-950/30 dark:text-rose-300 dark:border-rose-800' :
                                                                     isQty ? 'bg-blue-50 text-blue-900 border-blue-200 dark:bg-blue-950/30 dark:text-blue-300 dark:border-blue-800' :

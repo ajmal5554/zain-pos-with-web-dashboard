@@ -75,14 +75,14 @@ export default function DashboardPage() {
     if (error) return <div role="alert" className="rounded-md border border-destructive p-5 text-destructive"><p>{error}</p><button className="mt-3 underline font-semibold" onClick={() => void refetch()}>Retry dashboard</button></div>;
 
     return (
-        <div className="flex-1 space-y-4 pb-6 min-w-0">
+        <div className="flex-1 space-y-4 pb-6 min-w-0 w-full">
             {/* Page Header */}
-            <div className="flex items-center justify-between gap-4 w-full">
-                <div>
+            <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-4 w-full">
+                <div className="min-w-0">
                     <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Dashboard</h2>
                     <p className="text-muted-foreground text-xs hidden sm:block">Your daily shop overview</p>
                 </div>
-                <div className="shrink-0">
+                <div className="shrink-0 max-w-full">
                     <DateRangePicker />
                 </div>
             </div>
@@ -175,7 +175,7 @@ export default function DashboardPage() {
             </Card>
 
             {/* Payment method cards — 3 columns on md (Cash / UPI / Card) */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {(['CASH', 'UPI', 'CARD'] as const).map((method) => {
                     const meta = METHOD_META[method];
                     const Icon = meta.icon;
@@ -302,8 +302,8 @@ export default function DashboardPage() {
                                             <ShoppingBag className="h-4 w-4 text-muted-foreground" />
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                            <p className="text-sm font-medium">Bill #{tx.billNo ?? tx.id}</p>
-                                            <p className="text-xs text-muted-foreground">Sold at {time} ({tx.method})</p>
+                                            <p className="text-sm font-medium truncate">Bill #{tx.billNo ?? tx.id}</p>
+                                            <p className="text-xs text-muted-foreground truncate">Sold at {time} ({tx.method})</p>
                                         </div>
                                         <div className="flex items-center gap-2 shrink-0">
                                             <span className="text-sm font-semibold text-emerald-600">

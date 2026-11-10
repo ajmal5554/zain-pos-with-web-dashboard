@@ -16,7 +16,6 @@ import UsersPage from './pages/Users';
 import PermissionsPage from './pages/Permissions';
 import SettingsPage from './pages/Settings';
 import './index.css';
-import { Sparkles } from 'lucide-react';
 
 function AppBootScreen() {
   return (

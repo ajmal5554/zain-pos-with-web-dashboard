@@ -90,16 +90,16 @@ export default function UsersPage() {
     }
 
     return (
-        <div className="flex-1 space-y-4">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-2xl font-bold tracking-tight">Users</h2>
-                    <p className="text-muted-foreground text-sm">
+        <div className="flex-1 space-y-4 pb-6 min-w-0 w-full">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                    <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Users</h2>
+                    <p className="text-muted-foreground text-xs sm:text-sm">
                         Manage users and system access.
                     </p>
                 </div>
                 {!isDemoModeEnabled() && (
-                    <Button onClick={() => setFormOpen(true)}>
+                    <Button onClick={() => setFormOpen(true)} className="shrink-0">
                         <Plus className="mr-2 h-4 w-4" />
                         Add User
                     </Button>
@@ -107,8 +107,8 @@ export default function UsersPage() {
             </div>
 
             <Card>
-                <CardContent className="p-4">
-                    <div className="relative max-w-sm flex-1">
+                <CardContent className="p-3 sm:p-4">
+                    <div className="relative w-full sm:max-w-sm">
                         <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                         <input
                             type="text"
@@ -121,7 +121,71 @@ export default function UsersPage() {
                 </CardContent>
             </Card>
 
-            <div className="rounded-md border bg-card overflow-hidden">
+            {/* Mobile Card View */}
+            <div className="md:hidden space-y-3">
+                {loading ? (
+                    <Card>
+                        <CardContent className="p-8 text-center text-sm text-muted-foreground">
+                            Loading...
+                        </CardContent>
+                    </Card>
+                ) : filteredUsers.length > 0 ? (
+                    filteredUsers.map((user) => (
+                        <Card key={user.id} className="overflow-hidden">
+                            <CardContent className="p-4 space-y-3">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div className="flex items-center gap-3 min-w-0">
+                                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border bg-muted">
+                                            <User className="h-4 w-4" />
+                                        </div>
+                                        <div className="min-w-0">
+                                            <p className="font-semibold text-sm truncate">{user.name}</p>
+                                            <p className="text-xs text-muted-foreground truncate">@{user.username}</p>
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-wrap justify-end gap-1.5 shrink-0">
+                                        <Badge variant="secondary" className="font-normal text-[11px]">
+                                            {user.role}
+                                        </Badge>
+                                        <Badge variant={user.isActive ? "default" : "destructive"} className="font-normal text-[11px]">
+                                            {user.isActive ? 'Active' : 'Deactivated'}
+                                        </Badge>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2 pt-2 border-t">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-8 text-xs w-full"
+                                        onClick={() => setPasswordOpenFor(user)}
+                                    >
+                                        Change Password
+                                    </Button>
+                                    <Button
+                                        variant={user.isActive ? "secondary" : "default"}
+                                        size="sm"
+                                        className="h-8 text-xs w-full"
+                                        onClick={() => void handleToggleActive(user)}
+                                    >
+                                        {user.isActive ? 'Deactivate' : 'Activate'}
+                                    </Button>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    ))
+                ) : (
+                    <Card>
+                        <CardContent className="p-8 text-center text-sm text-muted-foreground">
+                            No users found.
+                        </CardContent>
+                    </Card>
+                )}
+            </div>
+
+            {/* Desktop Table View */}
+            <div className="hidden md:block rounded-md border bg-card overflow-hidden">
+                <div className="overflow-x-auto">
                 <Table>
                     <TableHeader>
                         <TableRow>
@@ -170,7 +234,7 @@ export default function UsersPage() {
                                             <Button 
                                                 variant="outline" 
                                                 size="sm" 
-                                                className="h-8"
+                                                className="h-8 whitespace-nowrap"
                                                 onClick={() => setPasswordOpenFor(user)}
                                             >
                                                 Change Password
@@ -178,7 +242,7 @@ export default function UsersPage() {
                                             <Button 
                                                 variant={user.isActive ? "secondary" : "default"} 
                                                 size="sm" 
-                                                className="h-8"
+                                                className="h-8 whitespace-nowrap"
                                                 onClick={() => void handleToggleActive(user)}
                                             >
                                                 {user.isActive ? 'Deactivate' : 'Activate'}
@@ -196,6 +260,7 @@ export default function UsersPage() {
                         )}
                     </TableBody>
                 </Table>
+                </div>
             </div>
 
             <Dialog open={formOpen} onOpenChange={setFormOpen}>
@@ -234,7 +299,7 @@ export default function UsersPage() {
                                     value={form.password} 
                                     onChange={(e) => setForm((prev) => ({ ...prev, password: e.target.value }))} 
                                 />
-                                <button className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" onClick={() => setShowPassword(!showPassword)}>
+                                <button type="button" aria-label={showPassword ? 'Hide password' : 'Show password'} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" onClick={() => setShowPassword(!showPassword)}>
                                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                                 </button>
                             </div>

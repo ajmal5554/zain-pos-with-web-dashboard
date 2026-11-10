@@ -153,16 +153,16 @@ export default function ProductsPage() {
     }
 
     return (
-        <div className="flex-1 space-y-4">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-2xl font-bold tracking-tight">Products</h2>
-                    <p className="text-muted-foreground text-sm">
+        <div className="flex-1 space-y-4 pb-6 min-w-0 w-full">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                    <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Products</h2>
+                    <p className="text-muted-foreground text-xs sm:text-sm">
                         Manage your shop stock and items
                     </p>
                 </div>
                 {!isDemoModeEnabled() && (
-                    <Button onClick={openCreateModal}>
+                    <Button onClick={openCreateModal} className="shrink-0">
                         <Plus className="mr-2 h-4 w-4" />
                         Add Product
                     </Button>
@@ -170,9 +170,9 @@ export default function ProductsPage() {
             </div>
 
             <Card>
-                <CardContent className="p-4">
-                    <div className="flex items-center space-x-2">
-                        <div className="relative flex-1">
+                <CardContent className="p-3 sm:p-4">
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                        <div className="relative flex-1 min-w-0">
                             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                             <input
                                 type="text"
@@ -182,7 +182,7 @@ export default function ProductsPage() {
                                 className="w-full h-9 rounded-md border border-input bg-background pl-8 pr-3 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                             />
                         </div>
-                        <Button variant="outline" className="h-9 px-4">
+                        <Button variant="outline" className="h-9 px-4 w-full sm:w-auto shrink-0">
                             <Tag className="mr-2 h-4 w-4" />
                             Categories
                         </Button>
@@ -190,7 +190,87 @@ export default function ProductsPage() {
                 </CardContent>
             </Card>
 
-            <div className="rounded-md border bg-card overflow-hidden">
+            {/* Mobile Card List */}
+            <div className="md:hidden space-y-3">
+                {loading ? (
+                    <Card>
+                        <CardContent className="p-8 text-center text-sm text-muted-foreground">
+                            Loading...
+                        </CardContent>
+                    </Card>
+                ) : filteredProducts.length > 0 ? (
+                    filteredProducts.map((product) => {
+                        const primaryVariant = product.variants[0];
+                        const totalStock = product.variants.reduce((sum, variant) => sum + Number(variant.stock || 0), 0);
+                        return (
+                            <Card key={product.id} className="overflow-hidden">
+                                <CardContent className="p-4 space-y-3">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <h3 className="font-semibold text-sm leading-snug break-words">{product.name}</h3>
+                                            <p className="text-xs text-muted-foreground mt-0.5">
+                                                {product.variants.length} Type{product.variants.length === 1 ? '' : 's'}
+                                                {primaryVariant?.barcode ? ` · ${primaryVariant.barcode}` : ''}
+                                            </p>
+                                        </div>
+                                        <Badge variant="secondary" className="font-normal text-xs shrink-0">
+                                            {product.category?.name || 'None'}
+                                        </Badge>
+                                    </div>
+
+                                    <div className="flex items-center justify-between pt-2 border-t text-sm">
+                                        <div className="flex items-center gap-4">
+                                            <div>
+                                                <span className="text-[11px] text-muted-foreground block">Stock</span>
+                                                <span className={cn(
+                                                    "font-semibold",
+                                                    totalStock <= 5 ? "text-rose-500" : "text-emerald-600"
+                                                )}>
+                                                    {totalStock}
+                                                </span>
+                                            </div>
+                                            <div>
+                                                <span className="text-[11px] text-muted-foreground block">Price</span>
+                                                <span className="font-semibold">
+                                                    {formatCurrency(primaryVariant?.sellingPrice || 0)}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-1.5">
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="h-8"
+                                                onClick={() => openEditModal(product)}
+                                            >
+                                                <Edit className="mr-1.5 h-3.5 w-3.5" />
+                                                Edit
+                                            </Button>
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                aria-label={`Delete ${product.name}`}
+                                                className="h-8 w-8 text-rose-500 hover:text-rose-600"
+                                                onClick={() => void deleteProduct(product.id)}
+                                            >
+                                                <Trash2 className="h-4 w-4" />
+                                            </Button>
+                                        </div>
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        );
+                    })
+                ) : (
+                    <Card>
+                        <CardContent className="p-8 text-center text-sm text-muted-foreground">
+                            No products found
+                        </CardContent>
+                    </Card>
+                )}
+            </div>
+
+            <div className="hidden md:block rounded-md border bg-card overflow-hidden">
                 <Table>
                     <TableHeader>
                         <TableRow>
@@ -288,8 +368,8 @@ export default function ProductsPage() {
                         </DialogDescription>
                     </DialogHeader>
 
-                    <div className="space-y-4 py-4">
-                        <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-4 py-2 sm:py-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div className="space-y-2">
                                 <label className="text-sm font-medium">Product Name</label>
                                 <input 
@@ -315,7 +395,7 @@ export default function ProductsPage() {
                         </div>
 
                         <div className="space-y-4 pt-4 border-t">
-                            <div className="flex items-center justify-between">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
                                 <h3 className="text-sm font-semibold">Item Types (Sizes/Colors)</h3>
                                 <Button 
                                     variant="outline" 
@@ -328,8 +408,8 @@ export default function ProductsPage() {
                             
                             <div className="space-y-3">
                                 {form.variants.map((variant, index) => (
-                                    <div key={index} className="flex gap-3 items-end p-3 bg-muted/50 rounded-lg border">
-                                         <div className="space-y-1 flex-1">
+                                    <div key={index} className="grid grid-cols-2 sm:grid-cols-[1fr_5.5rem_5.5rem_auto] gap-2.5 sm:gap-3 items-end p-3 bg-muted/50 rounded-lg border">
+                                         <div className="space-y-1 col-span-2 sm:col-span-1">
                                             <label className="text-xs font-medium">Barcode / SKU</label>
                                             <input 
                                                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" 
@@ -337,7 +417,7 @@ export default function ProductsPage() {
                                                 onChange={(e) => updateVariant(index, { sku: e.target.value })} 
                                             />
                                          </div>
-                                         <div className="space-y-1 w-24">
+                                         <div className="space-y-1">
                                             <label className="text-xs font-medium">Price</label>
                                             <input 
                                                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" 
@@ -346,19 +426,31 @@ export default function ProductsPage() {
                                                 onChange={(e) => updateVariant(index, { sellingPrice: Number(e.target.value) })} 
                                             />
                                          </div>
-                                         <div className="space-y-1 w-24">
-                                            <label className="text-xs font-medium">Stock</label>
-                                            <input 
-                                                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" 
-                                                type="number" 
-                                                value={variant.stock} 
-                                                onChange={(e) => updateVariant(index, { stock: Number(e.target.value) })} 
-                                            />
+                                         <div className="space-y-1 flex items-end gap-2 sm:block">
+                                            <div className="space-y-1 flex-1">
+                                                <label className="text-xs font-medium">Stock</label>
+                                                <input 
+                                                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" 
+                                                    type="number" 
+                                                    value={variant.stock} 
+                                                    onChange={(e) => updateVariant(index, { stock: Number(e.target.value) })} 
+                                                />
+                                            </div>
+                                            <Button 
+                                                variant="ghost" 
+                                                size="icon" 
+                                                aria-label="Remove item type"
+                                                className="text-rose-500 shrink-0 sm:hidden"
+                                                onClick={() => setForm((current) => ({ ...current, variants: current.variants.filter((_, i) => i !== index) }))}
+                                            >
+                                                <Trash2 className="h-4 w-4" />
+                                            </Button>
                                          </div>
                                          <Button 
                                             variant="ghost" 
                                             size="icon" 
-                                            className="text-rose-500 shrink-0"
+                                            aria-label="Remove item type"
+                                            className="hidden sm:inline-flex text-rose-500 shrink-0"
                                             onClick={() => setForm((current) => ({ ...current, variants: current.variants.filter((_, i) => i !== index) }))}
                                          >
                                              <Trash2 className="h-4 w-4" />

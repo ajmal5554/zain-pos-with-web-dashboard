@@ -56,34 +56,34 @@ export function StatCard({ title, value, trend, trendLabel, icon, loading, class
 
     return (
         <Card className={cn(
-            "rounded-xl border bg-card text-card-foreground shadow-sm",
+            "rounded-xl border bg-card text-card-foreground shadow-sm min-w-0 overflow-hidden",
             variant === 'warning' && "border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/20",
             variant === 'success' && "border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/20",
             className
         )}>
-            <CardContent className="p-3 sm:p-4">
-                <div className="flex flex-row items-start justify-between gap-1 pb-1.5">
-                    <h3 className="tracking-tight text-xs sm:text-sm font-medium text-muted-foreground leading-tight">
+            <CardContent className="p-3 sm:p-4 min-w-0">
+                <div className="flex flex-row items-start justify-between gap-1.5 pb-1.5">
+                    <h3 className="tracking-tight text-xs sm:text-sm font-medium text-muted-foreground leading-tight min-w-0">
                         {title}
                     </h3>
                     <div className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5">
                         {icon}
                     </div>
                 </div>
-                <div className="flex flex-col">
-                    <div className="text-xl sm:text-2xl font-bold leading-tight">{value}</div>
+                <div className="flex flex-col min-w-0">
+                    <div className="text-lg sm:text-2xl font-bold leading-tight break-words">{value}</div>
                     {subtitle && !trend && (
-                        <p className="text-xs text-muted-foreground mt-1">
+                        <p className="text-xs text-muted-foreground mt-1 break-words">
                             {subtitle}
                         </p>
                     )}
                     {trend !== undefined && (
-                        <p className="text-xs text-muted-foreground mt-1 flex items-center">
-                            <span className={cn("inline-flex items-center font-medium mr-1", trendColor)}>
+                        <p className="text-xs text-muted-foreground mt-1 flex flex-wrap items-center gap-x-1">
+                            <span className={cn("inline-flex items-center font-medium", trendColor)}>
                                 {isPositive ? <ArrowUpRight className="mr-0.5 h-3 w-3" /> : <ArrowDownRight className="mr-0.5 h-3 w-3" />}
                                 {formatTrendValue(trend)}
                             </span>
-                            {trendLabel || 'change'}
+                            <span>{trendLabel || 'change'}</span>
                         </p>
                     )}
                 </div>
