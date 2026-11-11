@@ -87,6 +87,11 @@
       },
       {
         "type": "improvement",
+        "title": "Separated Audited Products & Old Item Chart",
+        "description": "Separated verified New / Audited garments from the Old Item Chart on the Products page into dedicated tabs. Stock health counts now reflect only audited items, while Old Item Chart supports creating new chart entries, updating prices, and printing stickers for your other shop."
+      },
+      {
+        "type": "improvement",
         "title": "Visual Stock Health Badges & Quick Inventory Filters",
         "description": "Products list features color-coded stock health badges (In Stock, Low Stock, Out of Stock) and one-click filter pills to immediately identify garments that need replenishment."
       },

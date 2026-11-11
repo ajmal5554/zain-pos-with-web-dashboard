@@ -20,6 +20,7 @@ export interface VariantInput extends GarmentDetailsInput {
 export interface SaveProductInput {
     requestId: string; id?: string; name: string; categoryId: string;
     hsn?: string | null; taxRate?: number; updatedAt?: string | Date; variants: VariantInput[];
+    catalogueType?: 'PREPARED' | 'OLD_CHART';
 }
 function authorizeManage(user: any) {
     if (!user?.isActive || !(user.role === 'ADMIN' || user.permManageProducts)) throw new Error('Permission Denied: You do not have permission to manage products.');
@@ -145,6 +146,9 @@ export async function saveProduct(prisma: any, input: SaveProductInput, user: an
     if (!name) throw new Error('Product name is required.');
     if (!input.categoryId) throw new Error('Category is required.');
     if (!Array.isArray(input.variants) || !input.variants.length) throw new Error('Product must have at least one variant.');
+    if (input.catalogueType !== undefined && input.catalogueType !== 'PREPARED' && input.catalogueType !== 'OLD_CHART') {
+        throw new Error('Invalid catalogue type.');
+    }
     const forbidden = ['stock', 'isTracked', 'trackingState', 'trackingStatus', 'trackingActive', 'conversionState', 'inventoryMovements', 'movements'];
     for (const payload of [input, ...input.variants]) {
         if (forbidden.some(field => Object.prototype.hasOwnProperty.call(payload, field))) throw new Error('Catalogue saves cannot write stock or tracking activation.');
@@ -177,6 +181,9 @@ export async function saveProduct(prisma: any, input: SaveProductInput, user: an
         }
         const existing = input.id ? await tx.product.findUnique({ where: { id: input.id }, include: { variants: true } }) : null;
         if (input.id && !existing) throw new Error('Product not found: ' + input.id);
+        if (existing && input.catalogueType !== undefined) {
+            throw new Error('Catalogue type cannot be changed for an existing product.');
+        }
         const serverTime = existing ? new Date(existing.updatedAt).getTime() : 0;
         const now = new Date(Math.max(Date.now(), serverTime + 1));
         if (existing && (!input.updatedAt || !Number.isFinite(new Date(input.updatedAt).getTime()) || new Date(input.updatedAt).getTime() !== serverTime)) {
@@ -211,7 +218,7 @@ export async function saveProduct(prisma: any, input: SaveProductInput, user: an
             }
             const variantId = old?.id || (v.id && !v.id.startsWith('temp-') ? v.id : crypto.randomUUID());
             const oldDetails = detailById.get(variantId) || {};
-            const prepared = old ? Boolean(oldDetails.isPrepared) : true;
+            const prepared = old ? Boolean(oldDetails.isPrepared) : input.catalogueType !== 'OLD_CHART';
             if (v.isPrepared !== undefined && (typeof v.isPrepared !== 'boolean' || v.isPrepared !== prepared)) throw new Error('Catalogue saves cannot change preparation state or activate conversion.');
             const barcode = v.barcode === undefined ? (old?.barcode || '') : String(v.barcode).trim();
             if (!barcode) throw new Error('Each variant needs a barcode before saving.');
@@ -297,7 +304,31 @@ export async function getProduct(prisma: any, id: string, user: any) {
     const product = await prisma.product.findUnique({ where: { id }, include: { category: true, variants: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] } } });
     if (!product) return null;
     const variants = await enrichCatalogueVariants(prisma, product.variants.map((v: any) => ({ ...v, product: { name: product.name } })), user);
-    return { ...product, variants: variants.map(({ product: _product, ...v }: any) => v) };
+    const trackedIds = new Set<string>();
+    if (variants.length) {
+        const trackingTables: any[] = await prisma.$queryRawUnsafe("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'StockVariantTracking'");
+        if (trackingTables.length) {
+            for (let i = 0; i < variants.length; i += 200) {
+                const ids = variants.slice(i, i + 200).map((v: any) => v.id);
+                const rows: any[] = await prisma.$queryRawUnsafe(
+                    'SELECT "variantId" FROM "StockVariantTracking" WHERE "variantId" IN (' + ids.map(() => '?').join(',') + ')',
+                    ...ids,
+                );
+                for (const row of rows) trackedIds.add(row.variantId);
+            }
+        }
+    }
+    const cleanVariants = variants.map(({ product: _product, ...v }: any) => v);
+    const hasPreparedVariant = cleanVariants.some((v: any) => Boolean(v.isPrepared));
+    const hasTrackedVariant = cleanVariants.some((v: any) => !v.isPrepared && trackedIds.has(v.id));
+    const hasLegacyVariant = cleanVariants.some((v: any) => !v.isPrepared && !trackedIds.has(v.id));
+    return {
+        ...product,
+        variants: cleanVariants,
+        hasPreparedVariant,
+        hasTrackedVariant,
+        hasLegacyVariant,
+    };
 }
 export async function listProducts(prisma: any, args: any = {}, user: any) {
     await ensureCatalogueSchema(prisma);
@@ -322,6 +353,9 @@ export async function listProducts(prisma: any, args: any = {}, user: any) {
         });
         if (!products.length) return [];
 
+        const trackingTables: any[] = await prisma.$queryRawUnsafe("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'StockVariantTracking'");
+        const hasTrackingTable = Boolean(trackingTables?.some((row: any) => row?.name === 'StockVariantTracking'));
+
         const productIds = products.map((product: any) => product.id);
         const chunks: string[][] = [];
         for (let i = 0; i < productIds.length; i += 500) chunks.push(productIds.slice(i, i + 500));
@@ -331,10 +365,22 @@ export async function listProducts(prisma: any, args: any = {}, user: any) {
             ...ids,
         ));
         const preparationQueries = chunks.map((ids) => prisma.$queryRawUnsafe(
-            'SELECT pv."productId", MAX(CASE WHEN COALESCE(pv."isPrepared", 0) <> 0 OR COALESCE(gd."isPrepared", 0) <> 0 ' +
-            'THEN 1 ELSE 0 END) AS "hasPreparedVariant" FROM "ProductVariant" pv ' +
-            'LEFT JOIN "ProductVariantGarmentDetail" gd ON gd."variantId" = pv."id" ' +
-            'WHERE pv."productId" IN (' + ids.map(() => '?').join(',') + ') GROUP BY pv."productId"',
+            hasTrackingTable
+                ? 'SELECT pv."productId", ' +
+                  'MAX(CASE WHEN COALESCE(pv."isPrepared", 0) <> 0 OR COALESCE(gd."isPrepared", 0) <> 0 THEN 1 ELSE 0 END) AS "hasPreparedVariant", ' +
+                  'MAX(CASE WHEN st."variantId" IS NOT NULL AND COALESCE(pv."isPrepared", 0) = 0 AND COALESCE(gd."isPrepared", 0) = 0 THEN 1 ELSE 0 END) AS "hasTrackedVariant", ' +
+                  'MAX(CASE WHEN st."variantId" IS NULL AND COALESCE(pv."isPrepared", 0) = 0 AND COALESCE(gd."isPrepared", 0) = 0 THEN 1 ELSE 0 END) AS "hasLegacyVariant" ' +
+                  'FROM "ProductVariant" pv ' +
+                  'LEFT JOIN "ProductVariantGarmentDetail" gd ON gd."variantId" = pv."id" ' +
+                  'LEFT JOIN "StockVariantTracking" st ON st."variantId" = pv."id" ' +
+                  'WHERE pv."productId" IN (' + ids.map(() => '?').join(',') + ') GROUP BY pv."productId"'
+                : 'SELECT pv."productId", ' +
+                  'MAX(CASE WHEN COALESCE(pv."isPrepared", 0) <> 0 OR COALESCE(gd."isPrepared", 0) <> 0 THEN 1 ELSE 0 END) AS "hasPreparedVariant", ' +
+                  '0 AS "hasTrackedVariant", ' +
+                  'MAX(CASE WHEN COALESCE(pv."isPrepared", 0) = 0 AND COALESCE(gd."isPrepared", 0) = 0 THEN 1 ELSE 0 END) AS "hasLegacyVariant" ' +
+                  'FROM "ProductVariant" pv ' +
+                  'LEFT JOIN "ProductVariantGarmentDetail" gd ON gd."variantId" = pv."id" ' +
+                  'WHERE pv."productId" IN (' + ids.map(() => '?').join(',') + ') GROUP BY pv."productId"',
             ...ids,
         ));
         const primaryVariants = products.flatMap((product: any) =>
@@ -352,12 +398,19 @@ export async function listProducts(prisma: any, args: any = {}, user: any) {
         return products.map((product: any) => {
             const stock = stockByProductId.get(product.id);
             const preparation = preparationByProductId.get(product.id);
+            const hasPreparedVariant = Boolean(Number(preparation?.hasPreparedVariant || 0));
+            const hasTrackedVariant = Boolean(Number(preparation?.hasTrackedVariant || 0));
+            const hasLegacyVariant = preparation
+                ? Boolean(Number(preparation?.hasLegacyVariant || 0))
+                : !hasPreparedVariant && !hasTrackedVariant;
             return {
                 ...product,
                 variants: product.variants.map((variant: any) => byVariantId.get(variant.id)),
                 variantCount: Number(stock?.variantCount || 0),
                 totalStock: Number(stock?.totalStock || 0),
-                hasPreparedVariant: Boolean(Number(preparation?.hasPreparedVariant || 0)),
+                hasPreparedVariant,
+                hasTrackedVariant,
+                hasLegacyVariant,
             };
         });
     }

@@ -14,6 +14,11 @@ import { auditService } from '../services/audit.service';
 import { getSaleEditLockReason } from '../lib/saleEdit';
 import { formatVariantDescription } from '../lib/catalogueDescription';
 import { getStoredPaymentMethods, saveStoredPaymentMethods } from '../lib/paymentMethods';
+import {
+    findExistingCustomerMatches,
+    normalizeCustomerPhoneToken,
+    sanitizeCustomerNameInput,
+} from '../lib/customerDirectory';
 import type { CreditNoteRecord } from '../types/creditNote';
 import { POSSkeleton } from '../components/pos/POSSkeleton';
 
@@ -683,15 +688,32 @@ export const POS: React.FC = () => {
         }
 
         const cleanDigits = query.replace(/\D/g, '');
+        const normalizedDigits = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
 
         return customersList.filter(c => {
             const nameMatch = (c.name || '').toLowerCase().includes(query);
-            const phoneStr = (c.phone || '').replace(/\D/g, '');
-            const phoneMatch = cleanDigits ? phoneStr.includes(cleanDigits) : false;
+            const phoneStr = normalizeCustomerPhoneToken(c.phone) || (c.phone || '').replace(/\D/g, '');
+            const phoneMatch = normalizedDigits ? phoneStr.includes(normalizedDigits) : false;
             const gstinMatch = (c.gstin || '').toLowerCase().includes(query);
             return nameMatch || phoneMatch || gstinMatch;
         }).slice(0, 20);
     }, [customersList, customerSearchInput]);
+
+    const dropdownExactMatch = useMemo(() => {
+        const raw = customerSearchInput.trim();
+        if (!raw || raw.toLowerCase() === 'walk-in customer') return null;
+        const isNumeric = /^\+?[\d\s-]+$/.test(raw);
+        const res = findExistingCustomerMatches(customersList, {
+            name: isNumeric ? '' : raw,
+            phone: isNumeric ? raw : '',
+        });
+        return res.exactMatch;
+    }, [customersList, customerSearchInput]);
+
+    const quickAddMatchResult = useMemo(() => {
+        if (!showQuickAddModal) return { exactMatch: null, matches: [] };
+        return findExistingCustomerMatches(customersList, quickAddForm);
+    }, [customersList, quickAddForm, showQuickAddModal]);
 
     const handleSelectCustomer = (customer: any) => {
         if (!customer) {
@@ -736,7 +758,11 @@ export const POS: React.FC = () => {
         const sanitizedPhone = isNumeric ? (text.startsWith('+') ? `+${cleanDigits.slice(0, 13)}` : cleanDigits.slice(0, 10)) : '';
 
         setQuickAddForm({
-            name: isNumeric ? '' : (text.toLowerCase() === 'walk-in customer' ? '' : text.slice(0, 50)),
+            name: isNumeric
+                ? ''
+                : text.toLowerCase() === 'walk-in customer'
+                    ? ''
+                    : sanitizeCustomerNameInput(text, 50),
             phone: sanitizedPhone,
             gstin: ''
         });
@@ -770,6 +796,10 @@ export const POS: React.FC = () => {
 
             if (created) {
                 setCustomersList(prev => [created, ...prev]);
+                void window.electronAPI?.customers?.restoreDirectoryEntries?.({
+                    name: created.name,
+                    phone: created.phone,
+                });
                 handleSelectCustomer(created);
                 setShowQuickAddModal(false);
                 showNotification(`Customer "${created.name}" registered and selected!`, 'success');
@@ -841,8 +871,8 @@ export const POS: React.FC = () => {
                         ? trimmed.replace(phoneMatch![0], '').replace(/^[-–—,:|/]+|[-–—,:|/]+$/g, '').trim()
                         : trimmed;
 
-                    const finalPhone = hasValidPhone ? extractedDigits : '';
-                    const finalName = extractedName || (hasValidPhone ? `Customer ${extractedDigits}` : 'Walk-in Customer');
+                    const finalPhone = hasValidPhone ? (normalizeCustomerPhoneToken(extractedDigits) || extractedDigits) : '';
+                    const finalName = extractedName || (finalPhone ? `Customer ${finalPhone}` : 'Walk-in Customer');
 
                     setCustomerName(finalName);
                     setCustomerPhone(finalPhone);
@@ -2050,30 +2080,46 @@ export const POS: React.FC = () => {
                                         )
                                     )}
 
-                                    {/* Register as New Customer Option */}
+                                    {/* Register as New Customer Option (or Existing Match Notice) */}
                                     {customerSearchInput.trim() && customerSearchInput.trim().toLowerCase() !== 'walk-in customer' && (
-                                        <button
-                                            type="button"
-                                            onClick={() => handleOpenQuickAdd(customerSearchInput)}
-                                            onMouseEnter={() => setCustomerHighlightIndex(filteredCustomers.length + 1)}
-                                            className={`w-full text-left px-3 py-2.5 flex items-center gap-2.5 transition-colors bg-gray-50/50 dark:bg-gray-800/80 ${
-                                                customerHighlightIndex === filteredCustomers.length + 1
-                                                    ? 'bg-primary-100/70 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300'
-                                                    : 'hover:bg-primary-50 dark:hover:bg-primary-950/30 text-primary-600 dark:text-primary-400'
-                                            }`}
-                                        >
-                                            <div className="w-7 h-7 rounded-full bg-primary-100 dark:bg-primary-900/50 text-primary-600 dark:text-primary-400 flex items-center justify-center flex-shrink-0">
-                                                <UserPlus className="w-4 h-4" />
-                                            </div>
-                                            <div className="flex flex-col min-w-0">
-                                                <span className="font-bold text-xs">
-                                                    + Register "{customerSearchInput}"
+                                        dropdownExactMatch ? (
+                                            <div className="px-3 py-2 bg-amber-50/80 dark:bg-amber-950/30 border-t border-amber-200/70 dark:border-amber-800/50 flex items-center justify-between gap-2 text-xs">
+                                                <span className="text-amber-800 dark:text-amber-300 font-medium">
+                                                    Already in database: <strong>{dropdownExactMatch.customer.name}</strong>
+                                                    {dropdownExactMatch.customer.phone ? ` (${dropdownExactMatch.customer.phone})` : ''}
                                                 </span>
-                                                <span className="text-[10px] text-gray-500">
-                                                    Quick save new customer and link to this bill
-                                                </span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleSelectCustomer(dropdownExactMatch.customer)}
+                                                    className="px-2 py-1 rounded bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] shrink-0"
+                                                >
+                                                    Select
+                                                </button>
                                             </div>
-                                        </button>
+                                        ) : (
+                                            <button
+                                                type="button"
+                                                onClick={() => handleOpenQuickAdd(customerSearchInput)}
+                                                onMouseEnter={() => setCustomerHighlightIndex(filteredCustomers.length + 1)}
+                                                className={`w-full text-left px-3 py-2.5 flex items-center gap-2.5 transition-colors bg-gray-50/50 dark:bg-gray-800/80 ${
+                                                    customerHighlightIndex === filteredCustomers.length + 1
+                                                        ? 'bg-primary-100/70 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300'
+                                                        : 'hover:bg-primary-50 dark:hover:bg-primary-950/30 text-primary-600 dark:text-primary-400'
+                                                }`}
+                                            >
+                                                <div className="w-7 h-7 rounded-full bg-primary-100 dark:bg-primary-900/50 text-primary-600 dark:text-primary-400 flex items-center justify-center flex-shrink-0">
+                                                    <UserPlus className="w-4 h-4" />
+                                                </div>
+                                                <div className="flex flex-col min-w-0">
+                                                    <span className="font-bold text-xs">
+                                                        + Register "{customerSearchInput}"
+                                                    </span>
+                                                    <span className="text-[10px] text-gray-500">
+                                                        Quick save new customer and link to this bill
+                                                    </span>
+                                                </div>
+                                            </button>
+                                        )
                                     )}
                                 </div>
                             </div>
@@ -2664,7 +2710,7 @@ export const POS: React.FC = () => {
                             type="text"
                             maxLength={50}
                             value={quickAddForm.name}
-                            onChange={(e) => setQuickAddForm(prev => ({ ...prev, name: e.target.value.slice(0, 50) }))}
+                            onChange={(e) => setQuickAddForm(prev => ({ ...prev, name: sanitizeCustomerNameInput(e.target.value, 50) }))}
                             placeholder="e.g. Rahul Sharma (optional)"
                             autoFocus
                             className="h-10 text-sm"
@@ -2710,6 +2756,87 @@ export const POS: React.FC = () => {
                         />
                     </div>
 
+                    {/* Smart Database Duplicate / Existing Customer Suggestion */}
+                    {quickAddMatchResult.matches.length > 0 ? (
+                        <div
+                            className={`rounded-xl border p-3 space-y-2 ${
+                                quickAddMatchResult.exactMatch
+                                    ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-300 dark:border-amber-700'
+                                    : 'bg-blue-50/70 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800'
+                            }`}
+                        >
+                            <div className="flex items-start gap-2">
+                                <AlertTriangle
+                                    className={`w-4 h-4 shrink-0 mt-0.5 ${
+                                        quickAddMatchResult.exactMatch
+                                            ? 'text-amber-600 dark:text-amber-400'
+                                            : 'text-blue-600 dark:text-blue-400'
+                                    }`}
+                                />
+                                <div className="text-xs leading-snug">
+                                    <div className="font-bold text-gray-900 dark:text-white">
+                                        {quickAddMatchResult.exactMatch
+                                            ? 'Customer already exists in database!'
+                                            : 'Possible matching customer(s) found'}
+                                    </div>
+                                    <div className="text-[11px] text-gray-600 dark:text-gray-300">
+                                        {quickAddMatchResult.exactMatch?.matchType === 'EXACT_PHONE'
+                                            ? 'This phone number is already registered. Select the existing profile instead of creating a duplicate.'
+                                            : 'Click an existing customer below to link to this bill, or keep typing if this is someone new.'}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                                {quickAddMatchResult.matches.map((m) => (
+                                    <div
+                                        key={m.customer.id || `${m.customer.name}-${m.customer.phone}`}
+                                        className="flex items-center justify-between gap-2 bg-white dark:bg-gray-900 rounded-lg px-2.5 py-2 border border-gray-200/80 dark:border-gray-700"
+                                    >
+                                        <div className="min-w-0">
+                                            <div className="text-xs font-bold text-gray-900 dark:text-white truncate flex items-center gap-1.5">
+                                                <span>{m.customer.name}</span>
+                                                {m.isExact && (
+                                                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200">
+                                                        {m.matchType === 'EXACT_PHONE'
+                                                            ? 'Same Phone'
+                                                            : m.matchType === 'EXACT_GSTIN'
+                                                            ? 'Same GSTIN'
+                                                            : 'Same Name'}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div className="text-[11px] font-mono text-gray-500">
+                                                {m.customer.phone || 'No phone'}
+                                                {m.customer.gstin ? ` • ${m.customer.gstin}` : ''}
+                                            </div>
+                                        </div>
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="primary"
+                                            onClick={() => {
+                                                handleSelectCustomer(m.customer);
+                                                setShowQuickAddModal(false);
+                                                showToast(`Selected existing customer "${m.customer.name}"`, 'success');
+                                            }}
+                                            className="h-7 px-2.5 text-[11px] shrink-0"
+                                        >
+                                            Use Existing
+                                        </Button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : (
+                        (quickAddForm.name.trim().length >= 2 || quickAddForm.phone.replace(/\D/g, '').length >= 4) && (
+                            <div className="flex items-center gap-2 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60 px-3 py-2 text-[11px] text-emerald-700 dark:text-emerald-300">
+                                <CheckCircle className="w-3.5 h-3.5 shrink-0" />
+                                <span>Not in database yet — ready to register as a new customer.</span>
+                            </div>
+                        )
+                    )}
+
                     <div className="pt-2 flex gap-3 border-t border-gray-100 dark:border-gray-700">
                         <Button
                             type="button"
@@ -2724,7 +2851,11 @@ export const POS: React.FC = () => {
                             type="submit"
                             variant="success"
                             className="flex-1 font-bold"
-                            disabled={isSavingCustomer || (!quickAddForm.name.trim() && !quickAddForm.phone.trim())}
+                            disabled={
+                                isSavingCustomer ||
+                                (!quickAddForm.name.trim() && !quickAddForm.phone.trim()) ||
+                                quickAddMatchResult.exactMatch?.matchType === 'EXACT_PHONE'
+                            }
                         >
                             {isSavingCustomer ? 'Saving...' : 'Save & Select'}
                         </Button>

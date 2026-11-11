@@ -75,6 +75,11 @@ import {
     syncCloudDeliveryStatuses,
 } from './messaging.service';
 import { DEFAULT_MESSAGING_CONFIG, type MessagingConfig } from '../src/types/messaging';
+import {
+    DISMISSED_SALE_CUSTOMERS_KEY,
+    buildCustomerDismissalKeys,
+    parseDismissedCustomerMap,
+} from '../src/lib/customerDirectory';
 
 // Global error handling - MUST BE FIRST
 process.on('uncaughtException', (error) => {
@@ -6544,6 +6549,176 @@ createSecureIpcHandler(
             return { success: true };
         } catch (error: any) {
             console.error('customer:updateWhatsAppStatus error:', error);
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'customers:getDismissed',
+    PermissionMiddleware.authenticated,
+    async () => {
+        try {
+            const row = await prisma.setting.findUnique({ where: { key: DISMISSED_SALE_CUSTOMERS_KEY } });
+            return { success: true, data: parseDismissedCustomerMap(row?.value) };
+        } catch (error: any) {
+            return { success: false, error: error.message, data: {} };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'customers:removeFromDirectory',
+    PermissionMiddleware.authenticated,
+    async (_event, args: { customers: Array<{ id?: string | null; name?: string | null; phone?: string | null }> }, user) => {
+        try {
+            const items = Array.isArray(args?.customers) ? args.customers : [];
+            if (items.length === 0) {
+                return { success: true, data: { deletedCount: 0, dismissedCount: 0 } };
+            }
+
+            const realIds = items
+                .map((c) => String(c.id || '').trim())
+                .filter((id) => id && !id.startsWith('sale-cust-') && !id.startsWith('cust-phone-'));
+
+            let deletedCount = 0;
+            if (realIds.length > 0) {
+                const delRes = await prisma.customer.deleteMany({
+                    where: { id: { in: realIds } },
+                });
+                deletedCount = delRes.count || 0;
+            }
+
+            const existingSetting = await prisma.setting.findUnique({ where: { key: DISMISSED_SALE_CUSTOMERS_KEY } });
+            const dismissedMap = parseDismissedCustomerMap(existingSetting?.value);
+            const now = Date.now();
+            let dismissedCount = 0;
+
+            for (const item of items) {
+                const keys = buildCustomerDismissalKeys(item);
+                for (const key of keys) {
+                    dismissedMap[key] = now;
+                    dismissedCount += 1;
+                }
+            }
+
+            await prisma.setting.upsert({
+                where: { key: DISMISSED_SALE_CUSTOMERS_KEY },
+                create: { key: DISMISSED_SALE_CUSTOMERS_KEY, value: JSON.stringify(dismissedMap) },
+                update: { value: JSON.stringify(dismissedMap) },
+            });
+
+            if (user?.id) {
+                for (const item of items) {
+                    try {
+                        await prisma.auditLog.create({
+                            data: {
+                                action: 'CUSTOMER_DELETE',
+                                userId: user.id,
+                                details: JSON.stringify({
+                                    customerId: item.id,
+                                    customerName: item.name,
+                                    customerPhone: item.phone,
+                                    summary: `Customer profile removed: "${item.name || 'Customer'}" (${item.phone || 'No phone'})`,
+                                }),
+                            },
+                        });
+                    } catch {
+                        // Non-fatal audit log failure
+                    }
+                }
+            }
+
+            return { success: true, data: { deletedCount, dismissedCount, dismissedMap } };
+        } catch (error: any) {
+            console.error('customers:removeFromDirectory error:', error);
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'customers:restoreDirectoryEntries',
+    PermissionMiddleware.authenticated,
+    async (_event, args: { name?: string | null; phone?: string | null }) => {
+        try {
+            const keys = buildCustomerDismissalKeys({ name: args?.name, phone: args?.phone });
+            if (keys.length === 0) return { success: true };
+
+            const existingSetting = await prisma.setting.findUnique({ where: { key: DISMISSED_SALE_CUSTOMERS_KEY } });
+            const dismissedMap = parseDismissedCustomerMap(existingSetting?.value);
+            let changed = false;
+            for (const key of keys) {
+                if (key in dismissedMap) {
+                    delete dismissedMap[key];
+                    changed = true;
+                }
+            }
+            if (changed) {
+                await prisma.setting.upsert({
+                    where: { key: DISMISSED_SALE_CUSTOMERS_KEY },
+                    create: { key: DISMISSED_SALE_CUSTOMERS_KEY, value: JSON.stringify(dismissedMap) },
+                    update: { value: JSON.stringify(dismissedMap) },
+                });
+            }
+            return { success: true };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+function getMarketingCampaignsFilePath(): string {
+    return path.join(app.getPath('userData'), 'marketing-campaigns.json');
+}
+
+createSecureIpcHandler(
+    'marketing:loadCampaignDrafts',
+    PermissionMiddleware.authenticated,
+    async () => {
+        try {
+            const filePath = getMarketingCampaignsFilePath();
+            if (!fs.existsSync(filePath)) {
+                return { success: true, data: { lastDraft: null, presets: [] } };
+            }
+            const raw = await fs.promises.readFile(filePath, 'utf8');
+            const parsed = JSON.parse(raw || '{}');
+            return {
+                success: true,
+                data: {
+                    lastDraft: parsed?.lastDraft || null,
+                    presets: Array.isArray(parsed?.presets) ? parsed.presets : [],
+                },
+            };
+        } catch (error: any) {
+            console.warn('marketing:loadCampaignDrafts error:', error?.message);
+            return { success: true, data: { lastDraft: null, presets: [] } };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'marketing:saveCampaignDrafts',
+    PermissionMiddleware.authenticated,
+    async (_event, data: { lastDraft?: any; presets?: any[] }) => {
+        try {
+            const filePath = getMarketingCampaignsFilePath();
+            await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+            const payload = {
+                lastDraft: data?.lastDraft || null,
+                presets: Array.isArray(data?.presets) ? data.presets.slice(0, 15) : [],
+            };
+            const tmpPath = `${filePath}.tmp`;
+            await fs.promises.writeFile(tmpPath, JSON.stringify(payload), 'utf8');
+            await fs.promises.rename(tmpPath, filePath);
+            return { success: true };
+        } catch (error: any) {
+            console.error('marketing:saveCampaignDrafts error:', error);
             return { success: false, error: error.message };
         }
     },

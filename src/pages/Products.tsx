@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Edit, Trash2, Printer, Search, ArrowUp, ArrowDown, Tag, AlertCircle, RefreshCw, History, AlertTriangle } from 'lucide-react';
+import { Plus, Edit, Trash2, Printer, Search, ArrowUp, ArrowDown, Tag, AlertCircle, RefreshCw, History, AlertTriangle, CheckCircle2, Archive, Info, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
@@ -16,6 +16,15 @@ import {
     normalizeText,
     getCategoryGarmentFields,
 } from '../lib/catalogueDescription';
+import {
+    type CatalogueTab,
+    type AuditedStockFilter,
+    isAuditedOrPreparedProduct,
+    isPreparedOnlyProduct,
+    getProductTotalStock,
+    getProductMinStock,
+    computeAuditedStockStats,
+} from '../lib/catalogueScope';
 
 const getVariantAttributesSummary = (productName: string, variant: any): string => {
     let raw = formatVariantDescription('', variant);
@@ -74,7 +83,11 @@ export const Products: React.FC = () => {
     const [products, setProducts] = useState<any[]>([]);
     const [categories, setCategories] = useState<any[]>([]);
     const [searchQuery, setSearchQuery] = useState('');
-    const [stockFilter, setStockFilter] = useState<'ALL' | 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK'>('ALL');
+    const [catalogueTab, setCatalogueTab] = useState<CatalogueTab>('AUDITED');
+    const [createCatalogueType, setCreateCatalogueType] = useState<'PREPARED' | 'OLD_CHART'>('PREPARED');
+    const [stockFilter, setStockFilter] = useState<AuditedStockFilter>('ALL');
+    const [legacyCategoryFilter, setLegacyCategoryFilter] = useState<string>('ALL');
+    const [showLegacySpecsForId, setShowLegacySpecsForId] = useState<string | null>(null);
     const [historyVariantId, setHistoryVariantId] = useState<string | null>(null);
     const [sortBy, setSortBy] = useState<'itemNumber' | 'alphabetical' | 'updatedAt'>('updatedAt');
     const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
@@ -384,6 +397,11 @@ export const Products: React.FC = () => {
         try {
             setSaving(true);
 
+            const targetCreateType =
+                !editingProduct && typeof createCatalogueType !== 'undefined' && createCatalogueType === 'OLD_CHART'
+                    ? 'OLD_CHART'
+                    : undefined;
+
             // Prepare payload
             const payload = {
                 id: editingProduct?.id,
@@ -393,6 +411,7 @@ export const Products: React.FC = () => {
                 hsn: normalizeText(formData.hsn) || null,
                 taxRate: toNumber(formData.taxRate, 5),
                 updatedAt: editingProduct?.updatedAt, // For optimistic concurrency
+                ...(targetCreateType ? { catalogueType: targetCreateType } : {}),
                 variants: formData.variants.map((v) => ({
                     id: v.id,
                     barcodeDraftId: v.id.startsWith('temp-') ? v.id : undefined,
@@ -437,10 +456,22 @@ export const Products: React.FC = () => {
                 throw new Error(result?.error || 'Save failed');
             }
 
+            const wasCreate = !editingProduct;
+            const createdOldChart = targetCreateType === 'OLD_CHART';
             setShowModal(false);
             resetForm();
+            if (wasCreate && typeof setCatalogueTab === 'function') {
+                setCatalogueTab(createdOldChart ? 'LEGACY' : 'AUDITED');
+            }
             loadData();
-            showToast(editingProduct ? 'Product updated successfully!' : 'Product created successfully!', 'success');
+            showToast(
+                wasCreate
+                    ? createdOldChart
+                        ? 'Item added to Old Item Chart!'
+                        : 'Product created in New / Audited catalogue!'
+                    : 'Product updated successfully!',
+                'success'
+            );
         } catch (error: any) {
             console.error('Failed to save product:', error);
             showToast(error.message || 'Failed to save product', 'error', 6000);
@@ -531,54 +562,54 @@ export const Products: React.FC = () => {
         }
     };
 
-    const stockStats = useMemo(() => {
-        let inStock = 0;
-        let lowStock = 0;
-        let outOfStock = 0;
-
-        for (const p of products) {
-            const stock = Number.isFinite(Number(p.totalStock))
-                ? Number(p.totalStock)
-                : (p.variants || []).reduce((sum: number, v: any) => sum + (v.stock || 0), 0);
-            const min = p.variants?.[0]?.minStock || 3;
-            if (stock <= 0) {
-                outOfStock++;
-            } else if (stock <= min) {
-                lowStock++;
-            } else {
-                inStock++;
-            }
+    const { auditedProducts, legacyProducts } = useMemo(() => {
+        const audited: any[] = [];
+        const legacy: any[] = [];
+        for (const product of products) {
+            if (isAuditedOrPreparedProduct(product)) audited.push(product);
+            else legacy.push(product);
         }
-
-        return { total: products.length, inStock, lowStock, outOfStock };
+        return { auditedProducts: audited, legacyProducts: legacy };
     }, [products]);
 
-    const filteredProducts = useMemo(() => {
-        let list = [...products];
+    const stockStats = useMemo(() => computeAuditedStockStats(auditedProducts), [auditedProducts]);
 
-        if (stockFilter === 'IN_STOCK') {
-            list = list.filter(p => {
-                const stock = Number.isFinite(Number(p.totalStock))
-                    ? Number(p.totalStock)
-                    : (p.variants || []).reduce((sum: number, v: any) => sum + (v.stock || 0), 0);
-                const min = p.variants?.[0]?.minStock || 3;
-                return stock > min;
-            });
-        } else if (stockFilter === 'LOW_STOCK') {
-            list = list.filter(p => {
-                const stock = Number.isFinite(Number(p.totalStock))
-                    ? Number(p.totalStock)
-                    : (p.variants || []).reduce((sum: number, v: any) => sum + (v.stock || 0), 0);
-                const min = p.variants?.[0]?.minStock || 3;
-                return stock > 0 && stock <= min;
-            });
-        } else if (stockFilter === 'OUT_OF_STOCK') {
-            list = list.filter(p => {
-                const stock = Number.isFinite(Number(p.totalStock))
-                    ? Number(p.totalStock)
-                    : (p.variants || []).reduce((sum: number, v: any) => sum + (v.stock || 0), 0);
-                return stock <= 0;
-            });
+    const legacyCategories = useMemo(() => {
+        const counts = new Map<string, { id: string; name: string; count: number }>();
+        for (const product of legacyProducts) {
+            const id = product.categoryId || product.category?.id;
+            const name = product.category?.name;
+            if (!id || !name) continue;
+            const existing = counts.get(id);
+            if (existing) existing.count += 1;
+            else counts.set(id, { id, name, count: 1 });
+        }
+        return Array.from(counts.values()).sort((a, b) => a.name.localeCompare(b.name));
+    }, [legacyProducts]);
+
+    const isEditingLegacy = useMemo(
+        () => Boolean(editingProduct && !isAuditedOrPreparedProduct(editingProduct)),
+        [editingProduct],
+    );
+
+    const filteredProducts = useMemo(() => {
+        let list = catalogueTab === 'AUDITED' ? [...auditedProducts] : [...legacyProducts];
+
+        if (catalogueTab === 'AUDITED') {
+            if (stockFilter === 'IN_STOCK') {
+                list = list.filter((p) => !isPreparedOnlyProduct(p) && getProductTotalStock(p) > getProductMinStock(p));
+            } else if (stockFilter === 'LOW_STOCK') {
+                list = list.filter((p) => {
+                    const stock = getProductTotalStock(p);
+                    return !isPreparedOnlyProduct(p) && stock > 0 && stock <= getProductMinStock(p);
+                });
+            } else if (stockFilter === 'OUT_OF_STOCK') {
+                list = list.filter((p) => !isPreparedOnlyProduct(p) && getProductTotalStock(p) <= 0);
+            } else if (stockFilter === 'PREPARED') {
+                list = list.filter((p) => isPreparedOnlyProduct(p));
+            }
+        } else if (legacyCategoryFilter !== 'ALL') {
+            list = list.filter((p) => (p.categoryId || p.category?.id || '') === legacyCategoryFilter);
         }
 
         const dir = sortDirection === 'asc' ? 1 : -1;
@@ -600,7 +631,7 @@ export const Products: React.FC = () => {
         });
 
         return list;
-    }, [products, sortBy, sortDirection, stockFilter]);
+    }, [auditedProducts, legacyProducts, catalogueTab, sortBy, sortDirection, stockFilter, legacyCategoryFilter]);
 
 
     if (!user) return <div className="p-8 text-center text-gray-500">Authenticating...</div>;
@@ -661,87 +692,204 @@ export const Products: React.FC = () => {
                             variant="primary"
                             onClick={() => {
                                 resetForm();
+                                setCreateCatalogueType(catalogueTab === 'LEGACY' ? 'OLD_CHART' : 'PREPARED');
                                 setShowModal(true);
                             }}
                         >
                             <Plus className="w-5 h-5" />
-                            Add Product
+                            {catalogueTab === 'LEGACY' ? 'Add Old Chart Item' : 'Add Product'}
                         </Button>
                     )}
                 </div>
             </div>
 
-            {/* Stock Health Quick Filters */}
-            <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+            {/* Catalogue Separation Tabs (New / Audited vs Old Item Chart) */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 dark:border-dark-border pb-3">
+                <div className="inline-flex rounded-xl bg-gray-100 dark:bg-gray-800/80 p-1 gap-1" role="tablist" aria-label="Product catalogue sections">
                     <button
                         type="button"
-                        onClick={() => setStockFilter('ALL')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                            stockFilter === 'ALL'
-                                ? 'bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900 shadow-xs'
-                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'
+                        role="tab"
+                        aria-selected={catalogueTab === 'AUDITED'}
+                        onClick={() => setCatalogueTab('AUDITED')}
+                        className={`px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 ${
+                            catalogueTab === 'AUDITED'
+                                ? 'bg-white dark:bg-dark-card text-gray-900 dark:text-white shadow-xs'
+                                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                         }`}
                     >
-                        <span>All Garments</span>
-                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${stockFilter === 'ALL' ? 'bg-white/20' : 'bg-gray-200 dark:bg-gray-700'}`}>
-                            {stockStats.total}
+                        <CheckCircle2 className={`w-4 h-4 ${catalogueTab === 'AUDITED' ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400'}`} />
+                        <span>New / Audited Items</span>
+                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono ${
+                            catalogueTab === 'AUDITED'
+                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
+                                : 'bg-gray-200/80 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                        }`}>
+                            {auditedProducts.length}
                         </span>
                     </button>
 
                     <button
                         type="button"
-                        onClick={() => setStockFilter('IN_STOCK')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                            stockFilter === 'IN_STOCK'
-                                ? 'bg-emerald-600 text-white shadow-xs'
-                                : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-900/50'
+                        role="tab"
+                        aria-selected={catalogueTab === 'LEGACY'}
+                        onClick={() => setCatalogueTab('LEGACY')}
+                        className={`px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 ${
+                            catalogueTab === 'LEGACY'
+                                ? 'bg-white dark:bg-dark-card text-gray-900 dark:text-white shadow-xs'
+                                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                         }`}
                     >
-                        <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                        <span>In Stock</span>
-                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${stockFilter === 'IN_STOCK' ? 'bg-white/20' : 'bg-emerald-100 dark:bg-emerald-900/60'}`}>
-                            {stockStats.inStock}
-                        </span>
-                    </button>
-
-                    <button
-                        type="button"
-                        onClick={() => setStockFilter('LOW_STOCK')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                            stockFilter === 'LOW_STOCK'
-                                ? 'bg-amber-600 text-white shadow-xs'
-                                : 'bg-amber-50 text-amber-700 hover:bg-amber-100 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/50'
-                        }`}
-                    >
-                        <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
-                        <span>Low Stock</span>
-                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${stockFilter === 'LOW_STOCK' ? 'bg-white/20' : 'bg-amber-100 dark:bg-amber-900/60'}`}>
-                            {stockStats.lowStock}
-                        </span>
-                    </button>
-
-                    <button
-                        type="button"
-                        onClick={() => setStockFilter('OUT_OF_STOCK')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                            stockFilter === 'OUT_OF_STOCK'
-                                ? 'bg-red-600 text-white shadow-xs'
-                                : 'bg-red-50 text-red-700 hover:bg-red-100 dark:bg-red-950/40 dark:text-red-300 dark:hover:bg-red-900/50'
-                        }`}
-                    >
-                        <span className="w-2 h-2 rounded-full bg-red-500" />
-                        <span>Out of Stock</span>
-                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${stockFilter === 'OUT_OF_STOCK' ? 'bg-white/20' : 'bg-red-100 dark:bg-red-900/60'}`}>
-                            {stockStats.outOfStock}
+                        <Archive className={`w-4 h-4 ${catalogueTab === 'LEGACY' ? 'text-amber-600 dark:text-amber-400' : 'text-gray-400'}`} />
+                        <span>Old Item Chart</span>
+                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono ${
+                            catalogueTab === 'LEGACY'
+                                ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
+                                : 'bg-gray-200/80 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                        }`}>
+                            {legacyProducts.length}
                         </span>
                     </button>
                 </div>
 
                 <div className="text-xs text-gray-500 dark:text-gray-400">
-                    Showing <span className="font-bold text-gray-800 dark:text-gray-200">{filteredProducts.length}</span> of {products.length} products
+                    Total active catalogue: <span className="font-semibold text-gray-700 dark:text-gray-300">{products.length}</span>
                 </div>
             </div>
+
+            {/* Tab-Specific Filters */}
+            {catalogueTab === 'AUDITED' ? (
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+                        <button
+                            type="button"
+                            onClick={() => setStockFilter('ALL')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                                stockFilter === 'ALL'
+                                    ? 'bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900 shadow-xs'
+                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'
+                            }`}
+                        >
+                            <span>All Audited</span>
+                            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${stockFilter === 'ALL' ? 'bg-white/20' : 'bg-gray-200 dark:bg-gray-700'}`}>
+                                {stockStats.total}
+                            </span>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => setStockFilter('IN_STOCK')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                                stockFilter === 'IN_STOCK'
+                                    ? 'bg-emerald-600 text-white shadow-xs'
+                                    : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-900/50'
+                            }`}
+                        >
+                            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                            <span>In Stock</span>
+                            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${stockFilter === 'IN_STOCK' ? 'bg-white/20' : 'bg-emerald-100 dark:bg-emerald-900/60'}`}>
+                                {stockStats.inStock}
+                            </span>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => setStockFilter('LOW_STOCK')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                                stockFilter === 'LOW_STOCK'
+                                    ? 'bg-amber-600 text-white shadow-xs'
+                                    : 'bg-amber-50 text-amber-700 hover:bg-amber-100 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/50'
+                            }`}
+                        >
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                            <span>Low Stock</span>
+                            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${stockFilter === 'LOW_STOCK' ? 'bg-white/20' : 'bg-amber-100 dark:bg-amber-900/60'}`}>
+                                {stockStats.lowStock}
+                            </span>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => setStockFilter('OUT_OF_STOCK')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                                stockFilter === 'OUT_OF_STOCK'
+                                    ? 'bg-red-600 text-white shadow-xs'
+                                    : 'bg-red-50 text-red-700 hover:bg-red-100 dark:bg-red-950/40 dark:text-red-300 dark:hover:bg-red-900/50'
+                            }`}
+                        >
+                            <span className="w-2 h-2 rounded-full bg-red-500" />
+                            <span>Out of Stock</span>
+                            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${stockFilter === 'OUT_OF_STOCK' ? 'bg-white/20' : 'bg-red-100 dark:bg-red-900/60'}`}>
+                                {stockStats.outOfStock}
+                            </span>
+                        </button>
+
+                        {stockStats.prepared > 0 && (
+                            <button
+                                type="button"
+                                onClick={() => setStockFilter('PREPARED')}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                                    stockFilter === 'PREPARED'
+                                        ? 'bg-indigo-600 text-white shadow-xs'
+                                        : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-950/40 dark:text-indigo-300 dark:hover:bg-indigo-900/50'
+                                }`}
+                            >
+                                <span>Prepared</span>
+                                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${stockFilter === 'PREPARED' ? 'bg-white/20' : 'bg-indigo-100 dark:bg-indigo-900/60'}`}>
+                                    {stockStats.prepared}
+                                </span>
+                            </button>
+                        )}
+                    </div>
+
+                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                        Showing <span className="font-bold text-gray-800 dark:text-gray-200">{filteredProducts.length}</span> of {auditedProducts.length} audited products
+                    </div>
+                </div>
+            ) : (
+                <div className="space-y-3">
+                    <div className="flex items-start gap-2.5 rounded-xl border border-amber-200/80 dark:border-amber-900/40 bg-amber-50/70 dark:bg-amber-950/20 px-4 py-3 text-xs text-amber-900 dark:text-amber-200">
+                        <Info className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                        <div>
+                            <span className="font-semibold">Old Item Chart (Legacy):</span>{' '}
+                            Kept separate for sticker printing and price updates for your other shop. Stock balances here are unverified and are excluded from your audited stock counts.
+                        </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                            <label htmlFor="legacy-category-filter" className="text-xs font-medium text-gray-600 dark:text-gray-400">
+                                Category:
+                            </label>
+                            <select
+                                id="legacy-category-filter"
+                                value={legacyCategoryFilter}
+                                onChange={(e) => setLegacyCategoryFilter(e.target.value)}
+                                className="px-3 py-1.5 border rounded-lg bg-white dark:bg-gray-800 text-xs font-medium"
+                            >
+                                <option value="ALL">All Categories ({legacyProducts.length})</option>
+                                {legacyCategories.map((c) => (
+                                    <option key={c.id} value={c.id}>
+                                        {c.name} ({c.count})
+                                    </option>
+                                ))}
+                            </select>
+                            {legacyCategoryFilter !== 'ALL' && (
+                                <button
+                                    type="button"
+                                    onClick={() => setLegacyCategoryFilter('ALL')}
+                                    className="text-xs text-primary-600 hover:underline font-medium"
+                                >
+                                    Reset
+                                </button>
+                            )}
+                        </div>
+
+                        <div className="text-xs text-gray-500 dark:text-gray-400">
+                            Showing <span className="font-bold text-gray-800 dark:text-gray-200">{filteredProducts.length}</span> of {legacyProducts.length} old chart items
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Products Table */}
             <div className="card !p-0 border border-gray-200 dark:border-dark-border bg-white dark:bg-dark-card rounded-xl shadow-xs overflow-hidden">
@@ -754,7 +902,9 @@ export const Products: React.FC = () => {
                                 <th className="px-3 py-3 text-left text-xs uppercase font-semibold text-gray-500 dark:text-gray-400 min-w-[180px]">Product</th>
                                 <th className="px-3 py-3 text-left text-xs uppercase font-semibold text-gray-500 dark:text-gray-400 w-24 whitespace-nowrap">Category</th>
                                 <th className="px-3 py-3 text-left text-xs uppercase font-semibold text-gray-500 dark:text-gray-400 w-28 whitespace-nowrap">MRP / Price</th>
-                                <th className="px-3 py-3 text-center text-xs uppercase font-semibold text-gray-500 dark:text-gray-400 w-16 whitespace-nowrap">Stock</th>
+                                <th className="px-3 py-3 text-center text-xs uppercase font-semibold text-gray-500 dark:text-gray-400 w-16 whitespace-nowrap">
+                                    {catalogueTab === 'LEGACY' ? 'Status' : 'Stock'}
+                                </th>
                                 <th className="px-3 py-3 text-center text-xs uppercase font-semibold text-gray-500 dark:text-gray-400 w-14 whitespace-nowrap">Tax %</th>
                                 <th className="pr-4 pl-2 py-3 text-right text-xs uppercase font-semibold text-gray-500 dark:text-gray-400 w-28 whitespace-nowrap">Actions</th>
                             </tr>
@@ -781,18 +931,45 @@ export const Products: React.FC = () => {
                             ) : filteredProducts.length === 0 ? (
                                 <tr>
                                     <td colSpan={8} className="text-center py-8 text-gray-500">
-                                        No products found
+                                        <div className="space-y-2">
+                                            <p>
+                                                No products found in {catalogueTab === 'AUDITED' ? 'New / Audited Items' : 'Old Item Chart'}.
+                                            </p>
+                                            {catalogueTab === 'AUDITED' && legacyProducts.length > 0 && (
+                                                <Button
+                                                    type="button"
+                                                    variant="secondary"
+                                                    size="sm"
+                                                    onClick={() => setCatalogueTab('LEGACY')}
+                                                >
+                                                    View {legacyProducts.length} matching in Old Item Chart
+                                                </Button>
+                                            )}
+                                            {catalogueTab === 'LEGACY' && auditedProducts.length > 0 && (
+                                                <Button
+                                                    type="button"
+                                                    variant="secondary"
+                                                    size="sm"
+                                                    onClick={() => setCatalogueTab('AUDITED')}
+                                                >
+                                                    View {auditedProducts.length} matching in New / Audited Items
+                                                </Button>
+                                            )}
+                                        </div>
                                     </td>
                                 </tr>
                             ) : (
                                 filteredProducts.map((product, index) => {
                                     const primaryVariant = product.variants?.[0];
                                     const hasPreparedVariant = product.hasPreparedVariant ?? (product.variants || []).some((v: any) => v.isPrepared);
-                                    const totalStock = Number.isFinite(Number(product.totalStock))
-                                        ? Number(product.totalStock)
-                                        : (product.variants || []).reduce((sum: number, v: any) => sum + (v.stock || 0), 0);
+                                    const preparedOnly = isPreparedOnlyProduct(product);
+                                    const totalStock = getProductTotalStock(product);
+                                    const minStock = getProductMinStock(product);
                                     const primaryBarcode = primaryVariant?.barcode || primaryVariant?.sku || '-';
                                     const attrs = primaryVariant ? getVariantAttributesSummary(product.name, primaryVariant) : '';
+                                    const subtitle = catalogueTab === 'LEGACY'
+                                        ? (!attrs || attrs === 'Standard' ? 'Old Item Chart' : `${attrs} • Old Item Chart`)
+                                        : attrs;
 
                                     return (
                                         <tr key={product.id} className="hover:bg-gray-50/80 dark:hover:bg-dark-bg/40 transition-colors">
@@ -811,9 +988,9 @@ export const Products: React.FC = () => {
                                                         </span>
                                                     )}
                                                 </div>
-                                                {attrs ? (
-                                                    <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 truncate" title={attrs}>
-                                                        {attrs}
+                                                {subtitle ? (
+                                                    <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 truncate" title={subtitle}>
+                                                        {subtitle}
                                                     </div>
                                                 ) : null}
                                             </td>
@@ -838,34 +1015,56 @@ export const Products: React.FC = () => {
                                             </td>
                                             <td className="px-3 py-3 text-center whitespace-nowrap">
                                                 {primaryVariant ? (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setHistoryVariantId(primaryVariant.id)}
-                                                        title="Click to view Stock Movement History (Sales, Purchases, Returns)"
-                                                        className={`group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold font-mono transition-all transform hover:scale-105 shadow-2xs cursor-pointer ${
-                                                            totalStock <= 0
-                                                                ? 'bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 dark:bg-red-950/40 dark:text-red-300 dark:border-red-900/50'
-                                                                : totalStock <= (primaryVariant.minStock || 3)
-                                                                ? 'bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-900/50'
-                                                                : 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-900/50'
-                                                        }`}
-                                                    >
-                                                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                                                            totalStock <= 0
-                                                                ? 'bg-red-500'
-                                                                : totalStock <= (primaryVariant.minStock || 3)
-                                                                ? 'bg-amber-500 animate-pulse'
-                                                                : 'bg-emerald-500'
-                                                        }`} />
-                                                        <span>
-                                                            {totalStock <= 0
-                                                                ? '0 Out'
-                                                                : totalStock <= (primaryVariant.minStock || 3)
-                                                                ? `${totalStock} Low`
-                                                                : totalStock}
-                                                        </span>
-                                                        <History className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity text-gray-500 dark:text-gray-400 shrink-0" />
-                                                    </button>
+                                                    catalogueTab === 'LEGACY' ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setHistoryVariantId(primaryVariant.id)}
+                                                            title={`Old Item Chart (recorded balance: ${totalStock}, unverified) — click to view movement history`}
+                                                            className="group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold font-mono bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700 transition-colors cursor-pointer"
+                                                        >
+                                                            <span>{totalStock !== 0 ? `Legacy (${totalStock})` : 'Legacy'}</span>
+                                                            <History className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity text-gray-500 dark:text-gray-400 shrink-0" />
+                                                        </button>
+                                                    ) : preparedOnly ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setHistoryVariantId(primaryVariant.id)}
+                                                            title="Prepared item — uncounted until added to Stock"
+                                                            className="group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-900/50 transition-colors cursor-pointer"
+                                                        >
+                                                            <span>Uncounted</span>
+                                                            <History className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity text-indigo-500 shrink-0" />
+                                                        </button>
+                                                    ) : (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setHistoryVariantId(primaryVariant.id)}
+                                                            title="Click to view Stock Movement History (Sales, Purchases, Returns)"
+                                                            className={`group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold font-mono transition-all transform hover:scale-105 shadow-2xs cursor-pointer ${
+                                                                totalStock <= 0
+                                                                    ? 'bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 dark:bg-red-950/40 dark:text-red-300 dark:border-red-900/50'
+                                                                    : totalStock <= minStock
+                                                                    ? 'bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-900/50'
+                                                                    : 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-900/50'
+                                                            }`}
+                                                        >
+                                                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                                                totalStock <= 0
+                                                                    ? 'bg-red-500'
+                                                                    : totalStock <= minStock
+                                                                    ? 'bg-amber-500 animate-pulse'
+                                                                    : 'bg-emerald-500'
+                                                            }`} />
+                                                            <span>
+                                                                {totalStock <= 0
+                                                                    ? '0 Out'
+                                                                    : totalStock <= minStock
+                                                                    ? `${totalStock} Low`
+                                                                    : totalStock}
+                                                            </span>
+                                                            <History className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity text-gray-500 dark:text-gray-400 shrink-0" />
+                                                        </button>
+                                                    )
                                                 ) : (
                                                     <span className="text-xs text-gray-400 font-mono">-</span>
                                                 )}
@@ -939,7 +1138,9 @@ export const Products: React.FC = () => {
                         {filteredProducts.length} {filteredProducts.length === 1 ? 'product' : 'products'}
                     </span>
                     <span className="text-gray-400 text-[11px]">
-                        Showing active catalogue items
+                        {catalogueTab === 'LEGACY'
+                            ? 'Showing Old Item Chart (Legacy) records'
+                            : 'Showing New / Audited catalogue items'}
                     </span>
                 </div>
             </div>
@@ -953,7 +1154,13 @@ export const Products: React.FC = () => {
                         resetForm();
                     }
                 }}
-                title={editingProduct ? `Edit Product: ${editingProduct.name}` : 'Add New Product'}
+                title={
+                    editingProduct
+                        ? `Edit Product: ${editingProduct.name}`
+                        : createCatalogueType === 'OLD_CHART'
+                        ? 'Add Old Chart Item'
+                        : 'Add New Product'
+                }
                 size="lg"
             >
                 {editLoading ? (
@@ -970,15 +1177,90 @@ export const Products: React.FC = () => {
                     </div>
                 ) : showModal ? (() => {
                     const variant = formData.variants[0] || createEmptyVariant();
+                    const isCreatingOldChart = !editingProduct && createCatalogueType === 'OLD_CHART';
+                    const isLegacyForm = isEditingLegacy || isCreatingOldChart;
+                    const specsToggleKey = editingProduct?.id || 'new-legacy';
+                    const showGarmentSpecs = !isLegacyForm || showLegacySpecsForId === specsToggleKey;
+                    const isEditingPrepared = Boolean(editingProduct && isPreparedOnlyProduct(editingProduct));
                     return (
                         <form onSubmit={handleSubmit} className="space-y-4">
+                            {/* Catalogue Classification Notice / Selector */}
+                            {editingProduct ? (
+                                <div className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${
+                                    isEditingLegacy
+                                        ? 'border-amber-200 bg-amber-50/70 text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-200'
+                                        : isEditingPrepared
+                                        ? 'border-indigo-200 bg-indigo-50/70 text-indigo-900 dark:border-indigo-900/40 dark:bg-indigo-950/20 dark:text-indigo-200'
+                                        : 'border-emerald-200 bg-emerald-50/70 text-emerald-900 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:text-emerald-200'
+                                }`}>
+                                    <Info className="w-4 h-4 shrink-0 mt-0.5" />
+                                    <div>
+                                        {isEditingLegacy ? (
+                                            <>
+                                                <span className="font-semibold">Old Item Chart (Legacy):</span>{' '}
+                                                Update MRP, selling price, or tax. Saving keeps this item in Old Item Chart without converting it to audited stock.
+                                            </>
+                                        ) : isEditingPrepared ? (
+                                            <>
+                                                <span className="font-semibold">Prepared Item (Uncounted):</span>{' '}
+                                                Waiting for an opening stock count in Stock before billing.
+                                            </>
+                                        ) : (
+                                            <>
+                                                <span className="font-semibold">Audited Item:</span>{' '}
+                                                Price and detail updates preserve your live tracked stock and barcode history.
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    <span className="block text-xs font-medium text-gray-700 dark:text-gray-300">
+                                        Save Into Tab
+                                    </span>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setCreateCatalogueType('PREPARED')}
+                                            className={`text-left px-3 py-2 rounded-lg border text-xs transition-all flex items-start gap-2 ${
+                                                createCatalogueType === 'PREPARED'
+                                                    ? 'border-emerald-500 bg-emerald-50/70 text-emerald-950 dark:bg-emerald-950/30 dark:text-emerald-100 ring-1 ring-emerald-500/40'
+                                                    : 'border-gray-200 dark:border-dark-border hover:bg-gray-50 dark:hover:bg-dark-bg/40 text-gray-600 dark:text-gray-300'
+                                            }`}
+                                        >
+                                            <CheckCircle2 className={`w-4 h-4 shrink-0 mt-0.5 ${createCatalogueType === 'PREPARED' ? 'text-emerald-600' : 'text-gray-400'}`} />
+                                            <div>
+                                                <div className="font-semibold">New / Audited Item</div>
+                                                <div className="text-[11px] opacity-80">Specific garment (prepared until counted in Stock)</div>
+                                            </div>
+                                        </button>
+
+                                        <button
+                                            type="button"
+                                            onClick={() => setCreateCatalogueType('OLD_CHART')}
+                                            className={`text-left px-3 py-2 rounded-lg border text-xs transition-all flex items-start gap-2 ${
+                                                createCatalogueType === 'OLD_CHART'
+                                                    ? 'border-amber-500 bg-amber-50/70 text-amber-950 dark:bg-amber-950/30 dark:text-amber-100 ring-1 ring-amber-500/40'
+                                                    : 'border-gray-200 dark:border-dark-border hover:bg-gray-50 dark:hover:bg-dark-bg/40 text-gray-600 dark:text-gray-300'
+                                            }`}
+                                        >
+                                            <Archive className={`w-4 h-4 shrink-0 mt-0.5 ${createCatalogueType === 'OLD_CHART' ? 'text-amber-600' : 'text-gray-400'}`} />
+                                            <div>
+                                                <div className="font-semibold">Old Item Chart</div>
+                                                <div className="text-[11px] opacity-80">Generic item for other shop stickers (e.g. Shirt 1999)</div>
+                                            </div>
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Product Name & Category */}
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <Input
                                     label="Product Name"
                                     value={formData.name}
                                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                                    placeholder="e.g. Crazy Heart - Plain - L"
+                                    placeholder={isCreatingOldChart ? 'e.g. Shirt 1999' : 'e.g. Crazy Heart - Plain - L'}
                                     required
                                 />
 
@@ -1047,86 +1329,101 @@ export const Products: React.FC = () => {
 
                             {/* Garment Specifications */}
                             <div className="border-t border-gray-100 dark:border-dark-border pt-3">
-                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                                    Garment Specifications
-                                </h4>
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                                    <Input
-                                        label="Size"
-                                        value={variant.size}
-                                        onChange={(e) => updateVariantField(variant.id, 'size', e.target.value)}
-                                        placeholder="e.g. XL, 38, 42"
-                                    />
-                                    <Input
-                                        label="Brand"
-                                        value={variant.brand}
-                                        onChange={(e) => updateVariantField(variant.id, 'brand', e.target.value)}
-                                        placeholder="e.g. Crazy Heart"
-                                    />
-                                    <Input
-                                        label="Fabric"
-                                        value={variant.fabric}
-                                        onChange={(e) => updateVariantField(variant.id, 'fabric', e.target.value)}
-                                        placeholder="e.g. Cotton, Linen"
-                                    />
-                                    <Input
-                                        label="Quality / Weave"
-                                        value={variant.quality}
-                                        onChange={(e) => updateVariantField(variant.id, 'quality', e.target.value)}
-                                        placeholder="e.g. Oxford, Twill"
-                                    />
-                                </div>
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
-                                    <Input
-                                        label="Pattern / Design"
-                                        value={variant.pattern}
-                                        onChange={(e) => updateVariantField(variant.id, 'pattern', e.target.value)}
-                                        placeholder="e.g. Checks, Plain"
-                                    />
+                                {isLegacyForm ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowLegacySpecsForId(showGarmentSpecs ? null : specsToggleKey)}
+                                        className="w-full flex items-center justify-between text-xs font-semibold text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 uppercase tracking-wider mb-2"
+                                    >
+                                        <span>Garment Specifications (Optional for Old Chart)</span>
+                                        {showGarmentSpecs ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                                    </button>
+                                ) : (
+                                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                                        Garment Specifications
+                                    </h4>
+                                )}
+                                {showGarmentSpecs && (
+                                    <>
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                            <Input
+                                                label="Size"
+                                                value={variant.size}
+                                                onChange={(e) => updateVariantField(variant.id, 'size', e.target.value)}
+                                                placeholder="e.g. XL, 38, 42"
+                                            />
+                                            <Input
+                                                label="Brand"
+                                                value={variant.brand}
+                                                onChange={(e) => updateVariantField(variant.id, 'brand', e.target.value)}
+                                                placeholder="e.g. Crazy Heart"
+                                            />
+                                            <Input
+                                                label="Fabric"
+                                                value={variant.fabric}
+                                                onChange={(e) => updateVariantField(variant.id, 'fabric', e.target.value)}
+                                                placeholder="e.g. Cotton, Linen"
+                                            />
+                                            <Input
+                                                label="Quality / Weave"
+                                                value={variant.quality}
+                                                onChange={(e) => updateVariantField(variant.id, 'quality', e.target.value)}
+                                                placeholder="e.g. Oxford, Twill"
+                                            />
+                                        </div>
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+                                            <Input
+                                                label="Pattern / Design"
+                                                value={variant.pattern}
+                                                onChange={(e) => updateVariantField(variant.id, 'pattern', e.target.value)}
+                                                placeholder="e.g. Checks, Plain"
+                                            />
 
-                                    {activeGarmentFields.optional.includes('sleeve') && (
-                                        <Input
-                                            label="Sleeve"
-                                            value={variant.sleeve}
-                                            onChange={(e) => updateVariantField(variant.id, 'sleeve', e.target.value)}
-                                            placeholder="e.g. Full Sleeve"
-                                        />
-                                    )}
+                                            {activeGarmentFields.optional.includes('sleeve') && (
+                                                <Input
+                                                    label="Sleeve"
+                                                    value={variant.sleeve}
+                                                    onChange={(e) => updateVariantField(variant.id, 'sleeve', e.target.value)}
+                                                    placeholder="e.g. Full Sleeve"
+                                                />
+                                            )}
 
-                                    {activeGarmentFields.optional.includes('fit') && (
-                                        <Input
-                                            label="Fit"
-                                            value={variant.fit}
-                                            onChange={(e) => updateVariantField(variant.id, 'fit', e.target.value)}
-                                            placeholder="e.g. Slim Fit"
-                                        />
-                                    )}
+                                            {activeGarmentFields.optional.includes('fit') && (
+                                                <Input
+                                                    label="Fit"
+                                                    value={variant.fit}
+                                                    onChange={(e) => updateVariantField(variant.id, 'fit', e.target.value)}
+                                                    placeholder="e.g. Slim Fit"
+                                                />
+                                            )}
 
-                                    {activeGarmentFields.optional.includes('collar') && (
-                                        <Input
-                                            label="Collar"
-                                            value={variant.collar}
-                                            onChange={(e) => updateVariantField(variant.id, 'collar', e.target.value)}
-                                            placeholder="e.g. Spread, Mand"
-                                        />
-                                    )}
+                                            {activeGarmentFields.optional.includes('collar') && (
+                                                <Input
+                                                    label="Collar"
+                                                    value={variant.collar}
+                                                    onChange={(e) => updateVariantField(variant.id, 'collar', e.target.value)}
+                                                    placeholder="e.g. Spread, Mand"
+                                                />
+                                            )}
 
-                                    {activeGarmentFields.optional.includes('pocket') && (
-                                        <Input
-                                            label="Pocket"
-                                            value={variant.pocket}
-                                            onChange={(e) => updateVariantField(variant.id, 'pocket', e.target.value)}
-                                            placeholder="e.g. Single, None"
-                                        />
-                                    )}
+                                            {activeGarmentFields.optional.includes('pocket') && (
+                                                <Input
+                                                    label="Pocket"
+                                                    value={variant.pocket}
+                                                    onChange={(e) => updateVariantField(variant.id, 'pocket', e.target.value)}
+                                                    placeholder="e.g. Single, None"
+                                                />
+                                            )}
 
-                                    <Input
-                                        label="Style / Model Ref"
-                                        value={variant.styleRef}
-                                        onChange={(e) => updateVariantField(variant.id, 'styleRef', e.target.value)}
-                                        placeholder="e.g. 700 / Premium"
-                                    />
-                                </div>
+                                            <Input
+                                                label="Style / Model Ref"
+                                                value={variant.styleRef}
+                                                onChange={(e) => updateVariantField(variant.id, 'styleRef', e.target.value)}
+                                                placeholder="e.g. 700 / Premium"
+                                            />
+                                        </div>
+                                    </>
+                                )}
                             </div>
 
                             {/* Pricing & Stock Fields */}
@@ -1171,7 +1468,15 @@ export const Products: React.FC = () => {
                                             type="text"
                                             readOnly
                                             disabled
-                                            value={variant.isPrepared ? '0 (Uncounted)' : `${variant.stock} (Live)`}
+                                            value={
+                                                isCreatingOldChart
+                                                    ? '0 (Old Chart / Unverified)'
+                                                    : variant.isPrepared
+                                                    ? '0 (Uncounted)'
+                                                    : isEditingLegacy
+                                                    ? `${variant.stock} (Legacy / Unverified)`
+                                                    : `${variant.stock} (Live)`
+                                            }
                                             className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-lg text-sm text-gray-500 cursor-not-allowed"
                                             title="Add stock or change counts on the Stock page. Products manages item details and labels."
                                         />

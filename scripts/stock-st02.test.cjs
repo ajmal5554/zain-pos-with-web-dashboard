@@ -1109,3 +1109,98 @@ test('Simultaneous identical create requests produce one product and replay acro
         assert.equal((await database.$queryRawUnsafe('SELECT * FROM "CatalogueSaveRequest" WHERE "requestId" = ?', payload.requestId)).length, 1);
     } finally { await other.$disconnect(); }
 });
+
+test('listProducts and getProduct separate tracked audited items from legacy chart items and preserve legacy status on price edits', async () => {
+    const category = await createCategory('Catalogue separation');
+    await database.$executeRawUnsafe('CREATE TABLE IF NOT EXISTS "StockVariantTracking" ("variantId" TEXT NOT NULL PRIMARY KEY, "activatedAt" TEXT NOT NULL)');
+
+    const trackedProduct = await database.product.create({ data: { name: 'Brooklyn - Plain - L', categoryId: category.id } });
+    const trackedVariant = await database.productVariant.create({
+        data: { productId: trackedProduct.id, sku: 'TRK-001', barcode: '722463', size: 'L', mrp: 700, sellingPrice: 700, costPrice: 400, stock: 1 },
+    });
+    await database.$executeRawUnsafe('INSERT INTO "StockVariantTracking" ("variantId", "activatedAt") VALUES (?, ?)', trackedVariant.id, new Date().toISOString());
+
+    const legacyProduct = await database.product.create({ data: { name: 'Shirt 1295', categoryId: category.id } });
+    const legacyVariant = await database.productVariant.create({
+        data: { productId: legacyProduct.id, sku: 'LEG-001', barcode: '4649666', size: 'Standard', mrp: 1295, sellingPrice: 1295, costPrice: 750, stock: 0 },
+    });
+
+    const prepared = await saveCatalogue({
+        name: 'Prepared Garment',
+        categoryId: category.id,
+        variants: [{ id: 'temp-sep-prep', barcode: '100999', mrp: 850, sellingPrice: 850 }],
+    });
+
+    const summary = await catalogueService.listProducts(database, { where: { id: { in: [trackedProduct.id, legacyProduct.id, prepared.id] } }, summary: true }, adminUser);
+    const byId = new Map(summary.map(p => [p.id, p]));
+    assert.equal(byId.get(trackedProduct.id).hasTrackedVariant, true);
+    assert.equal(byId.get(trackedProduct.id).hasPreparedVariant, false);
+    assert.equal(byId.get(trackedProduct.id).hasLegacyVariant, false);
+
+    assert.equal(byId.get(legacyProduct.id).hasTrackedVariant, false);
+    assert.equal(byId.get(legacyProduct.id).hasPreparedVariant, false);
+    assert.equal(byId.get(legacyProduct.id).hasLegacyVariant, true);
+
+    assert.equal(byId.get(prepared.id).hasTrackedVariant, false);
+    assert.equal(byId.get(prepared.id).hasPreparedVariant, true);
+    assert.equal(byId.get(prepared.id).hasLegacyVariant, false);
+
+    const legacyLoaded = await catalogueService.getProduct(database, legacyProduct.id, adminUser);
+    assert.equal(legacyLoaded.hasTrackedVariant, false);
+    assert.equal(legacyLoaded.hasLegacyVariant, true);
+    assert.equal('isTracked' in legacyLoaded.variants[0], false);
+
+    // Price edit on legacy item keeps it legacy and non-prepared
+    const updatedLegacy = await saveCatalogue({
+        id: legacyProduct.id,
+        name: legacyLoaded.name,
+        categoryId: legacyLoaded.categoryId,
+        updatedAt: legacyLoaded.updatedAt,
+        variants: [{ id: legacyVariant.id, mrp: 1350, sellingPrice: 1350 }],
+    });
+    assert.equal(updatedLegacy.hasTrackedVariant, false);
+    assert.equal(updatedLegacy.hasPreparedVariant, false);
+    assert.equal(updatedLegacy.hasLegacyVariant, true);
+    assert.equal(updatedLegacy.variants[0].isPrepared, false);
+    assert.equal(updatedLegacy.variants[0].sellingPrice, 1350);
+});
+
+test('Creating a new Old Item Chart entry saves directly as legacy without tracking or preparation and cannot alter existing products', async () => {
+    const category = await createCategory('Old chart creation');
+    const createdOld = await saveCatalogue({
+        name: 'Shirt 1999',
+        categoryId: category.id,
+        catalogueType: 'OLD_CHART',
+        variants: [{ id: 'temp-old-1999', barcode: '4649999', mrp: 1999, sellingPrice: 1999 }],
+    });
+    assert.equal(createdOld.hasLegacyVariant, true);
+    assert.equal(createdOld.hasPreparedVariant, false);
+    assert.equal(createdOld.hasTrackedVariant, false);
+    assert.equal(createdOld.variants[0].isPrepared, false);
+    assert.equal(createdOld.variants[0].stock, 0);
+    assert.equal(await catalogueService.checkAnyVariantPrepared(database, [createdOld.variants[0].id]), false);
+    const trackingRows = await database.$queryRawUnsafe('SELECT * FROM "StockVariantTracking" WHERE "variantId" = ?', createdOld.variants[0].id);
+    assert.equal(trackingRows.length, 0);
+
+    // Rejects invalid catalogueType and changing catalogueType on existing products
+    await assert.rejects(() => saveCatalogue({
+        name: 'Bad Type',
+        categoryId: category.id,
+        catalogueType: 'INVALID',
+        variants: [{ id: 'temp-bad-type', barcode: '4649998', mrp: 500, sellingPrice: 500 }],
+    }), /Invalid catalogue type/);
+
+    const prepared = await saveCatalogue({
+        name: 'Prepared Garment Guard',
+        categoryId: category.id,
+        variants: [{ id: 'temp-prep-guard', barcode: '100998', mrp: 1299, sellingPrice: 1299 }],
+    });
+    await assert.rejects(() => saveCatalogue({
+        id: prepared.id,
+        name: prepared.name,
+        categoryId: category.id,
+        updatedAt: prepared.updatedAt,
+        catalogueType: 'OLD_CHART',
+        variants: [{ id: prepared.variants[0].id, mrp: 1299, sellingPrice: 1299 }],
+    }), /Catalogue type cannot be changed/);
+});

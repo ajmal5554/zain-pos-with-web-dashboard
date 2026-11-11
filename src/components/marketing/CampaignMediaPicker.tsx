@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { Input } from '../ui/Input';
 import { showToast } from '../ui/Toast';
-import { normalizeImageForWhatsApp } from '../../lib/imageCollage';
+import { normalizeImageForWhatsApp, dataUrlToJpegFile } from '../../lib/imageCollage';
 
 export type CampaignMediaMode = 'SINGLE' | 'COLLAGE' | 'CAROUSEL';
 
@@ -22,6 +22,7 @@ export interface ColorPhotoSlot {
     sizes?: string;
     price?: string;
     uploadedMediaId?: string;
+    uploadedAt?: number;
 }
 
 interface CampaignMediaPickerProps {
@@ -60,16 +61,6 @@ function validateImageFile(file: File): boolean {
         return false;
     }
     return true;
-}
-
-function dataUrlToJpegFile(dataUrl: string, filename: string): File {
-    const base64 = dataUrl.split(',')[1] || '';
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-    }
-    return new File([bytes], filename, { type: 'image/jpeg' });
 }
 
 export const CampaignMediaPicker: React.FC<CampaignMediaPickerProps> = ({
@@ -114,12 +105,23 @@ export const CampaignMediaPicker: React.FC<CampaignMediaPickerProps> = ({
 
         for (let i = 0; i < accepted.length; i++) {
             const f = accepted[i];
-            const dataUrl = await readFileAsDataUrl(f);
+            const rawDataUrl = await readFileAsDataUrl(f);
+            let finalDataUrl = rawDataUrl;
+            let finalMime = f.type || 'image/jpeg';
+            let finalFilename = f.name;
+            try {
+                const normalized = await normalizeImageForWhatsApp(rawDataUrl, f.name, 960);
+                finalDataUrl = normalized.dataUrl;
+                finalMime = normalized.mimeType;
+                finalFilename = normalized.filename;
+            } catch {
+                // Keep original if canvas fails
+            }
             newSlots.push({
                 id: `grid-${Date.now()}-${i}`,
-                dataUrl,
-                mimeType: f.type,
-                filename: f.name,
+                dataUrl: finalDataUrl,
+                mimeType: finalMime,
+                filename: finalFilename,
                 colorLabel: `Color ${collagePhotos.length + newSlots.length + 1}`,
             });
         }

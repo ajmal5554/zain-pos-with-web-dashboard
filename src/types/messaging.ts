@@ -224,3 +224,45 @@ export interface WhatsAppWebhookConfig {
     authMismatch?: boolean;
 }
 
+export interface CampaignTemplateVariables {
+    collectionName: string;
+    details: string;
+    sizes: string;
+    startingPrice: string;
+}
+
+export interface SavedColorPhotoSlot {
+    id: string;
+    dataUrl: string;
+    mimeType: string;
+    filename: string;
+    colorLabel: string;
+    sizes?: string;
+    price?: string;
+    uploadedMediaId?: string;
+    uploadedAt?: number;
+}
+
+export interface MarketingCampaignSnapshot {
+    id: string;
+    presetName?: string;
+    updatedAt: string;
+    campaignName: string;
+    mediaMode: 'SINGLE' | 'COLLAGE' | 'CAROUSEL';
+    variables: CampaignTemplateVariables;
+    singlePhoto?: {
+        dataUrl: string;
+        mimeType: string;
+        filename: string;
+        uploadedMediaId?: string;
+        uploadedAt?: number;
+    } | null;
+    collagePhotos: SavedColorPhotoSlot[];
+    carouselCards: SavedColorPhotoSlot[];
+}
+
+export interface SavedMarketingCampaignsData {
+    lastDraft: MarketingCampaignSnapshot | null;
+    presets: MarketingCampaignSnapshot[];
+}
+

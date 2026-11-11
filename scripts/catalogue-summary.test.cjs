@@ -16,7 +16,7 @@ const compiled = ts.transpileModule(`globalThis.subject = ${functionText};`, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
 }).outputText;
 
-function harness(products) {
+function harness(products, hasTrackingTable = true) {
     const calls = [];
     const context = vm.createContext({
         ensureCatalogueSchema: async () => { calls.push(['ensure']); },
@@ -37,35 +37,79 @@ function harness(products) {
         },
         $queryRawUnsafe: async (sql, ...parameters) => {
             calls.push(['sql', sql, parameters]);
+            if (sql.includes('sqlite_master')) {
+                return hasTrackingTable ? [{ name: 'StockVariantTracking' }] : [];
+            }
             if (sql.includes('COUNT(*)')) {
                 return products.map(product => ({ productId: product.id, variantCount: product.variantCount, totalStock: product.dbStock }));
             }
-            return products.filter(product => product.dbPrepared).map(product => ({ productId: product.id, hasPreparedVariant: 1 }));
+            return products.map(product => ({
+                productId: product.id,
+                hasPreparedVariant: product.dbPrepared ? 1 : 0,
+                hasTrackedVariant: hasTrackingTable && product.dbTracked ? 1 : 0,
+                hasLegacyVariant: !product.dbPrepared && !(hasTrackingTable && product.dbTracked) ? 1 : 0,
+            }));
         },
     };
     return { run: context.subject, prisma, calls };
 }
 
-test('Products summary fetches one display variant and returns aggregate stock and preparation state', async () => {
-    const products = [{
-        id: 'p1', name: 'Crazy Heart Checks', category: { name: 'Shirts' }, categoryId: 'shirts', taxRate: 5,
-        variantCount: 3, dbStock: 14, dbPrepared: true,
-        variants: [{ id: 'v1', productId: 'p1', barcode: '001234', sku: 'sku-1', size: 'L', mrp: 700, sellingPrice: 650, stock: 4, isActive: true }],
-    }];
+test('Products summary fetches one display variant and returns aggregate stock, preparation, and tracking state', async () => {
+    const products = [
+        {
+            id: 'p1', name: 'Crazy Heart Checks', category: { name: 'Shirts' }, categoryId: 'shirts', taxRate: 5,
+            variantCount: 3, dbStock: 14, dbPrepared: true, dbTracked: false,
+            variants: [{ id: 'v1', productId: 'p1', barcode: '001234', sku: 'sku-1', size: 'L', mrp: 700, sellingPrice: 650, stock: 4, isActive: true }],
+        },
+        {
+            id: 'p2', name: 'Brooklyn - Plain - L', category: { name: 'Shirts' }, categoryId: 'shirts', taxRate: 5,
+            variantCount: 1, dbStock: 5, dbPrepared: false, dbTracked: true,
+            variants: [{ id: 'v2', productId: 'p2', barcode: '722463', sku: 'sku-2', size: 'L', mrp: 700, sellingPrice: 700, stock: 5, isActive: true }],
+        },
+        {
+            id: 'p3', name: 'Shirt 1295', category: { name: 'Shirts' }, categoryId: 'shirts', taxRate: 5,
+            variantCount: 1, dbStock: 0, dbPrepared: false, dbTracked: false,
+            variants: [{ id: 'v3', productId: 'p3', barcode: '4649666', sku: 'sku-3', size: 'Standard', mrp: 1295, sellingPrice: 1295, stock: 0, isActive: true }],
+        },
+    ];
     const h = harness(products);
     const result = await h.run(h.prisma, { summary: true, where: { isActive: true } }, { id: 'manager' });
 
-    assert.equal(result.length, 1);
+    assert.equal(result.length, 3);
     assert.equal(result[0].variants.length, 1);
     assert.equal(result[0].variants[0].barcode, '001234');
     assert.equal(result[0].variantCount, 3);
     assert.equal(result[0].totalStock, 14);
     assert.equal(result[0].hasPreparedVariant, true);
+    assert.equal(result[0].hasTrackedVariant, false);
+    assert.equal(result[0].hasLegacyVariant, false);
+
+    assert.equal(result[1].hasPreparedVariant, false);
+    assert.equal(result[1].hasTrackedVariant, true);
+    assert.equal(result[1].hasLegacyVariant, false);
+
+    assert.equal(result[2].hasPreparedVariant, false);
+    assert.equal(result[2].hasTrackedVariant, false);
+    assert.equal(result[2].hasLegacyVariant, true);
+
     const find = h.calls.find(call => call[0] === 'findMany')[1];
     assert.equal(find.include.variants.take, 1);
     assert.equal(find.include.variants.select.costPrice, undefined);
-    assert.equal(h.calls.filter(call => call[0] === 'sql').length, 2);
-    assert.deepEqual(h.calls.find(call => call[0] === 'enrich').slice(1), [1, 'manager']);
+    assert.equal(h.calls.filter(call => call[0] === 'sql').length, 3);
+    assert.deepEqual(h.calls.find(call => call[0] === 'enrich').slice(1), [3, 'manager']);
+});
+
+test('Products summary treats items as legacy when StockVariantTracking table is absent', async () => {
+    const products = [{
+        id: 'p3', name: 'Shirt 1295', category: { name: 'Shirts' }, categoryId: 'shirts', taxRate: 5,
+        variantCount: 1, dbStock: 0, dbPrepared: false, dbTracked: false,
+        variants: [{ id: 'v3', productId: 'p3', barcode: '4649666', sku: 'sku-3', size: 'Standard', mrp: 1295, sellingPrice: 1295, stock: 0, isActive: true }],
+    }];
+    const h = harness(products, false);
+    const result = await h.run(h.prisma, { summary: true }, { id: 'manager' });
+    assert.equal(result[0].hasTrackedVariant, false);
+    assert.equal(result[0].hasLegacyVariant, true);
+    assert.equal(h.calls.some(call => call[0] === 'sql' && call[1].includes('StockVariantTracking" st')), false);
 });
 
 test('Products summary returns an empty result without running aggregate queries for an empty catalogue', async () => {

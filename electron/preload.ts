@@ -248,6 +248,9 @@ const api = {
             ipcRenderer.invoke('messaging:uploadMedia', args),
         sendCampaign: (payload: any) => ipcRenderer.invoke('messaging:sendCampaign', payload),
         syncDeliveryStatuses: () => ipcRenderer.invoke('messaging:syncDeliveryStatuses'),
+        loadCampaignDrafts: () => ipcRenderer.invoke('marketing:loadCampaignDrafts'),
+        saveCampaignDrafts: (data: { lastDraft?: any; presets?: any[] }) =>
+            ipcRenderer.invoke('marketing:saveCampaignDrafts', data),
         getWebhookStatus: () => ipcRenderer.invoke('messaging:getWebhookStatus'),
         syncWebhookConfig: (partialConfig?: any) => ipcRenderer.invoke('messaging:syncWebhookConfig', partialConfig),
         getConversations: () => ipcRenderer.invoke('messaging:getConversations'),
@@ -264,6 +267,14 @@ const api = {
             ipcRenderer.on('whatsapp:openInboxThread', listener);
             return () => ipcRenderer.removeListener('whatsapp:openInboxThread', listener);
         },
+    },
+
+    customers: {
+        getDismissed: () => ipcRenderer.invoke('customers:getDismissed'),
+        removeFromDirectory: (args: { customers: Array<{ id?: string | null; name?: string | null; phone?: string | null }> }) =>
+            ipcRenderer.invoke('customers:removeFromDirectory', args),
+        restoreDirectoryEntries: (args: { name?: string | null; phone?: string | null }) =>
+            ipcRenderer.invoke('customers:restoreDirectoryEntries', args),
     },
 
     shell: {

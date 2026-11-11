@@ -9,6 +9,7 @@ import type {
     WhatsAppConversation,
     WhatsAppInboxMessage,
     WhatsAppWebhookConfig,
+    SavedMarketingCampaignsData,
 } from '../types/messaging';
 import { DEFAULT_MESSAGING_CONFIG } from '../types/messaging';
 import { useAuthStore } from '../store/authStore';
@@ -397,6 +398,45 @@ class MessagingFrontendService {
             // Non-fatal
         }
         return { updated: 0, failedCount: 0, latestErrors: [] };
+    }
+
+    async loadSavedCampaigns(): Promise<SavedMarketingCampaignsData> {
+        try {
+            if (window.electronAPI?.messaging?.loadCampaignDrafts) {
+                const res = await window.electronAPI.messaging.loadCampaignDrafts();
+                if (res?.success && res.data) {
+                    return {
+                        lastDraft: res.data.lastDraft || null,
+                        presets: Array.isArray(res.data.presets) ? res.data.presets : [],
+                    };
+                }
+            }
+            const raw = localStorage.getItem('ZAIN_POS_SAVED_MARKETING_CAMPAIGNS');
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                return {
+                    lastDraft: parsed?.lastDraft || null,
+                    presets: Array.isArray(parsed?.presets) ? parsed.presets : [],
+                };
+            }
+        } catch (err) {
+            console.warn('Failed to load saved marketing campaigns:', err);
+        }
+        return { lastDraft: null, presets: [] };
+    }
+
+    async saveSavedCampaigns(data: SavedMarketingCampaignsData): Promise<boolean> {
+        try {
+            if (window.electronAPI?.messaging?.saveCampaignDrafts) {
+                const res = await window.electronAPI.messaging.saveCampaignDrafts(data);
+                return Boolean(res?.success);
+            }
+            localStorage.setItem('ZAIN_POS_SAVED_MARKETING_CAMPAIGNS', JSON.stringify(data));
+            return true;
+        } catch (err) {
+            console.warn('Failed to save marketing campaigns:', err);
+            return false;
+        }
     }
 }
 

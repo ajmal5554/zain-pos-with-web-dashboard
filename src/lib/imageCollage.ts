@@ -260,3 +260,16 @@ export async function normalizeImageForWhatsApp(
     };
 }
 
+/**
+ * Reconstruct a browser File instance from a JPEG/image Data URL (used when restoring saved campaign photos).
+ */
+export function dataUrlToJpegFile(dataUrl: string, filename: string, mimeType: string = 'image/jpeg'): File {
+    const base64 = dataUrl.split(',')[1] || '';
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return new File([bytes], filename || 'product.jpg', { type: mimeType || 'image/jpeg' });
+}
+

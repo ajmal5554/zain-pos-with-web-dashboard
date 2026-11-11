@@ -16,6 +16,9 @@ vm.runInNewContext(transpile(fs.readFileSync(path.join(root, 'src/lib/catalogueD
 const labelTemplateExports = {};
 vm.runInNewContext(transpile(fs.readFileSync(path.join(root, 'src/lib/labelTemplate.ts'), 'utf8')),
     { exports: labelTemplateExports, module: { exports: labelTemplateExports } });
+const catalogueScopeExports = {};
+vm.runInNewContext(transpile(fs.readFileSync(path.join(root, 'src/lib/catalogueScope.ts'), 'utf8')),
+    { exports: catalogueScopeExports, module: { exports: catalogueScopeExports } });
 
 // Execute the actual component callbacks, not a second implementation of their behavior.
 // Every database, IPC, timer and printer dependency below is isolated in memory.
@@ -32,6 +35,7 @@ function callback(file, name, bindings = {}) {
     const context = vm.createContext({
         ...descriptionExports,
         ...labelTemplateExports,
+        ...catalogueScopeExports,
         console: { error() {}, log() {} },
         crypto: webcrypto,
         useCallback: fn => fn,
@@ -468,4 +472,134 @@ test('Garment fields keep trouser and unrecognized categories out of a shirt-spe
     assert.equal(descriptionExports.getCategoryGarmentFields('Trousers').optional.includes('collar'), false);
     assert.equal(descriptionExports.getCategoryGarmentFields('Accessories').optional.includes('sleeve'), false);
     assert.equal(descriptionExports.getCategoryGarmentFields('Shirts').optional.includes('sleeve'), true);
+});
+
+test('Products separation keeps Old Item Chart distinct and excludes legacy/prepared items from audited Out of Stock counts', () => {
+    const auditedInStock = {
+        id: 'p-audited-ok', name: 'Brooklyn - Plain - L', categoryId: 'shirts',
+        hasTrackedVariant: true, hasPreparedVariant: false, totalStock: 10,
+        variants: [{ id: 'v1', barcode: '722463', stock: 10, minStock: 5, isTracked: true, isPrepared: false }],
+    };
+    const auditedLow = {
+        id: 'p-audited-low', name: 'Casino Club - Checks - L', categoryId: 'shirts',
+        hasTrackedVariant: true, hasPreparedVariant: false, totalStock: 1,
+        variants: [{ id: 'v2', barcode: '955049', stock: 1, minStock: 5, isTracked: true, isPrepared: false }],
+    };
+    const preparedOnly = {
+        id: 'p-prepared', name: 'New Draft Shirt', categoryId: 'shirts',
+        hasTrackedVariant: false, hasPreparedVariant: true, totalStock: 0,
+        variants: [{ id: 'v3', barcode: '100001', stock: 0, minStock: 5, isTracked: false, isPrepared: true }],
+    };
+    const legacyShirt = {
+        id: 'p-legacy-1', name: 'Shirt 1295', categoryId: 'shirts', category: { id: 'shirts', name: 'Shirts' },
+        hasTrackedVariant: false, hasPreparedVariant: false, totalStock: 0,
+        variants: [{ id: 'v4', barcode: '4649666', stock: 0, minStock: 5, isTracked: false, isPrepared: false }],
+    };
+    const legacyJockey = {
+        id: 'p-legacy-2', name: 'JOCKEY TRUNKS 299', categoryId: 'general', category: { id: 'general', name: 'General' },
+        hasTrackedVariant: false, hasPreparedVariant: false, totalStock: 0,
+        variants: [{ id: 'v5', barcode: '4649663', stock: 0, minStock: 5, isTracked: false, isPrepared: false }],
+    };
+
+    const all = [auditedInStock, auditedLow, preparedOnly, legacyShirt, legacyJockey];
+    const audited = all.filter(catalogueScopeExports.isAuditedOrPreparedProduct);
+    const legacy = all.filter(p => !catalogueScopeExports.isAuditedOrPreparedProduct(p));
+    assert.deepEqual(audited.map(p => p.id), ['p-audited-ok', 'p-audited-low', 'p-prepared']);
+    assert.deepEqual(legacy.map(p => p.id), ['p-legacy-1', 'p-legacy-2']);
+
+    const stats = catalogueScopeExports.computeAuditedStockStats(audited);
+    assert.deepEqual({ ...stats }, { total: 3, inStock: 1, lowStock: 1, outOfStock: 0, prepared: 1 });
+
+    const auditedList = callback(productsFile, 'filteredProducts', {
+        auditedProducts: audited, legacyProducts: legacy,
+        catalogueTab: 'AUDITED', stockFilter: 'OUT_OF_STOCK', legacyCategoryFilter: 'ALL',
+        sortBy: 'alphabetical', sortDirection: 'asc',
+    }).run;
+    assert.equal(auditedList.length, 0);
+
+    const legacyList = callback(productsFile, 'filteredProducts', {
+        auditedProducts: audited, legacyProducts: legacy,
+        catalogueTab: 'LEGACY', stockFilter: 'ALL', legacyCategoryFilter: 'general',
+        sortBy: 'alphabetical', sortDirection: 'asc',
+    }).run;
+    assert.deepEqual(Array.from(legacyList, p => p.id), ['p-legacy-2']);
+});
+
+test('Products price update on Old Item Chart omits tracking fields and preserves legacy tab state', async () => {
+    let savedPayload;
+    let currentTab = 'LEGACY';
+    const legacyVariant = {
+        id: 'legacy-var-1', barcode: '4649666', sku: 'SKU-4649666', size: 'Standard',
+        color: '', brand: '', fabric: '', quality: '', pattern: '', sleeve: '', fit: '',
+        collar: '', pocket: '', styleRef: '', isPrepared: false, isTracked: false,
+        mrp: 1395, sellingPrice: 1295, costPrice: 700, stock: 0, minStock: 5, isActive: true,
+    };
+    const { run } = callback(productsFile, 'executeSaveProduct', {
+        user: { id: 'admin', role: 'ADMIN', permViewCostPrice: true },
+        editingProduct: { id: 'legacy-prod-1', name: 'Shirt 1295', updatedAt: 'rev-1', hasTrackedVariant: false, hasPreparedVariant: false },
+        saveInFlight: { current: false }, saveRequest: { current: null },
+        formData: { name: 'Shirt 1295', categoryId: 'shirts', taxRate: 5, hsn: '', variants: [legacyVariant] },
+        toNumber: (value, fallback = 0) => (typeof value === 'number' && Number.isFinite(value) ? value : fallback),
+        setSaving() {}, showToast() {}, setShowModal() {}, resetForm() {}, loadData() {},
+        setCatalogueTab: value => { currentTab = value; },
+        window: {
+            electronAPI: {
+                catalogue: {
+                    saveProduct: async payload => {
+                        savedPayload = payload;
+                        return { success: true, data: { id: 'legacy-prod-1' } };
+                    },
+                },
+            },
+        },
+    });
+    await run();
+    assert.equal(currentTab, 'LEGACY');
+    assert.equal('isTracked' in savedPayload.variants[0], false);
+    assert.equal('isPrepared' in savedPayload.variants[0], false);
+    assert.equal('stock' in savedPayload.variants[0], false);
+    assert.equal(savedPayload.variants[0].mrp, 1395);
+    assert.equal(savedPayload.variants[0].sellingPrice, 1295);
+});
+
+test('Products create sends catalogueType=OLD_CHART and switches to Old Item Chart tab when adding an old chart item', async () => {
+    const payloads = [];
+    let currentTab = 'AUDITED';
+    const baseVariant = {
+        id: 'temp-old-1999', barcode: '4649999', sku: '', size: '', color: '',
+        brand: '', fabric: '', quality: '', pattern: '', sleeve: '', fit: '',
+        collar: '', pocket: '', styleRef: '', isPrepared: false,
+        mrp: 1999, sellingPrice: 1999, costPrice: '', stock: 0, minStock: 5, isActive: true,
+    };
+    const { run, context } = callback(productsFile, 'executeSaveProduct', {
+        user: { id: 'admin', role: 'ADMIN', permViewCostPrice: true },
+        editingProduct: null,
+        createCatalogueType: 'OLD_CHART',
+        saveInFlight: { current: false }, saveRequest: { current: null },
+        formData: { name: 'Shirt 1999', categoryId: 'shirts', taxRate: 5, hsn: '', variants: [baseVariant] },
+        toNumber: (value, fallback = 0) => (typeof value === 'number' && Number.isFinite(value) ? value : fallback),
+        setSaving() {}, showToast() {}, setShowModal() {}, resetForm() {}, loadData() {},
+        setCatalogueTab: value => { currentTab = value; },
+        window: {
+            electronAPI: {
+                catalogue: {
+                    saveProduct: async payload => {
+                        payloads.push(payload);
+                        return { success: true, data: { id: 'new-old-1' } };
+                    },
+                },
+            },
+        },
+    });
+    await run();
+    assert.equal(payloads[0].catalogueType, 'OLD_CHART');
+    assert.equal('isPrepared' in payloads[0].variants[0], false);
+    assert.equal('isTracked' in payloads[0].variants[0], false);
+    assert.equal(currentTab, 'LEGACY');
+
+    context.createCatalogueType = 'PREPARED';
+    context.formData = { name: 'Crazy Heart - Plain - L', categoryId: 'shirts', taxRate: 5, hsn: '', variants: [{ ...baseVariant, id: 'temp-new-1299', barcode: '100999', mrp: 1299, sellingPrice: 1299 }] };
+    await run();
+    assert.equal('catalogueType' in payloads[1], false);
+    assert.equal(currentTab, 'AUDITED');
 });

@@ -14,7 +14,11 @@ import {
     Info,
     CheckSquare,
     Square,
-    MessageSquare
+    MessageSquare,
+    Save,
+    Bookmark,
+    RotateCcw,
+    X
 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -26,15 +30,22 @@ import {
     type CampaignMediaMode,
     type ColorPhotoSlot,
 } from '../components/marketing/CampaignMediaPicker';
-import { stitchColorGridCollage, type StitchedCollageResult } from '../lib/imageCollage';
+import { stitchColorGridCollage, dataUrlToJpegFile, type StitchedCollageResult } from '../lib/imageCollage';
 import { messagingService } from '../services/messaging.service';
 import { useWhatsAppInboxStore } from '../store/whatsappInboxStore';
 import { db } from '../lib/db';
+import {
+    isSaleCustomerDismissed,
+    normalizeCustomerPhoneToken,
+    type DismissedCustomerMap,
+} from '../lib/customerDirectory';
 import type {
     CampaignRecipient,
     SendCampaignPayload,
     MessageLogRecord,
     CarouselCardPayload,
+    MarketingCampaignSnapshot,
+    SavedColorPhotoSlot,
 } from '../types/messaging';
 
 interface TemplateVariableValues {
@@ -86,11 +97,21 @@ export const MarketingCampaigns: React.FC = () => {
     const [selectedImageFile, setSelectedImageFile] = useState<File | null>(null);
     const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
     const [uploadedMediaId, setUploadedMediaId] = useState<string | null>(null);
+    const [uploadedMediaAt, setUploadedMediaAt] = useState<number | undefined>(undefined);
     const [collagePhotos, setCollagePhotos] = useState<ColorPhotoSlot[]>([]);
     const [stitchedCollage, setStitchedCollage] = useState<StitchedCollageResult | null>(null);
     const [uploadedCollageMediaId, setUploadedCollageMediaId] = useState<string | null>(null);
     const [carouselCards, setCarouselCards] = useState<ColorPhotoSlot[]>(DEFAULT_CAROUSEL_SLOTS);
     const [isUploadingMedia, setIsUploadingMedia] = useState(false);
+
+    // Saved Campaign Drafts & Presets State
+    const [savedPresets, setSavedPresets] = useState<MarketingCampaignSnapshot[]>([]);
+    const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+    const [showSavePresetForm, setShowSavePresetForm] = useState(false);
+    const [newPresetName, setNewPresetName] = useState('');
+    const [showResetConfirm, setShowResetConfirm] = useState(false);
+    const draftLoadedRef = useRef(false);
+    const presetsRef = useRef<MarketingCampaignSnapshot[]>([]);
 
     const activeTemplateName = mediaMode === 'CAROUSEL' ? 'new_stock_carousel' : 'new_stock_arrival';
 
@@ -111,15 +132,147 @@ export const MarketingCampaigns: React.FC = () => {
         };
     }, []);
 
-    // Load Customers and Past Sales on Mount
+    const MEDIA_CACHE_TTL_MS = 20 * 24 * 60 * 60 * 1000;
+
+    const applySnapshotToForm = (snap: MarketingCampaignSnapshot) => {
+        setCampaignName(snap.campaignName || 'New Stock Drop - Linen Collection');
+        setMediaMode(snap.mediaMode || 'SINGLE');
+        setVariables({
+            collectionName: snap.variables?.collectionName || 'Pure Linen Casual Shirts',
+            details: snap.variables?.details || 'Pure breathable linen in 6 premium colors',
+            sizes: snap.variables?.sizes || 'M, L, XL, XXL',
+            startingPrice: snap.variables?.startingPrice || '1,299',
+        });
+
+        if (snap.singlePhoto?.dataUrl) {
+            try {
+                const file = dataUrlToJpegFile(
+                    snap.singlePhoto.dataUrl,
+                    snap.singlePhoto.filename || 'product.jpg',
+                    snap.singlePhoto.mimeType || 'image/jpeg'
+                );
+                setSelectedImageFile(file);
+                setImagePreviewUrl(snap.singlePhoto.dataUrl);
+                const freshMedia =
+                    snap.singlePhoto.uploadedMediaId &&
+                    snap.singlePhoto.uploadedAt &&
+                    Date.now() - snap.singlePhoto.uploadedAt < MEDIA_CACHE_TTL_MS;
+                setUploadedMediaId(freshMedia ? snap.singlePhoto.uploadedMediaId || null : null);
+                setUploadedMediaAt(freshMedia ? snap.singlePhoto.uploadedAt : undefined);
+            } catch {
+                setSelectedImageFile(null);
+                setImagePreviewUrl(null);
+                setUploadedMediaId(null);
+                setUploadedMediaAt(undefined);
+            }
+        } else {
+            setSelectedImageFile(null);
+            setImagePreviewUrl(null);
+            setUploadedMediaId(null);
+            setUploadedMediaAt(undefined);
+        }
+
+        setCollagePhotos(Array.isArray(snap.collagePhotos) ? snap.collagePhotos : []);
+        setCarouselCards(
+            Array.isArray(snap.carouselCards) && snap.carouselCards.length === 4
+                ? snap.carouselCards.map((c) => {
+                      const fresh = c.uploadedMediaId && c.uploadedAt && Date.now() - c.uploadedAt < MEDIA_CACHE_TTL_MS;
+                      return {
+                          ...c,
+                          uploadedMediaId: fresh ? c.uploadedMediaId : undefined,
+                          uploadedAt: fresh ? c.uploadedAt : undefined,
+                      };
+                  })
+                : DEFAULT_CAROUSEL_SLOTS
+        );
+        setLastSavedAt(snap.updatedAt || null);
+    };
+
+    const buildCurrentSnapshot = (overrides?: {
+        id?: string;
+        presetName?: string;
+        singleMediaId?: string | null;
+        singleMediaAt?: number;
+        cardsOverride?: ColorPhotoSlot[];
+    }): MarketingCampaignSnapshot => {
+        const nowIso = new Date().toISOString();
+        const activeMediaId = overrides?.singleMediaId !== undefined ? overrides.singleMediaId : uploadedMediaId;
+        const activeMediaAt = overrides?.singleMediaAt !== undefined ? overrides.singleMediaAt : uploadedMediaAt;
+        const cardsSource = overrides?.cardsOverride || carouselCards;
+
+        return {
+            id: overrides?.id || 'last-draft',
+            ...(overrides?.presetName ? { presetName: overrides.presetName } : {}),
+            updatedAt: nowIso,
+            campaignName,
+            mediaMode,
+            variables: { ...variables },
+            singlePhoto:
+                selectedImageFile && imagePreviewUrl
+                    ? {
+                          dataUrl: imagePreviewUrl,
+                          mimeType: selectedImageFile.type || 'image/jpeg',
+                          filename: selectedImageFile.name || 'product.jpg',
+                          uploadedMediaId: activeMediaId || undefined,
+                          uploadedAt: activeMediaAt,
+                      }
+                    : null,
+            collagePhotos: collagePhotos.map((p): SavedColorPhotoSlot => ({ ...p })),
+            carouselCards: cardsSource.map((c): SavedColorPhotoSlot => ({ ...c })),
+        };
+    };
+
+    // Load Customers, Past Sales, Recent Logs, and Saved Campaign Draft on Mount
     useEffect(() => {
         loadAudienceData();
+        messagingService.getLogs({ limit: 200 }).then((r) => setLogs(r || [])).catch(() => {});
+        messagingService
+            .loadSavedCampaigns()
+            .then((saved) => {
+                const presets = Array.isArray(saved.presets) ? saved.presets : [];
+                presetsRef.current = presets;
+                setSavedPresets(presets);
+                if (saved.lastDraft) {
+                    applySnapshotToForm(saved.lastDraft);
+                }
+            })
+            .finally(() => {
+                window.setTimeout(() => {
+                    draftLoadedRef.current = true;
+                }, 50);
+            });
     }, []);
+
+    // Auto-save working campaign text & photos so closing/switching tabs preserves everything
+    useEffect(() => {
+        if (!draftLoadedRef.current) return;
+        const timer = window.setTimeout(() => {
+            const snap = buildCurrentSnapshot();
+            void messagingService
+                .saveSavedCampaigns({
+                    lastDraft: snap,
+                    presets: presetsRef.current,
+                })
+                .then((ok) => {
+                    if (ok) setLastSavedAt(snap.updatedAt);
+                });
+        }, 600);
+        return () => window.clearTimeout(timer);
+    }, [
+        campaignName,
+        mediaMode,
+        variables,
+        imagePreviewUrl,
+        selectedImageFile,
+        uploadedMediaId,
+        collagePhotos,
+        carouselCards,
+    ]);
 
     const loadAudienceData = async () => {
         setLoadingCustomers(true);
         try {
-            const [customerData, salesData] = await Promise.all([
+            const [customerData, salesData, dismissedRes] = await Promise.all([
                 db.customers.findMany({ orderBy: { createdAt: 'desc' } }).catch(() => []),
                 db.sales.findMany({
                     where: { status: 'COMPLETED' },
@@ -132,12 +285,17 @@ export const MarketingCampaigns: React.FC = () => {
                     },
                     orderBy: { createdAt: 'desc' },
                 }).catch(() => []),
+                window.electronAPI?.customers?.getDismissed?.().catch(() => ({ success: false, data: {} })) ??
+                    Promise.resolve({ success: false, data: {} }),
             ]);
 
-            // Calculate spend and last visit per phone
+            const dismissedMap: DismissedCustomerMap = dismissedRes?.data || {};
+
+            // Calculate spend and last visit per phone for non-dismissed sales
             const spendMap: Record<string, { totalSpend: number; lastVisit: Date; name: string }> = {};
             if (Array.isArray(salesData)) {
                 salesData.forEach((s: any) => {
+                    if (isSaleCustomerDismissed(s, dismissedMap)) return;
                     const phone = (s.customerPhone || '').trim();
                     if (!phone) return;
                     if (!spendMap[phone]) {
@@ -287,6 +445,83 @@ export const MarketingCampaigns: React.FC = () => {
         });
     };
 
+    const alreadySentPhonesForCampaign = useMemo(() => {
+        const sentSet = new Set<string>();
+        const targetPrefix = `[Campaign: ${campaignName}]`;
+        for (const log of logs) {
+            if (
+                log.channel === 'WHATSAPP' &&
+                ['SENT', 'DELIVERED', 'READ'].includes(log.status) &&
+                String(log.messageText || '').startsWith(targetPrefix)
+            ) {
+                const token = normalizeCustomerPhoneToken(log.customerPhone);
+                if (token) sentSet.add(token);
+            }
+        }
+        return sentSet;
+    }, [logs, campaignName]);
+
+    const selectUnsentFiltered = () => {
+        const next = new Set<string>();
+        filteredAudience.forEach((c) => {
+            const token = normalizeCustomerPhoneToken(c.phone);
+            if (!token || !alreadySentPhonesForCampaign.has(token)) {
+                next.add(c.id);
+            }
+        });
+        setSelectedCustomerIds(next);
+        showToast(`Selected ${next.size} customer(s) not yet sent "${campaignName}".`, 'info');
+    };
+
+    const handleSavePreset = async () => {
+        const label = newPresetName.trim() || variables.collectionName.trim() || campaignName.trim() || 'Saved Campaign';
+        const preset = buildCurrentSnapshot({
+            id: `preset-${Date.now()}`,
+            presetName: label,
+        });
+        const nextPresets = [preset, ...presetsRef.current.filter((p) => p.presetName !== label)].slice(0, 15);
+        presetsRef.current = nextPresets;
+        setSavedPresets(nextPresets);
+        setShowSavePresetForm(false);
+        setNewPresetName('');
+        await messagingService.saveSavedCampaigns({
+            lastDraft: buildCurrentSnapshot(),
+            presets: nextPresets,
+        });
+        showToast(`Saved campaign preset "${label}" with text and photos.`, 'success');
+    };
+
+    const handleDeletePreset = async (presetId: string) => {
+        const nextPresets = presetsRef.current.filter((p) => p.id !== presetId);
+        presetsRef.current = nextPresets;
+        setSavedPresets(nextPresets);
+        await messagingService.saveSavedCampaigns({
+            lastDraft: buildCurrentSnapshot(),
+            presets: nextPresets,
+        });
+    };
+
+    const handleResetForm = () => {
+        setCampaignName('New Stock Drop - Collection');
+        setMediaMode('SINGLE');
+        setVariables({
+            collectionName: '',
+            details: '',
+            sizes: 'M, L, XL, XXL',
+            startingPrice: '',
+        });
+        setSelectedImageFile(null);
+        setImagePreviewUrl(null);
+        setUploadedMediaId(null);
+        setUploadedMediaAt(undefined);
+        setCollagePhotos([]);
+        setStitchedCollage(null);
+        setUploadedCollageMediaId(null);
+        setCarouselCards(DEFAULT_CAROUSEL_SLOTS);
+        setShowResetConfirm(false);
+        showToast('Cleared campaign form & photos for a fresh announcement.', 'info');
+    };
+
     // Upload a base64 Data URL to Meta WhatsApp Media API
     const uploadDataUrlToMeta = async (dataUrl: string, mimeType: string, filename: string): Promise<string | null> => {
         const base64Data = dataUrl.split(',')[1];
@@ -335,10 +570,19 @@ export const MarketingCampaigns: React.FC = () => {
         setIsUploadingMedia(true);
         try {
             if (mediaMode === 'SINGLE' && selectedImageFile && imagePreviewUrl) {
-                const id = uploadedMediaId || (await uploadDataUrlToMeta(imagePreviewUrl, selectedImageFile.type, selectedImageFile.name));
+                const isFresh = uploadedMediaId && uploadedMediaAt && Date.now() - uploadedMediaAt < MEDIA_CACHE_TTL_MS;
+                const id = (isFresh ? uploadedMediaId : null) || (await uploadDataUrlToMeta(imagePreviewUrl, selectedImageFile.type, selectedImageFile.name));
                 if (!id) return;
-                setUploadedMediaId(id);
+                const nowMs = Date.now();
+                if (!isFresh) {
+                    setUploadedMediaId(id);
+                    setUploadedMediaAt(nowMs);
+                }
                 headerMediaId = id;
+                void messagingService.saveSavedCampaigns({
+                    lastDraft: buildCurrentSnapshot({ singleMediaId: id, singleMediaAt: isFresh ? uploadedMediaAt : nowMs }),
+                    presets: presetsRef.current,
+                });
             } else if (mediaMode === 'COLLAGE') {
                 const collage =
                     stitchedCollage ||
@@ -350,15 +594,26 @@ export const MarketingCampaigns: React.FC = () => {
                 if (!id) return;
                 setUploadedCollageMediaId(id);
                 headerMediaId = id;
+                void messagingService.saveSavedCampaigns({
+                    lastDraft: buildCurrentSnapshot(),
+                    presets: presetsRef.current,
+                });
             } else if (mediaMode === 'CAROUSEL') {
                 const uploadedSlots: CarouselCardPayload[] = [];
                 const updatedCards = [...carouselCards];
 
                 for (let i = 0; i < updatedCards.length; i++) {
                     const card = updatedCards[i];
-                    const id = card.uploadedMediaId || (await uploadDataUrlToMeta(card.dataUrl, card.mimeType || 'image/jpeg', card.filename || `card-${i + 1}.jpg`));
+                    const isFresh = card.uploadedMediaId && card.uploadedAt && Date.now() - card.uploadedAt < MEDIA_CACHE_TTL_MS;
+                    const id =
+                        (isFresh ? card.uploadedMediaId : undefined) ||
+                        (await uploadDataUrlToMeta(card.dataUrl, card.mimeType || 'image/jpeg', card.filename || `card-${i + 1}.jpg`));
                     if (!id) return;
-                    updatedCards[i] = { ...card, uploadedMediaId: id };
+                    updatedCards[i] = {
+                        ...card,
+                        uploadedMediaId: id,
+                        uploadedAt: isFresh ? card.uploadedAt : Date.now(),
+                    };
                     uploadedSlots.push({
                         mediaId: id,
                         colorName: card.colorLabel || `Color ${i + 1}`,
@@ -368,6 +623,10 @@ export const MarketingCampaigns: React.FC = () => {
                 }
                 setCarouselCards(updatedCards);
                 preparedCarouselCards = uploadedSlots;
+                void messagingService.saveSavedCampaigns({
+                    lastDraft: buildCurrentSnapshot({ cardsOverride: updatedCards }),
+                    presets: presetsRef.current,
+                });
             }
         } catch (uploadErr: any) {
             showToast(`Media preparation failed: ${uploadErr.message}`, 'error');
@@ -526,19 +785,116 @@ export const MarketingCampaigns: React.FC = () => {
                     <div className="lg:col-span-7 space-y-6">
                         {/* Section 1: Campaign Details & Dynamic Content */}
                         <div className="bg-white dark:bg-gray-900 rounded-3xl border border-gray-200/80 dark:border-gray-800 p-6 shadow-sm space-y-5">
-                            <div className="flex items-center justify-between pb-3 border-b border-gray-100 dark:border-gray-800">
+                            <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-gray-100 dark:border-gray-800">
                                 <h2 className="font-bold text-sm text-gray-900 dark:text-white flex items-center gap-2">
                                     <span className="w-6 h-6 rounded-lg bg-emerald-100 dark:bg-emerald-950/50 text-emerald-600 flex items-center justify-center text-xs">1</span>
                                     <span>New Stock Announcement Details</span>
                                 </h2>
-                                <span className={`text-[11px] font-mono px-2 py-0.5 rounded-md border ${
-                                    mediaMode === 'CAROUSEL'
-                                        ? 'text-indigo-600 bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-800'
-                                        : 'text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800'
-                                }`}>
-                                    Template: {activeTemplateName}
-                                </span>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    {lastSavedAt && (
+                                        <span className="inline-flex items-center gap-1 text-[11px] text-gray-500 dark:text-gray-400">
+                                            <Save className="w-3 h-3 text-emerald-600" />
+                                            <span>Auto-saved</span>
+                                        </span>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setNewPresetName(variables.collectionName || campaignName);
+                                            setShowSavePresetForm((v) => !v);
+                                        }}
+                                        className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1 transition-colors"
+                                    >
+                                        <Bookmark className="w-3 h-3" />
+                                        <span>Save Preset</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const hasPhotos =
+                                                Boolean(imagePreviewUrl) ||
+                                                collagePhotos.length > 0 ||
+                                                carouselCards.some((c) => Boolean(c.dataUrl));
+                                            if (hasPhotos) setShowResetConfirm(true);
+                                            else handleResetForm();
+                                        }}
+                                        className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 border border-gray-200 dark:border-gray-700 flex items-center gap-1 transition-colors"
+                                        title="Clear form & photos"
+                                    >
+                                        <RotateCcw className="w-3 h-3" />
+                                        <span>New Blank</span>
+                                    </button>
+                                    <span className={`text-[11px] font-mono px-2 py-0.5 rounded-md border ${
+                                        mediaMode === 'CAROUSEL'
+                                            ? 'text-indigo-600 bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-800'
+                                            : 'text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800'
+                                    }`}>
+                                        Template: {activeTemplateName}
+                                    </span>
+                                </div>
                             </div>
+
+                            {showSavePresetForm && (
+                                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 p-3 rounded-2xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60">
+                                    <Input
+                                        value={newPresetName}
+                                        onChange={(e) => setNewPresetName(e.target.value)}
+                                        placeholder="Preset name (e.g. Floral Cotton ₹700)"
+                                        className="h-8 text-xs flex-1"
+                                    />
+                                    <div className="flex items-center gap-1.5">
+                                        <Button size="sm" onClick={handleSavePreset} className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white">
+                                            Save Now
+                                        </Button>
+                                        <Button size="sm" variant="outline" onClick={() => setShowSavePresetForm(false)} className="h-8 text-xs">
+                                            Cancel
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {savedPresets.length > 0 && (
+                                <div className="flex flex-wrap items-center gap-1.5 pb-1">
+                                    <span className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 mr-1">
+                                        Saved Templates:
+                                    </span>
+                                    {savedPresets.map((preset) => {
+                                        const mediaLabel =
+                                            preset.mediaMode === 'COLLAGE'
+                                                ? `${preset.collagePhotos?.length || 0} Grid`
+                                                : preset.mediaMode === 'CAROUSEL'
+                                                ? '4 Carousel'
+                                                : preset.singlePhoto
+                                                ? '1 Photo'
+                                                : 'No Photo';
+                                        return (
+                                            <div
+                                                key={preset.id}
+                                                onClick={() => {
+                                                    applySnapshotToForm(preset);
+                                                    showToast(`Loaded "${preset.presetName || preset.campaignName}"`, 'info');
+                                                }}
+                                                className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-full text-[11px] font-medium bg-gray-100 hover:bg-emerald-50 dark:bg-gray-800 dark:hover:bg-emerald-950/40 text-gray-700 dark:text-gray-200 border border-gray-200 dark:border-gray-700 cursor-pointer transition-colors"
+                                                title={`Click to load saved text & photos (${mediaLabel})`}
+                                            >
+                                                <span className="font-semibold">{preset.presetName || preset.campaignName}</span>
+                                                <span className="text-[10px] text-gray-400">• {mediaLabel}</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        void handleDeletePreset(preset.id);
+                                                    }}
+                                                    className="p-0.5 rounded-full hover:bg-rose-100 hover:text-rose-600 dark:hover:bg-rose-950/60 text-gray-400"
+                                                    title="Remove preset"
+                                                >
+                                                    <X className="w-3 h-3" />
+                                                </button>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
 
                             <div className="space-y-4">
                                 <div>
@@ -619,11 +975,13 @@ export const MarketingCampaigns: React.FC = () => {
                                     setSelectedImageFile(file);
                                     setImagePreviewUrl(dataUrl);
                                     setUploadedMediaId(null);
+                                    setUploadedMediaAt(undefined);
                                 }}
                                 onClearSingleFile={() => {
                                     setSelectedImageFile(null);
                                     setImagePreviewUrl(null);
                                     setUploadedMediaId(null);
+                                    setUploadedMediaAt(undefined);
                                 }}
                                 collagePhotos={collagePhotos}
                                 onCollagePhotosChange={setCollagePhotos}
@@ -678,7 +1036,7 @@ export const MarketingCampaigns: React.FC = () => {
                                         className="h-9 pl-9 text-xs"
                                     />
                                 </div>
-                                <div className="flex items-center gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
                                     <Button
                                         variant="outline"
                                         size="sm"
@@ -687,6 +1045,17 @@ export const MarketingCampaigns: React.FC = () => {
                                     >
                                         Select All
                                     </Button>
+                                    {alreadySentPhonesForCampaign.size > 0 && (
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={selectUnsentFiltered}
+                                            className="text-xs h-9 text-emerald-700 border-emerald-200 hover:bg-emerald-50 dark:text-emerald-300 dark:border-emerald-800"
+                                            title="Select only customers who haven't received this campaign yet"
+                                        >
+                                            Unsent Only
+                                        </Button>
+                                    )}
                                     <Button
                                         variant="outline"
                                         size="sm"
@@ -712,6 +1081,8 @@ export const MarketingCampaigns: React.FC = () => {
                                 ) : (
                                     filteredAudience.map((c) => {
                                         const isSelected = selectedCustomerIds.has(c.id);
+                                        const token = normalizeCustomerPhoneToken(c.phone);
+                                        const wasSent = Boolean(token && alreadySentPhonesForCampaign.has(token));
                                         return (
                                             <div
                                                 key={c.id}
@@ -727,8 +1098,13 @@ export const MarketingCampaigns: React.FC = () => {
                                                         {isSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
                                                     </span>
                                                     <div>
-                                                        <div className="text-xs font-bold text-gray-900 dark:text-white">
-                                                            {c.name}
+                                                        <div className="text-xs font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
+                                                            <span>{c.name}</span>
+                                                            {wasSent && (
+                                                                <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
+                                                                    Already Sent
+                                                                </span>
+                                                            )}
                                                         </div>
                                                         <div className="text-[11px] font-mono text-gray-500">
                                                             {c.phone}
@@ -1080,6 +1456,17 @@ export const MarketingCampaigns: React.FC = () => {
                 variant="primary"
                 onConfirm={handleStartBroadcast}
                 onClose={() => setShowConfirmModal(false)}
+            />
+
+            <ConfirmDialog
+                isOpen={showResetConfirm}
+                title="Clear Campaign Form & Photos?"
+                message="This clears the current form fields and selected photos so you can start a fresh campaign. Any saved presets stay intact."
+                confirmText="Yes, Clear Form"
+                cancelText="Keep Current"
+                variant="danger"
+                onConfirm={handleResetForm}
+                onClose={() => setShowResetConfirm(false)}
             />
         </div>
     );

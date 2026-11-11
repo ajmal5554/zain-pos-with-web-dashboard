@@ -23,7 +23,10 @@ import {
     CreditCard,
     Copy,
     Printer,
-    MessageSquare
+    MessageSquare,
+    CheckSquare,
+    Square,
+    AlertTriangle
 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -36,6 +39,12 @@ import { printService } from '../services/print.service';
 import { messagingService } from '../services/messaging.service';
 import type { CreditNoteRecord } from '../types/creditNote';
 import { db } from '../lib/db';
+import {
+    isSaleCustomerDismissed,
+    findExistingCustomerMatches,
+    sanitizeCustomerNameInput,
+    type DismissedCustomerMap,
+} from '../lib/customerDirectory';
 import { useCartStore } from '../store/cartStore';
 import { useAuthStore } from '../store/authStore';
 import * as XLSX from 'xlsx';
@@ -129,8 +138,9 @@ export const Customers: React.FC = () => {
     // Customer 360 / Details Modal
     const [viewingCustomer, setViewingCustomer] = useState<CustomerRecord | null>(null);
 
-    // Delete Confirmation
-    const [customerToDelete, setCustomerToDelete] = useState<CustomerRecord | null>(null);
+    // Delete Confirmation & Multi-Select
+    const [customersToDelete, setCustomersToDelete] = useState<CustomerRecord[]>([]);
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [deleting, setDeleting] = useState(false);
 
     useEffect(() => {
@@ -142,8 +152,8 @@ export const Customers: React.FC = () => {
         else setLoading(true);
 
         try {
-            // Load customers, sales, and credit notes concurrently to compute metrics
-            const [customerData, salesData, creditNotesRes] = await Promise.all([
+            // Load customers, sales, credit notes, and dismissed sale-customer flags concurrently
+            const [customerData, salesData, creditNotesRes, dismissedRes] = await Promise.all([
                 db.customers.findMany({
                     orderBy: { createdAt: 'desc' }
                 }),
@@ -161,12 +171,16 @@ export const Customers: React.FC = () => {
                     },
                     orderBy: { createdAt: 'desc' }
                 }).catch(() => []),
-                window.electronAPI.creditNotes.list({ status: 'ALL' }).catch(() => ({ success: false, data: [] }))
+                window.electronAPI.creditNotes.list({ status: 'ALL' }).catch(() => ({ success: false, data: [] })),
+                window.electronAPI?.customers?.getDismissed?.().catch(() => ({ success: false, data: {} })) ??
+                    Promise.resolve({ success: false, data: {} }),
             ]);
 
             if (creditNotesRes?.success && Array.isArray(creditNotesRes.data)) {
                 setAllCreditNotes(creditNotesRes.data);
             }
+
+            const dismissedMap: DismissedCustomerMap = dismissedRes?.data || {};
 
             // Discover any past customers from sales who may not have been saved in db.customers
             const existingPhones = new Set((customerData || []).map((c: any) => c.phone).filter(Boolean));
@@ -175,6 +189,7 @@ export const Customers: React.FC = () => {
 
             if (Array.isArray(salesData)) {
                 salesData.forEach((sale: any) => {
+                    if (isSaleCustomerDismissed(sale, dismissedMap)) return;
                     const phone = sale.customerPhone?.trim() || null;
                     const name = sale.customerName?.trim() || null;
                     const isAnon = !name || name.toLowerCase() === 'walk-in customer' || name.toLowerCase() === 'walk-in';
@@ -333,6 +348,14 @@ export const Customers: React.FC = () => {
             gstinCount
         };
     }, [customers, salesSummaryMap]);
+
+    // Existing customer duplicate/match detection inside Add Customer modal
+    const addFormMatchResult = useMemo(() => {
+        if (!showFormModal || editingCustomer) {
+            return { exactMatch: null, matches: [] };
+        }
+        return findExistingCustomerMatches(customers, formData);
+    }, [customers, formData, showFormModal, editingCustomer]);
 
     // Filter & Sort
     const filteredCustomers = useMemo(() => {
@@ -516,6 +539,10 @@ export const Customers: React.FC = () => {
             if (cleanData.phone) {
                 void messagingService.updateCustomerWhatsAppStatus(cleanData.phone, formData.hasWhatsApp);
             }
+            void window.electronAPI?.customers?.restoreDirectoryEntries?.({
+                name: cleanData.name,
+                phone: cleanData.phone,
+            });
 
             setShowFormModal(false);
             setEditingCustomer(null);
@@ -531,34 +558,65 @@ export const Customers: React.FC = () => {
         }
     };
 
+    const toggleSelectCustomer = (id: string) => {
+        setSelectedIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    };
+
+    const toggleSelectPage = () => {
+        const pageIds = paginatedCustomers.map((c) => c.id);
+        if (pageIds.length === 0) return;
+        const allSelectedOnPage = pageIds.every((id) => selectedIds.has(id));
+        setSelectedIds((prev) => {
+            const next = new Set(prev);
+            pageIds.forEach((id) => {
+                if (allSelectedOnPage) next.delete(id);
+                else next.add(id);
+            });
+            return next;
+        });
+    };
+
     const handleDeleteConfirm = async () => {
-        if (!customerToDelete) return;
+        if (customersToDelete.length === 0) return;
         setDeleting(true);
         try {
-            if (!customerToDelete.id.startsWith('sale-cust-')) {
-                await db.customers.delete({
-                    where: { id: customerToDelete.id }
+            if (window.electronAPI?.customers?.removeFromDirectory) {
+                const res = await window.electronAPI.customers.removeFromDirectory({
+                    customers: customersToDelete.map((c) => ({
+                        id: c.id,
+                        name: c.name,
+                        phone: c.phone,
+                    })),
                 });
-            }
-            try {
-                const currentUser = useAuthStore.getState().user;
-                await db.auditLogs.create({
-                    data: {
-                        action: 'CUSTOMER_DELETE',
-                        userId: currentUser?.id,
-                        details: JSON.stringify({
-                            customerId: customerToDelete.id,
-                            customerName: customerToDelete.name,
-                            customerPhone: customerToDelete.phone,
-                            summary: `Customer profile deleted: "${customerToDelete.name}" (${customerToDelete.phone || 'No phone'})`
-                        })
+                if (!res?.success) {
+                    throw new Error(res?.error || 'Failed to remove customer(s)');
+                }
+            } else {
+                for (const c of customersToDelete) {
+                    if (!c.id.startsWith('sale-cust-')) {
+                        await db.customers.delete({ where: { id: c.id } });
                     }
-                });
-            } catch (auditErr) {
-                console.warn('Could not record customer delete audit log:', auditErr);
+                }
             }
-            showToast(`Customer "${customerToDelete.name}" removed successfully`, 'success');
-            setCustomerToDelete(null);
+
+            const removedIds = new Set(customersToDelete.map((c) => c.id));
+            setSelectedIds((prev) => {
+                const next = new Set(prev);
+                removedIds.forEach((id) => next.delete(id));
+                return next;
+            });
+
+            const msg =
+                customersToDelete.length === 1
+                    ? `Customer "${customersToDelete[0].name}" removed from Customers & Marketing`
+                    : `${customersToDelete.length} customers removed from Customers & Marketing`;
+            showToast(msg, 'success');
+            setCustomersToDelete([]);
             await loadData(true);
         } catch (error: any) {
             console.error('Failed to delete customer:', error);
@@ -801,8 +859,19 @@ export const Customers: React.FC = () => {
                         </button>
                     </div>
 
-                    {/* Sort Dropdown */}
+                    {/* Sort Dropdown & Bulk Delete */}
                     <div className="flex items-center gap-2 self-end md:self-auto">
+                        {selectedIds.size > 0 && (
+                            <Button
+                                variant="danger"
+                                size="sm"
+                                onClick={() => setCustomersToDelete(customers.filter((c) => selectedIds.has(c.id)))}
+                                className="whitespace-nowrap"
+                            >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>Delete Selected ({selectedIds.size})</span>
+                            </Button>
+                        )}
                         <span className="text-xs text-gray-500 whitespace-nowrap">Sort:</span>
                         <select
                             value={sortBy}
@@ -825,6 +894,20 @@ export const Customers: React.FC = () => {
                     <table className="table">
                         <thead>
                             <tr>
+                                <th className="w-10">
+                                    <button
+                                        type="button"
+                                        onClick={toggleSelectPage}
+                                        className="text-gray-400 hover:text-primary-600 transition-colors flex items-center justify-center"
+                                        title="Select/Deselect Page"
+                                    >
+                                        {paginatedCustomers.length > 0 && paginatedCustomers.every((c) => selectedIds.has(c.id)) ? (
+                                            <CheckSquare className="w-4 h-4 text-primary-600" />
+                                        ) : (
+                                            <Square className="w-4 h-4" />
+                                        )}
+                                    </button>
+                                </th>
                                 <th>Customer</th>
                                 <th>Contact Details</th>
                                 <th>GSTIN</th>
@@ -839,14 +922,14 @@ export const Customers: React.FC = () => {
                             {loading ? (
                                 Array.from({ length: 5 }).map((_, i) => (
                                     <tr key={i}>
-                                        <td colSpan={8} className="py-4 px-4">
+                                        <td colSpan={9} className="py-4 px-4">
                                             <Skeleton className="h-8 w-full" />
                                         </td>
                                     </tr>
                                 ))
                             ) : paginatedCustomers.length === 0 ? (
                                 <tr>
-                                    <td colSpan={8} className="text-center py-12">
+                                    <td colSpan={9} className="text-center py-12">
                                         <div className="flex flex-col items-center justify-center max-w-sm mx-auto">
                                             <div className="p-3 bg-gray-100 dark:bg-gray-800 rounded-full text-gray-400 mb-3">
                                                 <Users className="w-8 h-8" />
@@ -890,6 +973,20 @@ export const Customers: React.FC = () => {
 
                                     return (
                                         <tr key={customer.id} className="group">
+                                            <td>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => toggleSelectCustomer(customer.id)}
+                                                    className="text-gray-400 hover:text-primary-600 transition-colors flex items-center justify-center"
+                                                    title={selectedIds.has(customer.id) ? 'Deselect customer' : 'Select customer'}
+                                                >
+                                                    {selectedIds.has(customer.id) ? (
+                                                        <CheckSquare className="w-4 h-4 text-primary-600" />
+                                                    ) : (
+                                                        <Square className="w-4 h-4" />
+                                                    )}
+                                                </button>
+                                            </td>
                                             {/* Customer Name & Avatar */}
                                             <td>
                                                 <div className="flex items-center gap-3">
@@ -897,12 +994,19 @@ export const Customers: React.FC = () => {
                                                         {initials}
                                                     </div>
                                                     <div className="min-w-0">
-                                                        <button
-                                                            onClick={() => setViewingCustomer(customer)}
-                                                            className="font-semibold text-gray-900 dark:text-white hover:text-primary-600 dark:hover:text-primary-400 text-left truncate block transition-colors"
-                                                        >
-                                                            {customer.name}
-                                                        </button>
+                                                        <div className="flex items-center gap-1.5">
+                                                            <button
+                                                                onClick={() => setViewingCustomer(customer)}
+                                                                className="font-semibold text-gray-900 dark:text-white hover:text-primary-600 dark:hover:text-primary-400 text-left truncate block transition-colors"
+                                                            >
+                                                                {customer.name}
+                                                            </button>
+                                                            {customer.id.startsWith('sale-cust-') && (
+                                                                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200/80 dark:border-amber-800/60 shrink-0">
+                                                                    From Bill
+                                                                </span>
+                                                            )}
+                                                        </div>
                                                         <span className="text-[11px] text-gray-400 flex items-center gap-1 mt-0.5">
                                                             <Calendar className="w-3 h-3" />
                                                             {new Date(customer.createdAt).toLocaleDateString('en-IN', {
@@ -1027,7 +1131,7 @@ export const Customers: React.FC = () => {
                                                         <Edit2 className="w-4 h-4" />
                                                     </button>
                                                     <button
-                                                        onClick={() => setCustomerToDelete(customer)}
+                                                        onClick={() => setCustomersToDelete([customer])}
                                                         className="p-1.5 rounded-lg text-gray-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors"
                                                         title="Delete Customer"
                                                     >
@@ -1125,7 +1229,7 @@ export const Customers: React.FC = () => {
                             value={formData.name}
                             maxLength={50}
                             onChange={(e) => {
-                                setFormData({ ...formData, name: e.target.value.slice(0, 50) });
+                                setFormData({ ...formData, name: sanitizeCustomerNameInput(e.target.value, 50) });
                                 if (formErrors.name) setFormErrors({ ...formErrors, name: '' });
                             }}
                             placeholder="e.g. Rahul Sharma"
@@ -1223,6 +1327,53 @@ export const Customers: React.FC = () => {
                             className="input resize-none text-sm"
                         />
                     </div>
+
+                    {!editingCustomer && addFormMatchResult.matches.length > 0 && (
+                        <div className="rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50/80 dark:bg-amber-950/30 p-3 space-y-2">
+                            <div className="flex items-start gap-2 text-xs text-amber-900 dark:text-amber-200">
+                                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                                <div>
+                                    <div className="font-bold">
+                                        {addFormMatchResult.exactMatch
+                                            ? 'This customer is already in your store database'
+                                            : 'Similar customer(s) already in store database'}
+                                    </div>
+                                    <div className="text-[11px] opacity-90">
+                                        Open an existing profile to view/edit instead of creating a duplicate.
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                                {addFormMatchResult.matches.map((m) => (
+                                    <div
+                                        key={m.customer.id || `${m.customer.name}-${m.customer.phone}`}
+                                        className="flex items-center justify-between gap-2 bg-white dark:bg-gray-900 rounded-lg px-2.5 py-1.5 border border-amber-200/80 dark:border-gray-700"
+                                    >
+                                        <div className="min-w-0">
+                                            <div className="text-xs font-bold text-gray-900 dark:text-white truncate">
+                                                {m.customer.name}
+                                            </div>
+                                            <div className="text-[11px] font-mono text-gray-500">
+                                                {m.customer.phone || 'No phone'}
+                                            </div>
+                                        </div>
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="secondary"
+                                            onClick={() => {
+                                                setShowFormModal(false);
+                                                setViewingCustomer(m.customer);
+                                            }}
+                                            className="h-7 px-2.5 text-[11px] shrink-0"
+                                        >
+                                            View Profile
+                                        </Button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
 
                     <div className="flex gap-2 pt-4 border-t border-gray-100 dark:border-dark-border">
                         <Button
@@ -1642,12 +1793,22 @@ export const Customers: React.FC = () => {
 
             {/* Modal 3: Delete Confirmation Dialog (Strict Rule: Zero native confirm) */}
             <ConfirmDialog
-                isOpen={Boolean(customerToDelete)}
-                onClose={() => setCustomerToDelete(null)}
+                isOpen={customersToDelete.length > 0}
+                onClose={() => setCustomersToDelete([])}
                 onConfirm={handleDeleteConfirm}
-                title="Delete Customer Profile"
-                message={`Are you sure you want to delete customer "${customerToDelete?.name}"?\n\nThis will permanently remove their contact info and GST records from your store. Past invoices will keep their recorded customer name.`}
-                confirmText={deleting ? 'Deleting...' : 'Delete Customer'}
+                title={customersToDelete.length > 1 ? `Delete ${customersToDelete.length} Customers` : 'Delete Customer Profile'}
+                message={
+                    customersToDelete.length > 1
+                        ? `Are you sure you want to remove ${customersToDelete.length} selected customers from your Customer Directory and WhatsApp Marketing list?\n\nPast invoices, revenue totals, and GST history will remain intact.`
+                        : `Are you sure you want to delete "${customersToDelete[0]?.name}" from your Customer Directory and WhatsApp Marketing list?\n\nThis permanently removes their contact/GST profile while keeping past invoice history and GST totals intact.`
+                }
+                confirmText={
+                    deleting
+                        ? 'Deleting...'
+                        : customersToDelete.length > 1
+                            ? `Delete ${customersToDelete.length} Customers`
+                            : 'Delete Customer'
+                }
                 variant="danger"
                 loading={deleting}
             />
