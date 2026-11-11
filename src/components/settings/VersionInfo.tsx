@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { History, Cpu, HardDrive, Globe, Printer, ChevronDown, ChevronUp, Sparkles, CheckCircle2 } from 'lucide-react';
+import { History, Cpu, HardDrive, Globe, Printer, ChevronDown, ChevronUp, Tag, CheckCircle2 } from 'lucide-react';
 import packageInfo from '../../../package.json';
 import appIcon from '/icon.png';
 import releasesData from '../../data/releases.json';
@@ -144,7 +144,7 @@ export const VersionInfo: React.FC = () => {
                                 <div>
                                     <div className="flex items-center gap-2">
                                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">
-                                            <Sparkles className="w-3.5 h-3.5 text-blue-500" />
+                                            <Tag className="w-3.5 h-3.5 text-blue-500" />
                                             What's New in v{currentRelease.version}
                                         </span>
                                         <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">

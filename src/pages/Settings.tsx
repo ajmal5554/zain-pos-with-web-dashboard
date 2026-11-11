@@ -18,7 +18,10 @@ import {
     Tag,
     Wifi,
     CreditCard,
-    MessageSquare
+    MessageSquare,
+    Eye,
+    EyeOff,
+    Copy
 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -95,6 +98,7 @@ export const Settings: React.FC = () => {
         syncSecret: '',
         intervalMinutes: 0
     });
+    const [showSyncSecret, setShowSyncSecret] = useState(false);
 
     const [paymentMethods, setPaymentMethods] = useState<PaymentMethodsConfig>(getStoredPaymentMethods);
 
@@ -630,13 +634,44 @@ export const Settings: React.FC = () => {
                                             placeholder="https://your-api.railway.app"
                                             onChange={(e) => setSyncConfig({ ...syncConfig, apiUrl: e.target.value })}
                                         />
-                                        <Input
-                                            label="Cloud Sync Secret"
-                                            type="password"
-                                            value={syncConfig.syncSecret}
-                                            placeholder="Enter the same CLOUD_SYNC_SECRET used by your hosted API"
-                                            onChange={(e) => setSyncConfig({ ...syncConfig, syncSecret: e.target.value })}
-                                        />
+                                        <div className="space-y-1">
+                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                                                Cloud Sync Secret
+                                            </label>
+                                            <div className="flex items-center gap-2">
+                                                <div className="flex-1">
+                                                    <Input
+                                                        type={showSyncSecret ? 'text' : 'password'}
+                                                        value={syncConfig.syncSecret}
+                                                        placeholder="Enter the same CLOUD_SYNC_SECRET used by your hosted API"
+                                                        onChange={(e) => setSyncConfig({ ...syncConfig, syncSecret: e.target.value })}
+                                                    />
+                                                </div>
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={() => setShowSyncSecret(!showSyncSecret)}
+                                                    title={showSyncSecret ? 'Hide secret' : 'Show secret'}
+                                                    className="h-10 px-3"
+                                                >
+                                                    {showSyncSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                                </Button>
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={() => {
+                                                        if (!syncConfig.syncSecret) return;
+                                                        navigator.clipboard.writeText(syncConfig.syncSecret).then(() => showToast('Cloud Sync Secret copied!', 'success'));
+                                                    }}
+                                                    title="Copy secret"
+                                                    className="h-10 px-3"
+                                                >
+                                                    <Copy className="w-4 h-4" />
+                                                </Button>
+                                            </div>
+                                        </div>
                                         <p className="text-xs text-gray-500 dark:text-gray-400 -mt-1">
                                             This must exactly match the API server `CLOUD_SYNC_SECRET`. The API URL alone is not enough for sync.
                                         </p>

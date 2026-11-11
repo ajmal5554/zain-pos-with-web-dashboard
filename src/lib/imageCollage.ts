@@ -221,3 +221,42 @@ export async function stitchColorGridCollage(
     };
 }
 
+/**
+ * Normalize any user-selected image (including .webp, transparent .png, or high-res photos)
+ * into a clean RGB JPEG under 1600px so Meta WhatsApp Cloud API never rejects media delivery.
+ */
+export async function normalizeImageForWhatsApp(
+    dataUrl: string,
+    originalFilename?: string,
+    maxDimension: number = 1600
+): Promise<StitchedCollageResult> {
+    const img = await loadImage(dataUrl);
+    const scale = Math.min(1, maxDimension / Math.max(img.width || 1, img.height || 1));
+    const width = Math.max(1, Math.round((img.width || 800) * scale));
+    const height = Math.max(1, Math.round((img.height || 800) * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+        throw new Error('Could not initialize image normalization canvas');
+    }
+
+    // Fill white backdrop so transparent PNGs convert cleanly to JPEG
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, 0, 0, width, height);
+
+    const normalizedUrl = canvas.toDataURL('image/jpeg', 0.9);
+    const base64Data = normalizedUrl.split(',')[1] || '';
+    const baseName = (originalFilename || 'product').replace(/\.[^.]+$/, '');
+
+    return {
+        dataUrl: normalizedUrl,
+        base64Data,
+        mimeType: 'image/jpeg',
+        filename: `${baseName}.jpg`,
+    };
+}
+

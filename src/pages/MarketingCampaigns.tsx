@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
     Megaphone,
     Send,
-    Sparkles,
     CheckCircle2,
     RefreshCw,
     Image as ImageIcon,
@@ -28,6 +28,7 @@ import {
 } from '../components/marketing/CampaignMediaPicker';
 import { stitchColorGridCollage, type StitchedCollageResult } from '../lib/imageCollage';
 import { messagingService } from '../services/messaging.service';
+import { useWhatsAppInboxStore } from '../store/whatsappInboxStore';
 import { db } from '../lib/db';
 import type {
     CampaignRecipient,
@@ -51,9 +52,18 @@ const DEFAULT_CAROUSEL_SLOTS: ColorPhotoSlot[] = [
 ];
 
 export const MarketingCampaigns: React.FC = () => {
+    const location = useLocation();
     // Tab Navigation
-    const [activeTab, setActiveTab] = useState<'BROADCAST' | 'INBOX' | 'HISTORY'>('BROADCAST');
-    const [unreadInboxCount, setUnreadInboxCount] = useState(0);
+    const [activeTab, setActiveTab] = useState<'BROADCAST' | 'INBOX' | 'HISTORY'>(() =>
+        new URLSearchParams(location.search).get('tab') === 'inbox' ? 'INBOX' : 'BROADCAST'
+    );
+    const unreadInboxCount = useWhatsAppInboxStore((s) => s.unreadCount);
+
+    useEffect(() => {
+        if (new URLSearchParams(location.search).get('tab') === 'inbox') {
+            setActiveTab('INBOX');
+        }
+    }, [location.search]);
 
     // Customer & Audience State
     const [customers, setCustomers] = useState<CampaignRecipient[]>([]);
@@ -92,14 +102,18 @@ export const MarketingCampaigns: React.FC = () => {
     // History & Logs
     const [logs, setLogs] = useState<MessageLogRecord[]>([]);
     const [loadingLogs, setLoadingLogs] = useState(false);
+    const statusPollTimersRef = useRef<number[]>([]);
+
+    useEffect(() => {
+        return () => {
+            statusPollTimersRef.current.forEach((id) => window.clearTimeout(id));
+            statusPollTimersRef.current = [];
+        };
+    }, []);
 
     // Load Customers and Past Sales on Mount
     useEffect(() => {
         loadAudienceData();
-        messagingService.getConversations().then((res) => {
-            const total = (res.conversations || []).reduce((acc, c) => acc + (c.unreadCount || 0), 0);
-            setUnreadInboxCount(total);
-        }).catch(() => {});
     }, []);
 
     const loadAudienceData = async () => {
@@ -186,10 +200,13 @@ export const MarketingCampaigns: React.FC = () => {
     const loadHistory = async () => {
         setLoadingLogs(true);
         try {
+            const syncRes = await messagingService.syncDeliveryStatuses().catch(() => ({ updated: 0, failedCount: 0, latestErrors: [] }));
             const historyLogs = await messagingService.getLogs({ limit: 100 });
             setLogs(historyLogs || []);
+            return syncRes;
         } catch (err) {
             console.warn('Failed to load logs:', err);
+            return { updated: 0, failedCount: 0, latestErrors: [] };
         } finally {
             setLoadingLogs(false);
         }
@@ -378,10 +395,29 @@ export const MarketingCampaigns: React.FC = () => {
             const result = await messagingService.sendCampaign(payload);
 
             if (result.sent > 0) {
-                showToast(`Broadcast completed! ${result.sent} messages sent successfully.`, 'success');
+                showToast(
+                    `Meta accepted ${result.sent} campaign message(s) for delivery. Verifying phone delivery status...`,
+                    'info'
+                );
+
+                statusPollTimersRef.current.forEach((id) => window.clearTimeout(id));
+                statusPollTimersRef.current = [4000, 10000].map((delayMs) =>
+                    window.setTimeout(async () => {
+                        const syncRes = await loadHistory();
+                        if (syncRes.failedCount > 0 && syncRes.latestErrors.length > 0) {
+                            showToast(`Meta delivery failure: ${syncRes.latestErrors[0]}`, 'error');
+                        }
+                    }, delayMs)
+                );
             }
             if (result.failed > 0) {
-                showToast(`${result.failed} messages could not be delivered.`, 'warning');
+                const firstErr = result.errors?.[0]?.error;
+                showToast(
+                    firstErr
+                        ? `${result.failed} message(s) rejected: ${firstErr}`
+                        : `${result.failed} messages could not be delivered.`,
+                    'warning'
+                );
             }
         } catch (err: any) {
             showToast(`Campaign broadcast error: ${err.message}`, 'error');
@@ -399,7 +435,7 @@ export const MarketingCampaigns: React.FC = () => {
     const estimatedMetaCost = (selectedRecipientsCount * 1.0).toFixed(2);
 
     return (
-        <div className="space-y-6 max-w-7xl mx-auto pb-12">
+        <div className="w-full space-y-6 pb-8">
             {/* Header Banner */}
             <div className="bg-gradient-to-r from-emerald-600 to-teal-700 rounded-3xl p-6 text-white shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="space-y-1.5">
@@ -436,7 +472,7 @@ export const MarketingCampaigns: React.FC = () => {
                                 : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
                         }`}
                     >
-                        <Sparkles className="w-4 h-4" />
+                        <Megaphone className="w-4 h-4" />
                         <span>Create & Broadcast Campaign</span>
                     </button>
                     <button
@@ -913,7 +949,7 @@ export const MarketingCampaigns: React.FC = () => {
 
             {/* TAB 2: LIVE CUSTOMER INBOX & AUTO-REPLY */}
             {activeTab === 'INBOX' && (
-                <WhatsAppInboxTab onUnreadCountChange={setUnreadInboxCount} />
+                <WhatsAppInboxTab />
             )}
 
             {/* TAB 3: BROADCAST HISTORY & LOGS */}
@@ -938,6 +974,16 @@ export const MarketingCampaigns: React.FC = () => {
                             <RefreshCw className={`w-3.5 h-3.5 ${loadingLogs ? 'animate-spin' : ''}`} />
                             <span>Refresh Logs</span>
                         </Button>
+                    </div>
+
+                    <div className="rounded-2xl border border-amber-200/80 dark:border-amber-800/60 bg-amber-50/70 dark:bg-amber-950/20 px-4 py-3 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2.5">
+                        <Info className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                        <div className="space-y-1">
+                            <div className="font-bold">Why can a message show &ldquo;Accepted&rdquo; or &ldquo;Sent&rdquo; without arriving on a phone?</div>
+                            <p className="text-[11px] leading-relaxed text-amber-800/90 dark:text-amber-300/90">
+                                Meta&apos;s API first returns <strong>Accepted</strong> before attempting phone delivery, then reports the final result via Webhook: <strong>DELIVERED / READ</strong> or <strong>FAILED</strong> (common causes for Marketing templates in India: <strong>#131049</strong> per-user marketing frequency limit, <strong>#131042</strong> prepaid billing/payment balance, or an unapproved Display Name limit). Click <strong>Refresh Logs</strong> a few seconds after sending to sync webhook errors.
+                            </p>
+                        </div>
                     </div>
 
                     <div className="overflow-x-auto">
@@ -991,16 +1037,29 @@ export const MarketingCampaigns: React.FC = () => {
                                             <td className="py-3 px-4 max-w-xs truncate text-gray-600 dark:text-gray-300">
                                                 {log.messageText}
                                             </td>
-                                            <td className="py-3 px-4">
-                                                <span
-                                                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                                                        log.status === 'SENT'
-                                                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300'
-                                                            : 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/40 dark:text-rose-300'
-                                                    }`}
-                                                >
-                                                    {log.status}
-                                                </span>
+                                            <td className="py-3 px-4 space-y-1">
+                                                {(() => {
+                                                    const badgeClass =
+                                                        log.status === 'DELIVERED' || log.status === 'READ'
+                                                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
+                                                            : log.status === 'FAILED'
+                                                            ? 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800'
+                                                            : 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800';
+                                                    const statusLabel =
+                                                        log.status === 'SENT' && log.provider === 'WhatsApp Cloud API'
+                                                            ? 'ACCEPTED (Queued)'
+                                                            : log.status;
+                                                    return (
+                                                        <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold border ${badgeClass}`}>
+                                                            {statusLabel}
+                                                        </span>
+                                                    );
+                                                })()}
+                                                {log.error && (
+                                                    <div className="text-[11px] text-rose-600 dark:text-rose-400 max-w-xs leading-snug">
+                                                        {log.error}
+                                                    </div>
+                                                )}
                                             </td>
                                         </tr>
                                     ))

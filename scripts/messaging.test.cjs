@@ -35,6 +35,13 @@ class MockDb {
         this.creditNotes = new Map();
         this.customers = new Map();
         this.messageLogs = [];
+        this.settings = new Map();
+        this.setting = {
+            findUnique: async ({ where }) => {
+                const value = this.settings.get(where.key);
+                return value !== undefined ? { key: where.key, value } : null;
+            },
+        };
     }
 
     async $queryRawUnsafe(sql, ...params) {
@@ -54,6 +61,9 @@ class MockDb {
             return found ? [found] : [];
         }
         if (sql.includes('FROM MessageLog')) {
+            if (sql.includes('waMessageId IS NOT NULL')) {
+                return this.messageLogs.filter(m => m.waMessageId && ['SENT', 'DELIVERED'].includes(m.status));
+            }
             return [...this.messageLogs].reverse();
         }
         return [];
@@ -61,10 +71,19 @@ class MockDb {
 
     async $executeRawUnsafe(sql, ...params) {
         if (sql.includes('INSERT INTO MessageLog')) {
-            const [id, saleId, billNo, customerName, customerPhone, channel, provider, status, fallback, fallbackReason, messageText, error, createdAt] = params;
+            const [id, saleId, billNo, customerName, customerPhone, channel, provider, status, fallback, fallbackReason, messageText, error, createdAt, waMessageId] = params;
             this.messageLogs.push({
-                id, saleId, billNo, customerName, customerPhone, channel, provider, status, fallback: Boolean(fallback), fallbackReason, messageText, error, createdAt
+                id, saleId, billNo, customerName, customerPhone, channel, provider, status, fallback: Boolean(fallback), fallbackReason, messageText, error, createdAt, waMessageId: waMessageId || null
             });
+            return;
+        }
+        if (sql.includes('UPDATE MessageLog SET status = ?, error = ? WHERE id = ?')) {
+            const [status, error, id] = params;
+            const target = this.messageLogs.find(m => m.id === id);
+            if (target) {
+                target.status = status;
+                target.error = error;
+            }
             return;
         }
         if (sql.includes('UPDATE Customer SET hasWhatsApp = ?')) {
@@ -252,5 +271,94 @@ test('store credit voucher message formats correctly for WhatsApp and SMS', () =
     const sms = messagingService.buildStoreCreditMessageSMS(payload);
     assert.match(sms, /CN-2045/);
     assert.match(sms, /Rs\.850\.00/);
+});
+
+test('sendCampaignMessages sanitizes multi-line template params, records waMessageId, and syncs webhook failure status', async () => {
+    const axios = require('axios');
+    const origPost = axios.post;
+    const postedUrls = [];
+    const postedBodies = [];
+
+    axios.post = async (url, body) => {
+        postedUrls.push(url);
+        postedBodies.push(body);
+        if (url.includes('graph.facebook.com')) {
+            return { data: { messages: [{ id: 'wamid.test_campaign_123' }] } };
+        }
+        if (url.endsWith('/api/whatsapp/dispatches/register')) {
+            return { data: { success: true, registered: 1 } };
+        }
+        if (url.endsWith('/api/whatsapp/dispatches/statuses')) {
+            return {
+                data: {
+                    success: true,
+                    data: [
+                        {
+                            waMessageId: 'wamid.test_campaign_123',
+                            status: 'FAILED',
+                            errorCode: 131049,
+                            errorTitle: 'Ecosystem frequency limit',
+                            errorDetails: 'Meta Marketing Frequency Limit: blocked for recipient',
+                        },
+                    ],
+                },
+            };
+        }
+        return { data: {} };
+    };
+
+    try {
+        const db = new MockDb();
+        db.settings.set('CLOUD_API_URL', 'https://cloud.example.com');
+        db.settings.set('CLOUD_SYNC_SECRET', 'test-secret');
+
+        const result = await messagingService.sendCampaignMessages(
+            db,
+            {
+                campaignName: 'Print Drop',
+                templateName: 'new_stock_arrival',
+                languageCode: 'en_US',
+                headerMediaId: 'media-id-1',
+                templateParams: [
+                    'Print Shirts',
+                    'Pure cotton\n\tin 4 colors    with collar',
+                    'M, L, XL',
+                    '999',
+                ],
+                recipients: [{ id: 'r1', name: 'Ajmal', phone: '7907814523' }],
+            },
+            {
+                enabled: true,
+                autoSend: false,
+                defaultChannel: 'WHATSAPP_FIRST',
+                includeStoreCredit: true,
+                includeShopDetails: true,
+                defaultCountryCode: '91',
+                whatsappProvider: 'META_API',
+                metaPhoneNumberId: '1446804745184600',
+                metaAccessToken: 'fake-token',
+                smsProvider: 'DIRECT',
+            }
+        );
+
+        assert.equal(result.sent, 1);
+        assert.equal(result.failed, 0);
+        assert.equal(result.dispatches[0].waMessageId, 'wamid.test_campaign_123');
+
+        const metaReq = postedBodies[0];
+        const bodyComp = metaReq.template.components.find(c => c.type === 'body');
+        assert.equal(bodyComp.parameters[2].text, 'Pure cotton in 4 colors   with collar');
+
+        assert.equal(db.messageLogs[0].waMessageId, 'wamid.test_campaign_123');
+        assert.equal(db.messageLogs[0].status, 'SENT');
+
+        const syncRes = await messagingService.syncCloudDeliveryStatuses(db);
+        assert.equal(syncRes.updated, 1);
+        assert.equal(syncRes.failedCount, 1);
+        assert.match(db.messageLogs[0].status, /FAILED/);
+        assert.match(db.messageLogs[0].error, /#131049/);
+    } finally {
+        axios.post = origPost;
+    }
 });
 

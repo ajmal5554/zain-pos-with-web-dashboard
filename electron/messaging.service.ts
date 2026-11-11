@@ -40,6 +40,14 @@ export class NoWhatsAppAccountError extends Error {
     }
 }
 
+function sanitizeMetaTemplateParam(value: unknown): string {
+    const cleaned = String(value ?? '')
+        .replace(/[\r\n\t]+/g, ' ')
+        .replace(/\s{4,}/g, '   ')
+        .trim();
+    return cleaned || '-';
+}
+
 /**
  * Send via Meta WhatsApp Cloud API (supports both Templates and free-form Text)
  */
@@ -109,7 +117,7 @@ async function sendViaMetaWhatsApp(
         if (params && params.length > 0 && templateName !== 'hello_world' && !templateName?.startsWith('3p_direct')) {
             components.push({
                 type: 'body',
-                parameters: params.map((p) => ({ type: 'text', text: String(p) })),
+                parameters: params.map((p) => ({ type: 'text', text: sanitizeMetaTemplateParam(p) })),
             });
         }
 
@@ -126,7 +134,7 @@ async function sendViaMetaWhatsApp(
                         },
                         {
                             type: 'body',
-                            parameters: card.bodyParams.map((p) => ({ type: 'text', text: String(p) })),
+                            parameters: card.bodyParams.map((p) => ({ type: 'text', text: sanitizeMetaTemplateParam(p) })),
                         },
                         {
                             type: 'button',
@@ -518,18 +526,20 @@ export async function logMessage(db: any, entry: {
     customerPhone: string;
     channel: string;
     provider: string;
-    status: 'SENT' | 'FAILED' | 'OPENED';
+    status: 'SENT' | 'DELIVERED' | 'READ' | 'FAILED' | 'OPENED';
     fallback: boolean;
     fallbackReason?: string | null;
     messageText: string;
     error?: string | null;
+    waMessageId?: string | null;
 }): Promise<void> {
     if (!db) return;
+    const id = crypto.randomUUID ? crypto.randomUUID() : ('msg-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+    const createdAt = new Date().toISOString();
     try {
-        const id = crypto.randomUUID ? crypto.randomUUID() : ('msg-' + Date.now() + '-' + Math.random().toString(36).slice(2));
         await db.$executeRawUnsafe(
-            `INSERT INTO MessageLog (id, saleId, billNo, customerName, customerPhone, channel, provider, status, fallback, fallbackReason, messageText, error, createdAt)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO MessageLog (id, saleId, billNo, customerName, customerPhone, channel, provider, status, fallback, fallbackReason, messageText, error, createdAt, waMessageId)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             id,
             entry.saleId || null,
             entry.billNo ? String(entry.billNo) : null,
@@ -542,9 +552,35 @@ export async function logMessage(db: any, entry: {
             entry.fallbackReason || null,
             entry.messageText,
             entry.error || null,
-            new Date().toISOString()
+            createdAt,
+            entry.waMessageId || null
         );
-    } catch (err) {
+    } catch (err: any) {
+        if (String(err?.message || '').includes('waMessageId')) {
+            try {
+                await db.$executeRawUnsafe(
+                    `INSERT INTO MessageLog (id, saleId, billNo, customerName, customerPhone, channel, provider, status, fallback, fallbackReason, messageText, error, createdAt)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    id,
+                    entry.saleId || null,
+                    entry.billNo ? String(entry.billNo) : null,
+                    entry.customerName || null,
+                    entry.customerPhone,
+                    entry.channel,
+                    entry.provider,
+                    entry.status,
+                    entry.fallback ? 1 : 0,
+                    entry.fallbackReason || null,
+                    entry.messageText,
+                    entry.error || null,
+                    createdAt
+                );
+                return;
+            } catch (fallbackInsertErr) {
+                console.warn('Failed to insert into MessageLog:', fallbackInsertErr);
+                return;
+            }
+        }
         console.warn('Failed to insert into MessageLog:', err);
     }
 }
@@ -708,7 +744,18 @@ export async function sendInvoiceMessage(
             status: 'SENT',
             fallback: false,
             messageText: waText,
+            waMessageId: waRes.messageId || null,
         });
+
+        if (waRes.messageId && config.whatsappProvider === 'META_API') {
+            await registerCloudDispatches(db, [
+                {
+                    waMessageId: waRes.messageId,
+                    recipientPhone: payload.customerPhone,
+                    templateName: config.metaTemplateName || 'tax_invoice',
+                },
+            ]);
+        }
 
         // Mark that customer has a valid WhatsApp account
         await updateCustomerWhatsAppStatus(db, payload.customerPhone, true);
@@ -941,7 +988,18 @@ export async function sendStoreCreditMessage(
             status: 'SENT',
             fallback: false,
             messageText: waText,
+            waMessageId: waRes.messageId || null,
         });
+
+        if (waRes.messageId && config.whatsappProvider === 'META_API') {
+            await registerCloudDispatches(db, [
+                {
+                    waMessageId: waRes.messageId,
+                    recipientPhone: payload.customerPhone,
+                    templateName: config.metaTemplateName || undefined,
+                },
+            ]);
+        }
 
         return {
             success: true,
@@ -1039,6 +1097,7 @@ export async function getMessageLogs(db: any, query?: { saleId?: string; phone?:
             fallbackReason: r.fallbackReason,
             messageText: r.messageText,
             error: r.error,
+            waMessageId: r.waMessageId || null,
             createdAt: r.createdAt,
         }));
     } catch (err) {
@@ -1095,9 +1154,11 @@ export async function sendCampaignMessages(
         sent: 0,
         failed: 0,
         errors: [],
+        dispatches: [],
     };
 
     const templateName = payload.templateName || 'new_stock_arrival';
+    const cloudRegistrations: Array<{ waMessageId: string; recipientPhone: string; campaignName?: string; templateName?: string }> = [];
 
     for (const recipient of payload.recipients) {
         if (!recipient.phone || !recipient.phone.trim()) {
@@ -1132,7 +1193,7 @@ export async function sendCampaignMessages(
             : undefined;
 
         try {
-            await sendViaMetaWhatsApp(recipient.phone, `[Campaign: ${payload.campaignName}]`, config, {
+            const waMessageId = await sendViaMetaWhatsApp(recipient.phone, `[Campaign: ${payload.campaignName}]`, config, {
                 templateName,
                 languageCode: payload.languageCode || config.metaLanguageCode || 'en_US',
                 parameters: params,
@@ -1141,6 +1202,15 @@ export async function sendCampaignMessages(
             });
 
             result.sent++;
+            if (waMessageId && waMessageId !== 'meta-sent') {
+                result.dispatches!.push({ recipientPhone: recipient.phone, waMessageId });
+                cloudRegistrations.push({
+                    waMessageId,
+                    recipientPhone: recipient.phone,
+                    campaignName: payload.campaignName,
+                    templateName,
+                });
+            }
 
             await logMessage(db, {
                 customerName: recipient.name,
@@ -1150,6 +1220,7 @@ export async function sendCampaignMessages(
                 status: 'SENT',
                 fallback: false,
                 messageText: `[Campaign: ${payload.campaignName}] Template: ${templateName}`,
+                waMessageId: waMessageId !== 'meta-sent' ? waMessageId : null,
             });
 
             // Delay between dispatches to ensure smooth pacing
@@ -1175,6 +1246,10 @@ export async function sendCampaignMessages(
         }
     }
 
+    if (cloudRegistrations.length > 0) {
+        await registerCloudDispatches(db, cloudRegistrations);
+    }
+
     return result;
 }
 
@@ -1182,6 +1257,9 @@ export async function sendCampaignMessages(
  * Retrieve Cloud API URL and sync secret from SQLite Setting table
  */
 async function getCloudApiConnection(db: any): Promise<{ apiUrl: string; syncSecret: string }> {
+    if (!db?.setting?.findUnique) {
+        return { apiUrl: '', syncSecret: String(process.env.CLOUD_SYNC_SECRET || '').trim() };
+    }
     const [urlRow, secretRow] = await Promise.all([
         db.setting.findUnique({ where: { key: 'CLOUD_API_URL' } }).catch(() => null),
         db.setting.findUnique({ where: { key: 'CLOUD_SYNC_SECRET' } }).catch(() => null),
@@ -1190,6 +1268,119 @@ async function getCloudApiConnection(db: any): Promise<{ apiUrl: string; syncSec
     const apiUrl = String(urlRow?.value || '').trim().replace(/\/+$/, '');
     const syncSecret = String(secretRow?.value || process.env.CLOUD_SYNC_SECRET || '').trim();
     return { apiUrl, syncSecret };
+}
+
+/**
+ * Register outbound Meta wamid dispatches on the Cloud webhook server so asynchronous
+ * delivery & failure webhook statuses can be tracked in Broadcast History & Logs.
+ */
+async function registerCloudDispatches(
+    db: any,
+    items: Array<{ waMessageId: string; recipientPhone: string; campaignName?: string; templateName?: string }>
+): Promise<void> {
+    if (!items.length) return;
+    try {
+        const { apiUrl, syncSecret } = await getCloudApiConnection(db);
+        if (!apiUrl || !syncSecret) return;
+
+        await axios.post(
+            `${apiUrl}/api/whatsapp/dispatches/register`,
+            { items },
+            {
+                headers: { 'x-sync-secret': syncSecret },
+                timeout: 5000,
+            }
+        );
+    } catch {
+        // Non-fatal: webhook statuses still record by waMessageId & recipientPhone
+    }
+}
+
+/**
+ * Pull Meta webhook delivery statuses (SENT / DELIVERED / READ / FAILED + error details)
+ * from the Cloud API server and update matching local MessageLog entries.
+ */
+export async function syncCloudDeliveryStatuses(db: any): Promise<{ updated: number; failedCount: number; latestErrors: string[] }> {
+    const empty = { updated: 0, failedCount: 0, latestErrors: [] };
+    if (!db?.$queryRawUnsafe || !db?.$executeRawUnsafe) return empty;
+
+    let trackedRows: any[] = [];
+    try {
+        const sinceIso = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        trackedRows = await db.$queryRawUnsafe(
+            `SELECT id, waMessageId, status, error FROM MessageLog
+             WHERE waMessageId IS NOT NULL AND createdAt >= ? AND status IN ('SENT', 'DELIVERED')
+             ORDER BY createdAt DESC LIMIT 150`,
+            sinceIso
+        );
+    } catch {
+        return empty;
+    }
+
+    const waIds = (trackedRows || []).map((r) => String(r.waMessageId || '').trim()).filter(Boolean);
+    if (waIds.length === 0) return empty;
+
+    try {
+        const { apiUrl, syncSecret } = await getCloudApiConnection(db);
+        if (!apiUrl || !syncSecret) return empty;
+
+        const res = await axios.post(
+            `${apiUrl}/api/whatsapp/dispatches/statuses`,
+            { waMessageIds: waIds, limit: 200 },
+            {
+                headers: { 'x-sync-secret': syncSecret },
+                timeout: 6000,
+            }
+        );
+
+        const cloudStatuses: any[] = Array.isArray(res.data?.data) ? res.data.data : [];
+        const statusByWaId = new Map<string, any>();
+        for (const row of cloudStatuses) {
+            if (row?.waMessageId) statusByWaId.set(String(row.waMessageId), row);
+        }
+
+        let updated = 0;
+        let failedCount = 0;
+        const latestErrors: string[] = [];
+
+        for (const localRow of trackedRows) {
+            const remote = statusByWaId.get(String(localRow.waMessageId));
+            if (!remote) continue;
+
+            const remoteStatus = String(remote.status || '').toUpperCase();
+            if (!['SENT', 'DELIVERED', 'READ', 'FAILED'].includes(remoteStatus)) continue;
+
+            const remoteErr =
+                remoteStatus === 'FAILED'
+                    ? `${remote.errorCode ? `(#${remote.errorCode}) ` : ''}${remote.errorDetails || remote.errorTitle || 'Meta blocked or failed WhatsApp delivery.'}`
+                    : null;
+
+            const shouldUpdate =
+                remoteStatus !== localRow.status ||
+                (remoteErr && remoteErr !== localRow.error);
+
+            if (shouldUpdate) {
+                await db.$executeRawUnsafe(
+                    `UPDATE MessageLog SET status = ?, error = ? WHERE id = ?`,
+                    remoteStatus,
+                    remoteErr,
+                    localRow.id
+                );
+                updated += 1;
+            }
+
+            if (remoteStatus === 'FAILED' && remoteErr) {
+                failedCount += 1;
+                if (!latestErrors.includes(remoteErr)) {
+                    latestErrors.push(remoteErr);
+                }
+            }
+        }
+
+        return { updated, failedCount, latestErrors };
+    } catch {
+        return empty;
+    }
 }
 
 /**
@@ -1226,6 +1417,13 @@ export async function syncCloudWhatsAppConfig(
             webhookUrl: `${apiUrl}/api/whatsapp/webhook`,
         };
     } catch (err: any) {
+        const status = err.response?.status;
+        if (status === 401 || status === 503) {
+            return {
+                success: false,
+                error: `Invalid CLOUD_SYNC_SECRET (${status}): The sync secret on Render does not match your POS Cloud Sync Secret.`,
+            };
+        }
         return {
             success: false,
             error: err.response?.data?.error || err.message || 'Failed to sync webhook config to Cloud API.',
@@ -1255,12 +1453,17 @@ export async function getCloudWebhookStatus(
         cloudReachable: false,
     };
 
-    if (!apiUrl || !syncSecret) return fallback;
+    if (!apiUrl || !syncSecret) {
+        fallback.cloudError = !apiUrl
+            ? 'Cloud API URL is not configured in Settings -> Cloud & Backup.'
+            : 'Cloud Sync Secret is missing in Settings -> Cloud & Backup.';
+        return fallback;
+    }
 
     try {
         const res = await axios.get(`${apiUrl}/api/whatsapp/config`, {
             headers: { 'x-sync-secret': syncSecret },
-            timeout: 8000,
+            timeout: 20000,
         });
 
         const cloudData = res.data?.data;
@@ -1277,8 +1480,17 @@ export async function getCloudWebhookStatus(
                 cloudReachable: true,
             };
         }
-    } catch (err) {
-        console.warn('Cloud WhatsApp webhook endpoint unreachable or not deployed yet:', (err as any)?.message);
+    } catch (err: any) {
+        const status = err.response?.status;
+        if (status === 401 || status === 503) {
+            fallback.authMismatch = true;
+            fallback.cloudError = err.response?.data?.error || 'Invalid sync authentication (CLOUD_SYNC_SECRET mismatch with Render).';
+        } else if (status === 404) {
+            fallback.cloudError = 'Cloud API webhook route not found (404). Push zain-pos-api updates to Render.';
+        } else {
+            fallback.cloudError = err.message || 'Cloud server unreachable or waking up.';
+        }
+        console.warn('Cloud WhatsApp webhook status check failed:', status || err.message);
     }
 
     return fallback;
@@ -1290,13 +1502,13 @@ export async function getCloudWebhookStatus(
 export async function getCloudConversations(db: any): Promise<{ conversations: WhatsAppConversation[]; cloudReachable: boolean; error?: string }> {
     const { apiUrl, syncSecret } = await getCloudApiConnection(db);
     if (!apiUrl || !syncSecret) {
-        return { conversations: [], cloudReachable: false, error: 'Cloud API URL not configured.' };
+        return { conversations: [], cloudReachable: false, error: 'Cloud API URL or sync secret not configured.' };
     }
 
     try {
         const res = await axios.get(`${apiUrl}/api/whatsapp/conversations`, {
             headers: { 'x-sync-secret': syncSecret },
-            timeout: 10000,
+            timeout: 20000,
         });
 
         const threads: WhatsAppConversation[] = Array.isArray(res.data?.data) ? res.data.data : [];
@@ -1410,6 +1622,7 @@ export async function sendCloudInboxReply(
             status: 'SENT',
             fallback: false,
             messageText: text,
+            waMessageId: res.data?.data?.waMessageId || null,
         });
 
         return { success: true, message: res.data?.data };

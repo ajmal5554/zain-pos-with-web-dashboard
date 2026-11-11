@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Printer, Sparkles, Check, Copy } from 'lucide-react';
+import { Printer, Check, Copy } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { showToast } from '../ui/Toast';
 

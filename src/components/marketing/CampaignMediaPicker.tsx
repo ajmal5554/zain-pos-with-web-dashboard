@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { Input } from '../ui/Input';
 import { showToast } from '../ui/Toast';
+import { normalizeImageForWhatsApp } from '../../lib/imageCollage';
 
 export type CampaignMediaMode = 'SINGLE' | 'COLLAGE' | 'CAROUSEL';
 
@@ -61,6 +62,16 @@ function validateImageFile(file: File): boolean {
     return true;
 }
 
+function dataUrlToJpegFile(dataUrl: string, filename: string): File {
+    const base64 = dataUrl.split(',')[1] || '';
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return new File([bytes], filename, { type: 'image/jpeg' });
+}
+
 export const CampaignMediaPicker: React.FC<CampaignMediaPickerProps> = ({
     mode,
     onModeChange,
@@ -77,8 +88,14 @@ export const CampaignMediaPicker: React.FC<CampaignMediaPickerProps> = ({
     const handleSingleInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file || !validateImageFile(file)) return;
-        const dataUrl = await readFileAsDataUrl(file);
-        onSelectSingleFile(file, dataUrl);
+        const rawDataUrl = await readFileAsDataUrl(file);
+        try {
+            const normalized = await normalizeImageForWhatsApp(rawDataUrl, file.name);
+            const jpegFile = dataUrlToJpegFile(normalized.dataUrl, normalized.filename);
+            onSelectSingleFile(jpegFile, normalized.dataUrl);
+        } catch {
+            onSelectSingleFile(file, rawDataUrl);
+        }
         e.target.value = '';
     };
 
@@ -114,15 +131,26 @@ export const CampaignMediaPicker: React.FC<CampaignMediaPickerProps> = ({
     const handleCarouselSlotUpload = async (slotIndex: number, e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file || !validateImageFile(file)) return;
-        const dataUrl = await readFileAsDataUrl(file);
+        const rawDataUrl = await readFileAsDataUrl(file);
+        let finalDataUrl = rawDataUrl;
+        let finalMime = file.type;
+        let finalFilename = file.name;
+        try {
+            const normalized = await normalizeImageForWhatsApp(rawDataUrl, file.name);
+            finalDataUrl = normalized.dataUrl;
+            finalMime = normalized.mimeType;
+            finalFilename = normalized.filename;
+        } catch {
+            // Fallback to original file if canvas normalization fails
+        }
 
         const next = carouselCards.map((card, idx) =>
             idx === slotIndex
                 ? {
                       ...card,
-                      dataUrl,
-                      mimeType: file.type,
-                      filename: file.name,
+                      dataUrl: finalDataUrl,
+                      mimeType: finalMime,
+                      filename: finalFilename,
                       uploadedMediaId: undefined,
                   }
                 : card

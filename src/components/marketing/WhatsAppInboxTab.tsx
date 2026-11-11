@@ -21,27 +21,30 @@ import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { showToast } from '../ui/Toast';
 import { messagingService } from '../../services/messaging.service';
+import { useWhatsAppInboxStore } from '../../store/whatsappInboxStore';
 import type {
-    WhatsAppConversation,
     WhatsAppInboxMessage,
     WhatsAppWebhookConfig,
 } from '../../types/messaging';
 import { DEFAULT_MESSAGING_CONFIG } from '../../types/messaging';
 
-interface WhatsAppInboxTabProps {
-    onUnreadCountChange?: (totalUnread: number) => void;
-}
+export const WhatsAppInboxTab: React.FC = () => {
+    const {
+        conversations,
+        cloudReachable: storeCloudReachable,
+        loading: loadingThreads,
+        refreshInbox,
+        markReadLocally,
+        targetPhoneToOpen,
+        requestOpenThread,
+    } = useWhatsAppInboxStore();
 
-export const WhatsAppInboxTab: React.FC<WhatsAppInboxTabProps> = ({ onUnreadCountChange }) => {
-    const [conversations, setConversations] = useState<WhatsAppConversation[]>([]);
     const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
     const [messages, setMessages] = useState<WhatsAppInboxMessage[]>([]);
     const [windowOpen, setWindowOpen] = useState(false);
     const [optedOut, setOptedOut] = useState(false);
 
-    const [loadingThreads, setLoadingThreads] = useState(true);
     const [loadingMessages, setLoadingMessages] = useState(false);
-    const [cloudReachable, setCloudReachable] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
 
     // Reply box
@@ -54,28 +57,58 @@ export const WhatsAppInboxTab: React.FC<WhatsAppInboxTabProps> = ({ onUnreadCoun
     const [autoReplyEnabled, setAutoReplyEnabled] = useState(true);
     const [forwardPhone, setForwardPhone] = useState('9037106449');
     const [autoReplyMessage, setAutoReplyMessage] = useState(DEFAULT_MESSAGING_CONFIG.autoReplyMessage || '');
+    const [newSyncSecretInput, setNewSyncSecretInput] = useState('');
     const [savingConfig, setSavingConfig] = useState(false);
     const [copiedField, setCopiedField] = useState<string | null>(null);
 
-    const messagesEndRef = useRef<HTMLDivElement | null>(null);
+    const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+
+    const cloudReachable = Boolean(webhookConfig?.cloudReachable || storeCloudReachable);
 
     useEffect(() => {
-        loadInitialData();
+        void loadInitialData();
+    }, []);
+
+    // Auto-open thread when user clicks "Open Chat" from popup alert or desktop notification
+    useEffect(() => {
+        if (targetPhoneToOpen) {
+            void handleSelectThread(targetPhoneToOpen);
+            requestOpenThread(null);
+        } else if (!selectedPhone && conversations.length > 0) {
+            void handleSelectThread(conversations[0].phone);
+        }
+    }, [targetPhoneToOpen, conversations.length]);
+
+    // Auto-refresh active chat thread messages every 3.5 seconds when Inbox is open
+    useEffect(() => {
+        if (!selectedPhone) return;
         const interval = setInterval(() => {
-            refreshThreads(true);
-            if (selectedPhone) {
-                loadMessagesForPhone(selectedPhone, true);
-            }
-        }, 15000);
+            void loadMessagesForPhone(selectedPhone, true);
+        }, 3500);
         return () => clearInterval(interval);
     }, [selectedPhone]);
 
+    // Also trigger immediate active-chat reload when the store detects a new message in this thread
+    const selectedThreadLastMsgAt = useMemo(
+        () => conversations.find((c) => c.phone === selectedPhone)?.lastMessageAt || '',
+        [conversations, selectedPhone]
+    );
+
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages.length]);
+        if (selectedPhone && selectedThreadLastMsgAt) {
+            void loadMessagesForPhone(selectedPhone, true);
+        }
+    }, [selectedPhone, selectedThreadLastMsgAt]);
+
+    useEffect(() => {
+        const el = messagesContainerRef.current;
+        if (el) {
+            el.scrollTop = el.scrollHeight;
+        }
+    }, [messages.length, selectedPhone]);
 
     const loadInitialData = async () => {
-        await Promise.all([loadWebhookConfig(), refreshThreads(false)]);
+        await Promise.all([loadWebhookConfig(), refreshInbox(false)]);
     };
 
     const loadWebhookConfig = async () => {
@@ -84,28 +117,12 @@ export const WhatsAppInboxTab: React.FC<WhatsAppInboxTabProps> = ({ onUnreadCoun
 
         if (cloudStatus) {
             setWebhookConfig(cloudStatus);
-            setCloudReachable(cloudStatus.cloudReachable);
+            if (!cloudStatus.cloudReachable) {
+                setShowConfigPanel(true);
+            }
             setAutoReplyEnabled(localCfg.autoReplyEnabled ?? cloudStatus.autoReplyEnabled);
             setForwardPhone(localCfg.autoReplyForwardPhone || cloudStatus.forwardPhone || '9037106449');
             setAutoReplyMessage(localCfg.autoReplyMessage || cloudStatus.autoReplyMessage);
-        }
-    };
-
-    const refreshThreads = async (silent = false) => {
-        if (!silent) setLoadingThreads(true);
-        try {
-            const res = await messagingService.getConversations();
-            setCloudReachable(res.cloudReachable);
-            setConversations(res.conversations || []);
-
-            const totalUnread = (res.conversations || []).reduce((acc, c) => acc + (c.unreadCount || 0), 0);
-            onUnreadCountChange?.(totalUnread);
-
-            if (!selectedPhone && res.conversations && res.conversations.length > 0 && !silent) {
-                handleSelectThread(res.conversations[0].phone);
-            }
-        } finally {
-            if (!silent) setLoadingThreads(false);
         }
     };
 
@@ -113,9 +130,7 @@ export const WhatsAppInboxTab: React.FC<WhatsAppInboxTabProps> = ({ onUnreadCoun
         setSelectedPhone(phone);
         await loadMessagesForPhone(phone, false);
         await messagingService.markConversationRead(phone);
-        setConversations((prev) =>
-            prev.map((c) => (c.phone === phone ? { ...c, unreadCount: 0 } : c))
-        );
+        markReadLocally(phone);
     };
 
     const loadMessagesForPhone = async (phone: string, silent = false) => {
@@ -125,6 +140,10 @@ export const WhatsAppInboxTab: React.FC<WhatsAppInboxTabProps> = ({ onUnreadCoun
             setMessages(res.messages || []);
             setWindowOpen(res.windowOpen);
             setOptedOut(res.optedOut);
+            if (silent && res.messages?.some((m) => m.direction === 'INBOUND' && !m.read)) {
+                void messagingService.markConversationRead(phone);
+                markReadLocally(phone);
+            }
         } finally {
             if (!silent) setLoadingMessages(false);
         }
@@ -140,7 +159,7 @@ export const WhatsAppInboxTab: React.FC<WhatsAppInboxTabProps> = ({ onUnreadCoun
             if (res.success && res.message) {
                 setMessages((prev) => [...prev, res.message!]);
                 setReplyText('');
-                refreshThreads(true);
+                void refreshInbox(true);
             } else {
                 showToast(res.error || 'Failed to send reply', 'error');
             }
@@ -157,13 +176,16 @@ export const WhatsAppInboxTab: React.FC<WhatsAppInboxTabProps> = ({ onUnreadCoun
                 autoReplyEnabled,
                 autoReplyForwardPhone: cleanForward || '9037106449',
                 autoReplyMessage,
+                ...(newSyncSecretInput.trim() ? { cloudSyncSecret: newSyncSecretInput.trim() } : {}),
             });
 
             if (res.success) {
+                setNewSyncSecretInput('');
                 showToast('Auto-Reply rules & credentials synced to Cloud Webhook!', 'success');
-                await loadWebhookConfig();
+                await loadInitialData();
             } else {
-                showToast(`Saved locally, but Cloud sync returned: ${res.error}`, 'warning');
+                showToast(`Cloud sync issue: ${res.error}`, 'error');
+                await loadWebhookConfig();
             }
         } finally {
             setSavingConfig(false);
@@ -215,12 +237,16 @@ export const WhatsAppInboxTab: React.FC<WhatsAppInboxTabProps> = ({ onUnreadCoun
                                     Auto-Reply & Two-Way Customer Inbox
                                 </span>
                                 {cloudReachable ? (
-                                    <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
-                                        <CheckCircle2 className="w-3 h-3" /> Cloud Webhook Connected
+                                    <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
+                                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" /> Live Auto-Sync Connected
+                                    </span>
+                                ) : webhookConfig?.authMismatch ? (
+                                    <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800">
+                                        <AlertTriangle className="w-3 h-3" /> Cloud Sync Secret Mismatch (401)
                                     </span>
                                 ) : (
                                     <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800">
-                                        <AlertTriangle className="w-3 h-3" /> Deploy Cloud API Update Required
+                                        <AlertTriangle className="w-3 h-3" /> Cloud Server Waking Up / Unreachable
                                     </span>
                                 )}
                             </div>
@@ -246,7 +272,7 @@ export const WhatsAppInboxTab: React.FC<WhatsAppInboxTabProps> = ({ onUnreadCoun
                         <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => refreshThreads(false)}
+                            onClick={() => loadInitialData()}
                             disabled={loadingThreads}
                             className="text-xs flex items-center gap-1.5"
                         >
@@ -258,7 +284,39 @@ export const WhatsAppInboxTab: React.FC<WhatsAppInboxTabProps> = ({ onUnreadCoun
 
                 {/* Expandable Setup & Auto-Reply Rules Drawer */}
                 {showConfigPanel && (
-                    <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800 grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800 space-y-4">
+                        {/* Auth Mismatch Helper Box */}
+                        {webhookConfig?.authMismatch && (
+                            <div className="bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/70 rounded-2xl p-4 space-y-3">
+                                <div className="flex items-start gap-2.5 text-xs text-rose-800 dark:text-rose-200">
+                                    <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+                                    <div className="space-y-1">
+                                        <div className="font-bold">Render API is LIVE, but your Cloud Sync Secret does not match (401)</div>
+                                        <p className="text-[11px] text-rose-700 dark:text-rose-300">
+                                            Open <strong>Render Dashboard → zain-pos-api → Environment → CLOUD_SYNC_SECRET</strong>, copy that value, paste it below, and click <strong>Save Secret &amp; Connect</strong>.
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="flex flex-col sm:flex-row gap-2">
+                                    <Input
+                                        type="password"
+                                        value={newSyncSecretInput}
+                                        onChange={(e) => setNewSyncSecretInput(e.target.value)}
+                                        placeholder="Paste CLOUD_SYNC_SECRET from Render Dashboard..."
+                                        className="flex-1 h-9 text-xs font-mono bg-white dark:bg-gray-900"
+                                    />
+                                    <Button
+                                        onClick={handleSaveAutoReplyConfig}
+                                        disabled={savingConfig || !newSyncSecretInput.trim()}
+                                        className="h-9 px-4 text-xs bg-rose-600 hover:bg-rose-700 text-white font-bold"
+                                    >
+                                        {savingConfig ? 'Connecting...' : 'Save Secret & Connect'}
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                         {/* Left: Auto-Reply Customization */}
                         <div className="lg:col-span-7 space-y-4">
                             <div className="flex items-center justify-between">
@@ -359,15 +417,16 @@ export const WhatsAppInboxTab: React.FC<WhatsAppInboxTabProps> = ({ onUnreadCoun
                                 </div>
                             </div>
                         </div>
+                        </div>
                     </div>
                 )}
             </div>
 
             {/* Split-Pane WhatsApp Inbox */}
-            <div className="bg-white dark:bg-gray-900 rounded-3xl border border-gray-200/80 dark:border-gray-800 shadow-sm overflow-hidden grid grid-cols-1 lg:grid-cols-12 min-h-[540px] max-h-[680px]">
+            <div className="bg-white dark:bg-gray-900 rounded-3xl border border-gray-200/80 dark:border-gray-800 shadow-sm overflow-hidden grid grid-cols-1 lg:grid-cols-12 h-[500px] min-h-[380px] max-h-[calc(100vh-260px)]">
                 {/* Left Pane: Thread List (4 cols) */}
-                <div className="lg:col-span-4 border-r border-gray-100 dark:border-gray-800 flex flex-col">
-                    <div className="p-3 border-b border-gray-100 dark:border-gray-800">
+                <div className="lg:col-span-4 border-r border-gray-100 dark:border-gray-800 flex flex-col min-h-0 overflow-hidden">
+                    <div className="p-3 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
                         <div className="relative">
                             <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
                             <Input
@@ -379,7 +438,7 @@ export const WhatsAppInboxTab: React.FC<WhatsAppInboxTabProps> = ({ onUnreadCoun
                         </div>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
+                    <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
                         {loadingThreads ? (
                             <div className="p-8 text-center text-xs text-gray-400">
                                 <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-emerald-600" />
@@ -392,7 +451,7 @@ export const WhatsAppInboxTab: React.FC<WhatsAppInboxTabProps> = ({ onUnreadCoun
                                 <p className="text-[11px] text-gray-400">
                                     {cloudReachable
                                         ? 'When customers reply to your WhatsApp bills or broadcasts, their messages will appear here automatically.'
-                                        : 'Deploy the Cloud API webhook update and connect it in Meta Dashboard to start receiving replies here.'}
+                                        : webhookConfig?.cloudError || 'Connect your Cloud Sync Secret above and set the Webhook in Meta Dashboard to start receiving replies here.'}
                                 </p>
                             </div>
                         ) : (
@@ -450,11 +509,11 @@ export const WhatsAppInboxTab: React.FC<WhatsAppInboxTabProps> = ({ onUnreadCoun
                 </div>
 
                 {/* Right Pane: Chat Conversation Window (8 cols) */}
-                <div className="lg:col-span-8 flex flex-col bg-[#EFEAE2] dark:bg-[#0b141a]">
+                <div className="lg:col-span-8 flex flex-col min-h-0 overflow-hidden bg-[#EFEAE2] dark:bg-[#0b141a]">
                     {selectedPhone ? (
                         <>
                             {/* Chat Header */}
-                            <div className="bg-white dark:bg-gray-900 px-5 py-3 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between gap-3">
+                            <div className="bg-white dark:bg-gray-900 px-5 py-3 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between gap-3 flex-shrink-0">
                                 <div>
                                     <div className="flex items-center gap-2">
                                         <span className="font-bold text-sm text-gray-900 dark:text-white">
@@ -493,7 +552,7 @@ export const WhatsAppInboxTab: React.FC<WhatsAppInboxTabProps> = ({ onUnreadCoun
                             </div>
 
                             {/* Chat Messages Feed */}
-                            <div className="flex-1 p-4 overflow-y-auto space-y-3">
+                            <div ref={messagesContainerRef} className="flex-1 min-h-0 p-4 overflow-y-auto space-y-3">
                                 {loadingMessages ? (
                                     <div className="text-center py-12 text-xs text-gray-500">
                                         <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-emerald-600" />
@@ -541,11 +600,10 @@ export const WhatsAppInboxTab: React.FC<WhatsAppInboxTabProps> = ({ onUnreadCoun
                                         );
                                     })
                                 )}
-                                <div ref={messagesEndRef} />
                             </div>
 
                             {/* Bottom Reply Composer */}
-                            <div className="bg-white dark:bg-gray-900 p-3 border-t border-gray-100 dark:border-gray-800">
+                            <div className="bg-white dark:bg-gray-900 p-3 border-t border-gray-100 dark:border-gray-800 flex-shrink-0">
                                 {windowOpen ? (
                                     <form onSubmit={handleSendReply} className="flex items-center gap-2">
                                         <Input

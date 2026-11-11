@@ -319,7 +319,7 @@ class MessagingFrontendService {
         return null;
     }
 
-    async syncWebhookConfig(partialConfig?: Partial<MessagingConfig>): Promise<{ success: boolean; webhookUrl?: string; error?: string }> {
+    async syncWebhookConfig(partialConfig?: Partial<MessagingConfig> & { cloudSyncSecret?: string }): Promise<{ success: boolean; webhookUrl?: string; error?: string }> {
         try {
             if (window.electronAPI?.messaging?.syncWebhookConfig) {
                 const res = await window.electronAPI.messaging.syncWebhookConfig(partialConfig);
@@ -383,6 +383,20 @@ class MessagingFrontendService {
             // Non-fatal
         }
         return false;
+    }
+
+    async syncDeliveryStatuses(): Promise<{ updated: number; failedCount: number; latestErrors: string[] }> {
+        try {
+            if (window.electronAPI?.messaging?.syncDeliveryStatuses) {
+                const res = await window.electronAPI.messaging.syncDeliveryStatuses();
+                if (res?.success && res.data) {
+                    return res.data;
+                }
+            }
+        } catch {
+            // Non-fatal
+        }
+        return { updated: 0, failedCount: 0, latestErrors: [] };
     }
 }
 

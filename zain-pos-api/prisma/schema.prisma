@@ -341,9 +341,27 @@ model WhatsAppMessage {
   isAutoReply   Boolean  @default(false) @map("is_auto_reply")
   read          Boolean  @default(false)
   status        String   @default("DELIVERED") // 'SENT', 'DELIVERED', 'READ', 'FAILED'
+  error         String?
   createdAt     DateTime @default(now()) @map("created_at")
 
   @@index([customerPhone])
   @@index([createdAt])
   @@map("whatsapp_messages")
+}
+
+model WhatsAppDispatchStatus {
+  waMessageId    String   @id @map("wa_message_id")
+  recipientPhone String   @map("recipient_phone")
+  campaignName   String?  @map("campaign_name")
+  templateName   String?  @map("template_name")
+  status         String   @default("ACCEPTED") // 'ACCEPTED', 'SENT', 'DELIVERED', 'READ', 'FAILED'
+  errorCode      Int?     @map("error_code")
+  errorTitle     String?  @map("error_title")
+  errorDetails   String?  @map("error_details")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([recipientPhone])
+  @@index([updatedAt])
+  @@map("whatsapp_dispatch_statuses")
 }

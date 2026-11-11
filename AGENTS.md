@@ -19,3 +19,7 @@
 - Fix accuracy and data-quality issues within those capabilities, with explicit limitations and forecast-basis labels.
 - Ask the user before changing this page's objective or removing/replacing a major capability. Do not substitute a short-term insights page for the forecasting page without approval.
 
+## 4. Banned Decorative Star / Sparkle Icons (Strict Rule)
+- **NEVER use `Sparkles`, `Stars`, or decorative `Star` icons** in buttons, tabs, badges, or UI components across the application (including `lucide-react` `Sparkles` / `Stars`).
+- Use clear, functional icons instead (e.g., `Megaphone`, `Send`, `Info`, `TrendingUp`, `Tag`, `CheckCircle2`).
+

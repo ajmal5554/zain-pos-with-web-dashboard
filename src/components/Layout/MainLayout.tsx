@@ -22,8 +22,11 @@ import {
     Banknote,
     BarChart3,
     Megaphone,
+    MessageCircle,
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
+import { useWhatsAppInboxStore } from '../../store/whatsappInboxStore';
+import { WhatsAppPopupAlert } from '../marketing/WhatsAppPopupAlert';
 import { NetworkStatus } from '../NetworkStatus';
 import { WindowControls } from './WindowControls';
 import appIcon from '/icon.png';
@@ -84,6 +87,33 @@ export const MainLayout: React.FC = () => {
     });
     const location = useLocation();
     const navigate = useNavigate();
+    const {
+        unreadCount: waUnreadCount,
+        refreshInbox: refreshWhatsAppInbox,
+        requestOpenThread,
+    } = useWhatsAppInboxStore();
+
+    // Global real-time background polling for incoming WhatsApp replies (no manual Refresh needed)
+    React.useEffect(() => {
+        if (!user?.id) return;
+        const canAccessMarketing = user.role === 'ADMIN' || Boolean(user.permEditSettings);
+        if (!canAccessMarketing) return;
+
+        void refreshWhatsAppInbox(false);
+        const timer = setInterval(() => {
+            void refreshWhatsAppInbox(true);
+        }, 5000);
+
+        const cleanupOpen = window.electronAPI?.messaging?.onOpenInboxThread?.((phone) => {
+            requestOpenThread(phone);
+            navigate('/campaigns?tab=inbox');
+        });
+
+        return () => {
+            clearInterval(timer);
+            cleanupOpen?.();
+        };
+    }, [user?.id, user?.role, user?.permEditSettings]);
 
     // Restore user's specific sidebar preference whenever user ID loads or switches
     React.useEffect(() => {
@@ -311,21 +341,29 @@ export const MainLayout: React.FC = () => {
                             <Link
                                 key={item.path}
                                 to={item.path}
-                                className={`${isActive ? 'sidebar-link-active' : 'sidebar-link'} ${
+                                className={`${isActive ? 'sidebar-link-active' : 'sidebar-link'} relative ${
                                     !sidebarOpen ? 'justify-center !px-0' : ''
                                 }`}
                                 title={!sidebarOpen ? item.label : ''}
                             >
                                 <Icon className="w-5 h-5 flex-shrink-0" />
                                 <span
-                                    className={`whitespace-nowrap overflow-hidden transition-all duration-300 ease-in-out ${
+                                    className={`whitespace-nowrap overflow-hidden transition-all duration-300 ease-in-out flex-1 flex items-center justify-between ${
                                         sidebarOpen
                                             ? 'max-w-[140px] opacity-100 ml-3'
                                             : 'max-w-0 w-0 opacity-0 ml-0 pointer-events-none'
                                     }`}
                                 >
-                                    {item.label}
+                                    <span>{item.label}</span>
+                                    {item.path === '/campaigns' && waUnreadCount > 0 && (
+                                        <span className="bg-emerald-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center leading-none">
+                                            {waUnreadCount}
+                                        </span>
+                                    )}
                                 </span>
+                                {!sidebarOpen && item.path === '/campaigns' && waUnreadCount > 0 && (
+                                    <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-dark-card" />
+                                )}
                             </Link>
                         );
                     })}
@@ -394,6 +432,16 @@ export const MainLayout: React.FC = () => {
                     </div>
 
                     <div className="flex items-center gap-2.5" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+                        {(user?.role === 'ADMIN' || user?.permEditSettings) && waUnreadCount > 0 && (
+                            <button
+                                onClick={() => navigate('/campaigns?tab=inbox')}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border transition-all bg-emerald-600 text-white border-emerald-700 shadow-sm shadow-emerald-500/30 animate-pulse hover:bg-emerald-700"
+                                title="Open Unread WhatsApp Messages"
+                            >
+                                <MessageCircle className="w-3.5 h-3.5" />
+                                <span>{waUnreadCount} WhatsApp</span>
+                            </button>
+                        )}
                         {/* Network Status Indicator */}
                         <NetworkStatus />
                         {/* Integrated Floating Window Controls */}
@@ -410,6 +458,7 @@ export const MainLayout: React.FC = () => {
                     <Outlet />
                 </main>
             </div>
+            {(user?.role === 'ADMIN' || user?.permEditSettings) && <WhatsAppPopupAlert />}
         </div>
     );
 };

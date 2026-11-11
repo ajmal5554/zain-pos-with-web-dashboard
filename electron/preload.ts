@@ -247,6 +247,7 @@ const api = {
         uploadMedia: (args: { base64Data: string; mimeType: string; filename: string }) =>
             ipcRenderer.invoke('messaging:uploadMedia', args),
         sendCampaign: (payload: any) => ipcRenderer.invoke('messaging:sendCampaign', payload),
+        syncDeliveryStatuses: () => ipcRenderer.invoke('messaging:syncDeliveryStatuses'),
         getWebhookStatus: () => ipcRenderer.invoke('messaging:getWebhookStatus'),
         syncWebhookConfig: (partialConfig?: any) => ipcRenderer.invoke('messaging:syncWebhookConfig', partialConfig),
         getConversations: () => ipcRenderer.invoke('messaging:getConversations'),
@@ -256,6 +257,13 @@ const api = {
             ipcRenderer.invoke('messaging:sendInboxReply', { phone, text }),
         markConversationRead: (phone: string) =>
             ipcRenderer.invoke('messaging:markConversationRead', { phone }),
+        showDesktopNotification: (args: { title: string; body: string; phone?: string }) =>
+            ipcRenderer.invoke('messaging:showDesktopNotification', args),
+        onOpenInboxThread: (callback: (phone: string) => void) => {
+            const listener = (_event: any, phone: string) => callback(phone);
+            ipcRenderer.on('whatsapp:openInboxThread', listener);
+            return () => ipcRenderer.removeListener('whatsapp:openInboxThread', listener);
+        },
     },
 
     shell: {

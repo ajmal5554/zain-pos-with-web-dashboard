@@ -30,6 +30,39 @@ function normalizeWaPhone(phone: string): string {
     return digits;
 }
 
+const META_STATUS_ERROR_HINTS: Record<number, string> = {
+    131049: 'Meta Marketing Frequency Limit: Meta blocked this promotional template for this customer right now to maintain ecosystem engagement.',
+    131042: 'Meta Billing / Payment Issue: Check your prepaid INR balance or payment method in Meta Business Suite -> Billing & Payments.',
+    131053: 'Media Upload / Format Error: Meta could not deliver the attached image. Ensure a clean JPG/PNG under 5MB.',
+    131052: 'Media Download Error: Meta could not process the attached media.',
+    131026: 'Undeliverable: Recipient phone is not on WhatsApp or cannot receive messages.',
+    131047: '24h Customer Care Window Expired: Re-engage using an approved template.',
+    132001: 'Template Not Found / Pending: Template does not exist in this language or is not approved.',
+    132012: 'Template Parameter Format Mismatch: Variable text did not match Meta template rules.',
+};
+
+function formatMetaWebhookError(errObj: any): {
+    errorCode: number | null;
+    errorTitle: string | null;
+    errorDetails: string | null;
+    formatted: string | null;
+} {
+    if (!errObj || typeof errObj !== 'object') {
+        return { errorCode: null, errorTitle: null, errorDetails: null, formatted: null };
+    }
+    const rawCode = Number(errObj.code);
+    const errorCode = Number.isFinite(rawCode) && rawCode > 0 ? rawCode : null;
+    const errorTitle = String(errObj.title || errObj.message || '').trim() || null;
+    const rawDetails = String(errObj.error_data?.details || errObj.message || '').trim() || null;
+    const hint = errorCode ? META_STATUS_ERROR_HINTS[errorCode] : undefined;
+    const errorDetails = [hint, rawDetails].filter((v, idx, arr) => v && arr.indexOf(v) === idx).join(' — ') || null;
+    const formatted =
+        errorCode || errorTitle || errorDetails
+            ? `${errorCode ? `(#${errorCode}) ` : ''}${errorDetails || errorTitle || 'Meta delivery failure'}`
+            : null;
+    return { errorCode, errorTitle, errorDetails, formatted };
+}
+
 async function getWebhookConfig(): Promise<CloudWhatsAppConfig> {
     const defaults: CloudWhatsAppConfig = {
         metaPhoneNumberId: process.env.META_PHONE_NUMBER_ID || '',
@@ -157,16 +190,46 @@ async function processWebhookPayload(payload: any): Promise<void> {
             const messages = Array.isArray(value.messages) ? value.messages : [];
             const statuses = Array.isArray(value.statuses) ? value.statuses : [];
 
-            // Process delivery/read status updates
+            // Process delivery/read/failed status updates
             for (const st of statuses) {
                 if (!st?.id || !st?.status) continue;
                 const mappedStatus = String(st.status).toUpperCase();
+                const firstErr = Array.isArray(st.errors) && st.errors.length > 0 ? formatMetaWebhookError(st.errors[0]) : null;
+                const clearError = ['SENT', 'DELIVERED', 'READ'].includes(mappedStatus);
+
                 await prisma.whatsAppMessage
                     .updateMany({
                         where: { waMessageId: st.id },
-                        data: { status: mappedStatus },
+                        data: {
+                            status: mappedStatus,
+                            ...(clearError ? { error: null } : firstErr?.formatted ? { error: firstErr.formatted } : {}),
+                        },
                     })
                     .catch(() => {});
+
+                const recipientPhone = normalizeWaPhone(String(st.recipient_id || ''));
+                await prisma.whatsAppDispatchStatus
+                    .upsert({
+                        where: { waMessageId: st.id },
+                        create: {
+                            waMessageId: st.id,
+                            recipientPhone,
+                            status: mappedStatus,
+                            errorCode: firstErr?.errorCode ?? null,
+                            errorTitle: firstErr?.errorTitle ?? null,
+                            errorDetails: firstErr?.errorDetails ?? null,
+                        },
+                        update: {
+                            ...(recipientPhone ? { recipientPhone } : {}),
+                            status: mappedStatus,
+                            errorCode: clearError ? null : firstErr?.errorCode ?? null,
+                            errorTitle: clearError ? null : firstErr?.errorTitle ?? null,
+                            errorDetails: clearError ? null : firstErr?.errorDetails ?? null,
+                        },
+                    })
+                    .catch((err) => {
+                        console.warn('Failed to store WhatsAppDispatchStatus:', err);
+                    });
             }
 
             // Process incoming customer messages
@@ -489,6 +552,75 @@ router.post('/reply', requireInboxAuth, async (req, res) => {
         });
 
         res.json({ success: true, data: saved });
+    } catch (err: any) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+router.post('/dispatches/register', requireInboxAuth, async (req, res) => {
+    try {
+        const items = Array.isArray(req.body?.items) ? req.body.items : [];
+        let registered = 0;
+
+        for (const item of items) {
+            const waMessageId = String(item?.waMessageId || '').trim();
+            if (!waMessageId) continue;
+
+            const recipientPhone = normalizeWaPhone(String(item?.recipientPhone || ''));
+            const campaignName = item?.campaignName ? String(item.campaignName) : null;
+            const templateName = item?.templateName ? String(item.templateName) : null;
+
+            await prisma.whatsAppDispatchStatus.upsert({
+                where: { waMessageId },
+                create: {
+                    waMessageId,
+                    recipientPhone,
+                    campaignName,
+                    templateName,
+                    status: 'ACCEPTED',
+                },
+                update: {
+                    ...(recipientPhone ? { recipientPhone } : {}),
+                    ...(campaignName ? { campaignName } : {}),
+                    ...(templateName ? { templateName } : {}),
+                },
+            });
+            registered += 1;
+        }
+
+        res.json({ success: true, registered });
+    } catch (err: any) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+router.post('/dispatches/statuses', requireInboxAuth, async (req, res) => {
+    try {
+        const waMessageIds: string[] = Array.isArray(req.body?.waMessageIds)
+            ? req.body.waMessageIds.map((id: unknown) => String(id || '').trim()).filter(Boolean)
+            : [];
+        const limit = Math.min(Math.max(Number(req.body?.limit) || 100, 1), 300);
+
+        const rows = await prisma.whatsAppDispatchStatus.findMany({
+            ...(waMessageIds.length > 0 ? { where: { waMessageId: { in: waMessageIds } } } : {}),
+            orderBy: { updatedAt: 'desc' },
+            take: limit,
+        });
+
+        res.json({ success: true, data: rows });
+    } catch (err: any) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+router.get('/dispatches', requireInboxAuth, async (req, res) => {
+    try {
+        const limit = Math.min(Math.max(Number(req.query?.limit) || 50, 1), 200);
+        const rows = await prisma.whatsAppDispatchStatus.findMany({
+            orderBy: { updatedAt: 'desc' },
+            take: limit,
+        });
+        res.json({ success: true, data: rows });
     } catch (err: any) {
         res.status(500).json({ success: false, error: err.message });
     }

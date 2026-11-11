@@ -141,11 +141,12 @@ export interface MessageLogRecord {
     customerPhone: string;
     channel: string;
     provider: string;
-    status: 'SENT' | 'FAILED' | 'OPENED';
+    status: 'SENT' | 'DELIVERED' | 'READ' | 'FAILED' | 'OPENED';
     fallback: boolean;
     fallbackReason?: string | null;
     messageText: string;
     error?: string | null;
+    waMessageId?: string | null;
     createdAt: string;
 }
 
@@ -180,6 +181,7 @@ export interface CampaignDispatchResult {
     sent: number;
     failed: number;
     errors: { recipient: string; phone: string; error: string }[];
+    dispatches?: Array<{ recipientPhone: string; waMessageId: string }>;
 }
 
 export interface WhatsAppConversation {
@@ -218,5 +220,7 @@ export interface WhatsAppWebhookConfig {
     hasAccessToken: boolean;
     metaPhoneNumberId?: string;
     cloudReachable: boolean;
+    cloudError?: string;
+    authMismatch?: boolean;
 }
 

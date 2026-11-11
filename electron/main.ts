@@ -1,7 +1,7 @@
 import { sendReceipt } from './receipt-printer.service';
 import {getBusinessInsights} from './insights.service';
 import {getProfitReport} from './profit.service';
-import { app, BrowserWindow, ipcMain, dialog, screen, nativeImage, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, screen, nativeImage, shell, Notification } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as XLSX from 'xlsx';
@@ -72,6 +72,7 @@ import {
     getCloudConversationMessages,
     sendCloudInboxReply,
     markCloudConversationRead,
+    syncCloudDeliveryStatuses,
 } from './messaging.service';
 import { DEFAULT_MESSAGING_CONFIG, type MessagingConfig } from '../src/types/messaging';
 
@@ -1114,13 +1115,26 @@ async function ensureSchemaUpdated() {
                     "fallbackReason" TEXT,
                     "messageText" TEXT NOT NULL,
                     "error" TEXT,
+                    "waMessageId" TEXT,
                     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
             `);
             await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "MessageLog_saleId_idx" ON "MessageLog"("saleId")`);
             await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "MessageLog_customerPhone_idx" ON "MessageLog"("customerPhone")`);
             await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "MessageLog_createdAt_idx" ON "MessageLog"("createdAt")`);
+            await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "MessageLog_waMessageId_idx" ON "MessageLog"("waMessageId")`);
             console.log('Created MessageLog table');
+        } else {
+            try {
+                const msgLogInfo: any[] = await prisma.$queryRawUnsafe(`PRAGMA table_info("MessageLog")`);
+                if (!msgLogInfo.some((c: any) => c.name === 'waMessageId')) {
+                    await prisma.$executeRawUnsafe(`ALTER TABLE "MessageLog" ADD COLUMN "waMessageId" TEXT`);
+                    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "MessageLog_waMessageId_idx" ON "MessageLog"("waMessageId")`);
+                    console.log('Added waMessageId column to MessageLog table');
+                }
+            } catch (msgColErr: any) {
+                console.warn('Could not verify MessageLog waMessageId column:', msgColErr?.message);
+            }
         }
 
         try {
@@ -6570,6 +6584,20 @@ createSecureIpcHandler(
 );
 
 createSecureIpcHandler(
+    'messaging:syncDeliveryStatuses',
+    PermissionMiddleware.authenticated,
+    async () => {
+        try {
+            const result = await syncCloudDeliveryStatuses(prisma);
+            return { success: true, data: result };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
     'messaging:getWebhookStatus',
     PermissionMiddleware.authenticated,
     async () => {
@@ -6587,10 +6615,20 @@ createSecureIpcHandler(
 createSecureIpcHandler(
     'messaging:syncWebhookConfig',
     PermissionMiddleware.editSettings,
-    async (_event, partialConfig?: Partial<MessagingConfig>) => {
+    async (_event, partialConfig?: Partial<MessagingConfig> & { cloudSyncSecret?: string }) => {
         try {
+            const { cloudSyncSecret, ...msgPatch } = partialConfig || {};
+            if (typeof cloudSyncSecret === 'string' && cloudSyncSecret.trim()) {
+                const cleanSecret = cloudSyncSecret.trim();
+                await prisma.setting.upsert({
+                    where: { key: 'CLOUD_SYNC_SECRET' },
+                    create: { key: 'CLOUD_SYNC_SECRET', value: cleanSecret },
+                    update: { value: cleanSecret },
+                });
+                cloudSync.setSyncSecret(cleanSecret);
+            }
             const current = await loadMessagingConfig();
-            const merged: MessagingConfig = { ...current, ...(partialConfig || {}) };
+            const merged: MessagingConfig = { ...current, ...msgPatch };
             await prisma.setting.upsert({
                 where: { key: 'MESSAGING_CONFIG' },
                 create: { key: 'MESSAGING_CONFIG', value: JSON.stringify(merged) },
@@ -6656,6 +6694,35 @@ createSecureIpcHandler(
             return { success: ok };
         } catch (error: any) {
             return { success: false, error: error.message };
+        }
+    },
+    { trustedSession: true }
+);
+
+createSecureIpcHandler(
+    'messaging:showDesktopNotification',
+    PermissionMiddleware.authenticated,
+    async (_event, args: { title: string; body: string; phone?: string }) => {
+        try {
+            if (!Notification.isSupported()) return { success: false };
+            const notif = new Notification({
+                title: args.title || 'New WhatsApp Message',
+                body: args.body || '',
+                silent: false,
+            });
+            notif.on('click', () => {
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    if (mainWindow.isMinimized()) mainWindow.restore();
+                    mainWindow.focus();
+                    if (args.phone) {
+                        mainWindow.webContents.send('whatsapp:openInboxThread', args.phone);
+                    }
+                }
+            });
+            notif.show();
+            return { success: true };
+        } catch {
+            return { success: false };
         }
     },
     { trustedSession: true }

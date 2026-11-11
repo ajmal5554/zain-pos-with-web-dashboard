@@ -20,7 +20,6 @@ import {
     Boxes,
     Wallet,
     Sliders,
-    Sparkles,
     UserCog,
     EyeOff
 } from 'lucide-react';

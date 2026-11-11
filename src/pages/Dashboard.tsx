@@ -8,7 +8,7 @@ import {
     AlertTriangle,
     Package,
     Calendar,
-    Sparkles
+    Info
 } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { reportsService } from '../services/reports.service';
@@ -433,7 +433,7 @@ export const Dashboard: React.FC = () => {
                                             {stat.change.showContextual ? (
                                                 // Show contextual message instead of misleading percentage
                                                 <div className="flex items-center gap-1">
-                                                    <Sparkles className="w-3 h-3 text-blue-600 dark:text-blue-400" />
+                                                    <Info className="w-3 h-3 text-blue-600 dark:text-blue-400" />
                                                     <p className="text-xs text-blue-600 dark:text-blue-400">
                                                         {stat.change.display}
                                                     </p>
